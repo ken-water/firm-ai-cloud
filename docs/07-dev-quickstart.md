@@ -260,3 +260,17 @@ bash scripts/dev-down.sh
 - Check delivery logs:
   - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-deliveries?limit=50"`
 - For webhook channels, inspect `status`, `attempts`, `response_code`, and `last_error`.
+
+## 8. Integration Smoke Test
+
+Run end-to-end CMDB loop smoke test (relations + discovery + candidate review + notification dispatch):
+
+```bash
+bash scripts/test-cmdb-loop.sh
+```
+
+Optional API base override:
+
+```bash
+API_BASE_URL=http://127.0.0.1:8080 bash scripts/test-cmdb-loop.sh
+```
