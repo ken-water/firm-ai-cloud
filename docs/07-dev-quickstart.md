@@ -166,6 +166,9 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-subscripti
     "site": "dc-a",
     "department": "platform"
   }'
+
+# list delivery logs
+curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-deliveries?status=delivered"
 ```
 
 ## 4. Run Frontend

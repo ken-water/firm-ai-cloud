@@ -1,7 +1,4 @@
-use std::{
-    collections::HashSet,
-    time::Duration,
-};
+use std::{collections::HashSet, time::Duration};
 
 use anyhow::anyhow;
 use axum::{
@@ -14,6 +11,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sqlx::{Postgres, QueryBuilder};
+use tokio::time::sleep;
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -25,6 +23,10 @@ const SOURCE_K8S_SEED: &str = "k8s_seed";
 const EVENT_ASSET_NEW_DETECTED: &str = "asset.new_detected";
 const EVENT_ASSET_OFFBOARDED_SUSPECTED: &str = "asset.offboarded_suspected";
 const EVENT_ASSET_PROFILE_CHANGED: &str = "asset.profile_changed";
+
+const DELIVERY_STATUS_QUEUED: &str = "queued";
+const DELIVERY_STATUS_DELIVERED: &str = "delivered";
+const DELIVERY_STATUS_FAILED: &str = "failed";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -38,6 +40,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/discovery/candidates", get(list_discovery_candidates))
         .route("/discovery/events", get(list_discovery_events))
+        .route(
+            "/discovery/notification-deliveries",
+            get(list_notification_deliveries),
+        )
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -92,6 +98,38 @@ struct DiscoveryAssetState {
     offboarded_emitted: bool,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct NotificationDelivery {
+    id: i64,
+    event_id: i64,
+    subscription_id: Option<i64>,
+    channel_id: Option<i64>,
+    target: String,
+    status: String,
+    attempts: i32,
+    response_code: Option<i32>,
+    last_error: Option<String>,
+    delivered_at: Option<DateTime<Utc>>,
+    payload: Value,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct NotificationDispatchTarget {
+    subscription_id: i64,
+    channel_id: i64,
+    channel_type: String,
+    target: String,
+    config: Value,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct NotificationTemplateRecord {
+    title_template: String,
+    body_template: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateDiscoveryJobRequest {
     name: String,
@@ -119,6 +157,14 @@ struct ListDiscoveryEventsQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct ListNotificationDeliveriesQuery {
+    event_id: Option<i64>,
+    status: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 struct ListDiscoveryCandidatesResponse {
     items: Vec<DiscoveryCandidate>,
@@ -130,6 +176,14 @@ struct ListDiscoveryCandidatesResponse {
 #[derive(Debug, Serialize)]
 struct ListDiscoveryEventsResponse {
     items: Vec<DiscoveryEvent>,
+    total: i64,
+    limit: u32,
+    offset: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct ListNotificationDeliveriesResponse {
+    items: Vec<NotificationDelivery>,
     total: i64,
     limit: u32,
     offset: u32,
@@ -331,6 +385,45 @@ async fn list_discovery_events(
     let items: Vec<DiscoveryEvent> = list_builder.build_query_as().fetch_all(&state.db).await?;
 
     Ok(Json(ListDiscoveryEventsResponse {
+        items,
+        total,
+        limit: limit as u32,
+        offset: offset as u32,
+    }))
+}
+
+async fn list_notification_deliveries(
+    State(state): State<AppState>,
+    Query(query): Query<ListNotificationDeliveriesQuery>,
+) -> AppResult<Json<ListNotificationDeliveriesResponse>> {
+    let limit = query.limit.unwrap_or(50).min(500) as i64;
+    let offset = query.offset.unwrap_or(0) as i64;
+    let status = trim_optional(query.status).map(|value| value.to_ascii_lowercase());
+
+    let mut count_builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT COUNT(*) FROM discovery_notification_deliveries WHERE 1=1");
+    append_delivery_filters(&mut count_builder, query.event_id, status.clone());
+    let total: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, event_id, subscription_id, channel_id, target, status, attempts, response_code, last_error, delivered_at, payload, created_at, updated_at
+         FROM discovery_notification_deliveries
+         WHERE 1=1",
+    );
+    append_delivery_filters(&mut list_builder, query.event_id, status);
+    list_builder
+        .push(" ORDER BY created_at DESC, id DESC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+
+    let items: Vec<NotificationDelivery> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
+
+    Ok(Json(ListNotificationDeliveriesResponse {
         items,
         total,
         limit: limit as u32,
@@ -824,20 +917,328 @@ async fn emit_discovery_event(
     payload: &Value,
 ) -> AppResult<()> {
     let payload_obj = payload.as_object().cloned().unwrap_or_default();
+    let payload_value = Value::Object(payload_obj.clone());
 
-    sqlx::query(
+    let event_id: i64 = sqlx::query_scalar(
         "INSERT INTO discovery_events (job_id, asset_id, event_type, fingerprint, payload)
-         VALUES ($1, $2, $3, $4, $5)",
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id",
     )
     .bind(job_id)
     .bind(asset_id)
     .bind(event_type)
     .bind(fingerprint)
-    .bind(Value::Object(payload_obj))
+    .bind(payload_value.clone())
+    .fetch_one(db)
+    .await?;
+
+    dispatch_notifications_for_event(db, event_id, event_type, &payload_value).await?;
+
+    Ok(())
+}
+
+async fn dispatch_notifications_for_event(
+    db: &sqlx::PgPool,
+    event_id: i64,
+    event_type: &str,
+    payload: &Value,
+) -> AppResult<()> {
+    let site = payload
+        .get("site")
+        .and_then(Value::as_str)
+        .map(|v| v.to_string());
+    let department = payload
+        .get("department")
+        .and_then(Value::as_str)
+        .map(|v| v.to_string());
+
+    let targets = load_notification_targets(db, event_type, site, department).await?;
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    let template = load_notification_template(db, event_type).await?;
+    let payload_obj = payload.as_object().cloned().unwrap_or_default();
+
+    for target in targets {
+        let title_template = template
+            .as_ref()
+            .map(|item| item.title_template.as_str())
+            .unwrap_or("CMDB Discovery Event");
+        let body_template = template
+            .as_ref()
+            .map(|item| item.body_template.as_str())
+            .unwrap_or("Event {{event_type}} occurred.");
+
+        let mut render_payload = payload_obj.clone();
+        render_payload.insert(
+            "event_type".to_string(),
+            Value::String(event_type.to_string()),
+        );
+
+        let title = render_template(title_template, &render_payload);
+        let body = render_template(body_template, &render_payload);
+        let message = json!({
+            "event_id": event_id,
+            "event_type": event_type,
+            "title": title,
+            "body": body,
+            "payload": payload,
+        });
+
+        let delivery_id = create_delivery_record(
+            db,
+            event_id,
+            target.subscription_id,
+            target.channel_id,
+            &target.target,
+            &message,
+        )
+        .await?;
+
+        let outcome = send_notification_to_target(&target, &message).await;
+        finalize_delivery_record(
+            db,
+            delivery_id,
+            outcome.status,
+            outcome.attempts,
+            outcome.response_code,
+            outcome.last_error.as_deref(),
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+struct DeliveryOutcome {
+    status: &'static str,
+    attempts: i32,
+    response_code: Option<i32>,
+    last_error: Option<String>,
+}
+
+async fn send_notification_to_target(
+    target: &NotificationDispatchTarget,
+    message: &Value,
+) -> DeliveryOutcome {
+    match target.channel_type.as_str() {
+        "webhook" => send_webhook_with_retry(target, message).await,
+        "email" => DeliveryOutcome {
+            status: DELIVERY_STATUS_DELIVERED,
+            attempts: 1,
+            response_code: Some(202),
+            last_error: None,
+        },
+        _ => DeliveryOutcome {
+            status: DELIVERY_STATUS_FAILED,
+            attempts: 1,
+            response_code: None,
+            last_error: Some(format!(
+                "unsupported channel_type '{}'",
+                target.channel_type
+            )),
+        },
+    }
+}
+
+async fn send_webhook_with_retry(
+    target: &NotificationDispatchTarget,
+    message: &Value,
+) -> DeliveryOutcome {
+    let max_attempts = target
+        .config
+        .get("max_attempts")
+        .and_then(Value::as_i64)
+        .map(|v| v.clamp(1, 5) as i32)
+        .unwrap_or(3);
+    let base_delay_ms = target
+        .config
+        .get("base_delay_ms")
+        .and_then(Value::as_u64)
+        .map(|v| v.clamp(50, 10_000))
+        .unwrap_or(200);
+
+    let client = match Client::builder().timeout(Duration::from_secs(10)).build() {
+        Ok(client) => client,
+        Err(err) => {
+            return DeliveryOutcome {
+                status: DELIVERY_STATUS_FAILED,
+                attempts: 1,
+                response_code: None,
+                last_error: Some(err.to_string()),
+            };
+        }
+    };
+
+    let mut attempts: i32 = 0;
+    let mut last_error: Option<String> = None;
+    let mut last_code: Option<i32> = None;
+
+    while attempts < max_attempts {
+        attempts += 1;
+        let response = client.post(&target.target).json(message).send().await;
+        match response {
+            Ok(response) => {
+                let code = response.status().as_u16() as i32;
+                last_code = Some(code);
+                if response.status().is_success() {
+                    return DeliveryOutcome {
+                        status: DELIVERY_STATUS_DELIVERED,
+                        attempts,
+                        response_code: Some(code),
+                        last_error: None,
+                    };
+                }
+
+                let body = response.text().await.unwrap_or_default();
+                last_error = Some(format!("webhook responded with status {code}: {body}"));
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+
+        if attempts < max_attempts {
+            let factor = 1_u64 << (attempts as u32 - 1);
+            let wait = base_delay_ms.saturating_mul(factor);
+            sleep(Duration::from_millis(wait)).await;
+        }
+    }
+
+    DeliveryOutcome {
+        status: DELIVERY_STATUS_FAILED,
+        attempts,
+        response_code: last_code,
+        last_error,
+    }
+}
+
+async fn load_notification_targets(
+    db: &sqlx::PgPool,
+    event_type: &str,
+    site: Option<String>,
+    department: Option<String>,
+) -> AppResult<Vec<NotificationDispatchTarget>> {
+    let items: Vec<NotificationDispatchTarget> = sqlx::query_as(
+        "SELECT
+            s.id AS subscription_id,
+            c.id AS channel_id,
+            c.channel_type,
+            c.target,
+            c.config
+         FROM discovery_notification_subscriptions s
+         INNER JOIN discovery_notification_channels c ON c.id = s.channel_id
+         WHERE s.is_enabled = TRUE
+           AND c.is_enabled = TRUE
+           AND s.event_type = $1
+           AND (s.site IS NULL OR s.site = $2)
+           AND (s.department IS NULL OR s.department = $3)
+         ORDER BY s.id ASC",
+    )
+    .bind(event_type)
+    .bind(site)
+    .bind(department)
+    .fetch_all(db)
+    .await?;
+
+    Ok(items)
+}
+
+async fn load_notification_template(
+    db: &sqlx::PgPool,
+    event_type: &str,
+) -> AppResult<Option<NotificationTemplateRecord>> {
+    let item: Option<NotificationTemplateRecord> = sqlx::query_as(
+        "SELECT title_template, body_template
+         FROM discovery_notification_templates
+         WHERE event_type = $1
+           AND is_enabled = TRUE
+         ORDER BY id DESC
+         LIMIT 1",
+    )
+    .bind(event_type)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(item)
+}
+
+async fn create_delivery_record(
+    db: &sqlx::PgPool,
+    event_id: i64,
+    subscription_id: i64,
+    channel_id: i64,
+    target: &str,
+    payload: &Value,
+) -> AppResult<i64> {
+    let delivery_id: i64 = sqlx::query_scalar(
+        "INSERT INTO discovery_notification_deliveries
+            (event_id, subscription_id, channel_id, target, status, attempts, payload)
+         VALUES ($1, $2, $3, $4, $5, 0, $6)
+         RETURNING id",
+    )
+    .bind(event_id)
+    .bind(subscription_id)
+    .bind(channel_id)
+    .bind(target)
+    .bind(DELIVERY_STATUS_QUEUED)
+    .bind(payload)
+    .fetch_one(db)
+    .await?;
+
+    Ok(delivery_id)
+}
+
+async fn finalize_delivery_record(
+    db: &sqlx::PgPool,
+    delivery_id: i64,
+    status: &str,
+    attempts: i32,
+    response_code: Option<i32>,
+    last_error: Option<&str>,
+) -> AppResult<()> {
+    let delivered_at = if status == DELIVERY_STATUS_DELIVERED {
+        Some(Utc::now())
+    } else {
+        None
+    };
+
+    sqlx::query(
+        "UPDATE discovery_notification_deliveries
+         SET status = $2,
+             attempts = $3,
+             response_code = $4,
+             last_error = $5,
+             delivered_at = $6,
+             updated_at = NOW()
+         WHERE id = $1",
+    )
+    .bind(delivery_id)
+    .bind(status)
+    .bind(attempts)
+    .bind(response_code)
+    .bind(last_error)
+    .bind(delivered_at)
     .execute(db)
     .await?;
 
     Ok(())
+}
+
+fn render_template(template: &str, payload: &Map<String, Value>) -> String {
+    let mut rendered = template.to_string();
+    for (key, value) in payload {
+        let replacement = match value {
+            Value::String(v) => v.clone(),
+            Value::Number(v) => v.to_string(),
+            Value::Bool(v) => v.to_string(),
+            _ => continue,
+        };
+        let token = format!("{{{{{key}}}}}");
+        rendered = rendered.replace(&token, &replacement);
+    }
+    rendered
 }
 
 fn build_fingerprint(item: &DiscoveryInputItem) -> String {
@@ -991,6 +1392,19 @@ fn append_event_filters(
     }
     if let Some(time_to) = time_to {
         builder.push(" AND happened_at <= ").push_bind(time_to);
+    }
+}
+
+fn append_delivery_filters(
+    builder: &mut QueryBuilder<Postgres>,
+    event_id: Option<i64>,
+    status: Option<String>,
+) {
+    if let Some(event_id) = event_id {
+        builder.push(" AND event_id = ").push_bind(event_id);
+    }
+    if let Some(status) = status {
+        builder.push(" AND status = ").push_bind(status);
     }
 }
 
