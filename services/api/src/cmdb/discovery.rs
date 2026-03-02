@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    collections::HashSet,
+    time::Duration,
+};
 
 use anyhow::anyhow;
 use axum::{
@@ -19,6 +22,10 @@ const SOURCE_ZABBIX_HOSTS: &str = "zabbix_hosts";
 const SOURCE_SNMP_SEED: &str = "snmp_seed";
 const SOURCE_K8S_SEED: &str = "k8s_seed";
 
+const EVENT_ASSET_NEW_DETECTED: &str = "asset.new_detected";
+const EVENT_ASSET_OFFBOARDED_SUSPECTED: &str = "asset.offboarded_suspected";
+const EVENT_ASSET_PROFILE_CHANGED: &str = "asset.profile_changed";
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -30,6 +37,7 @@ pub fn routes() -> Router<AppState> {
             axum::routing::post(run_discovery_job),
         )
         .route("/discovery/candidates", get(list_discovery_candidates))
+        .route("/discovery/events", get(list_discovery_events))
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -62,6 +70,28 @@ struct DiscoveryCandidate {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct DiscoveryEvent {
+    id: i64,
+    job_id: Option<i64>,
+    asset_id: Option<i64>,
+    event_type: String,
+    fingerprint: Option<String>,
+    payload: Value,
+    happened_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct DiscoveryAssetState {
+    id: i64,
+    asset_id: i64,
+    profile: Value,
+    last_seen_at: Option<DateTime<Utc>>,
+    missed_runs: i32,
+    offboarded_emitted: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateDiscoveryJobRequest {
     name: String,
@@ -78,9 +108,28 @@ struct ListDiscoveryCandidatesQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct ListDiscoveryEventsQuery {
+    job_id: Option<i64>,
+    asset_id: Option<i64>,
+    event_type: Option<String>,
+    time_from: Option<String>,
+    time_to: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 struct ListDiscoveryCandidatesResponse {
     items: Vec<DiscoveryCandidate>,
+    total: i64,
+    limit: u32,
+    offset: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct ListDiscoveryEventsResponse {
+    items: Vec<DiscoveryEvent>,
     total: i64,
     limit: u32,
     offset: u32,
@@ -97,6 +146,9 @@ struct DiscoveryRunStats {
     matched_assets: u32,
     queued_candidates: u32,
     skipped_candidates: u32,
+    new_detected_events: u32,
+    profile_changed_events: u32,
+    offboarded_suspected_events: u32,
 }
 
 #[derive(Debug)]
@@ -107,6 +159,12 @@ struct DiscoveryInputItem {
     asset_class: String,
     resource_kind: String,
     metadata: Value,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct AssetMatch {
+    id: i64,
+    name: String,
 }
 
 async fn create_discovery_job(
@@ -226,21 +284,93 @@ async fn list_discovery_candidates(
     }))
 }
 
+async fn list_discovery_events(
+    State(state): State<AppState>,
+    Query(query): Query<ListDiscoveryEventsQuery>,
+) -> AppResult<Json<ListDiscoveryEventsResponse>> {
+    let limit = query.limit.unwrap_or(50).min(500) as i64;
+    let offset = query.offset.unwrap_or(0) as i64;
+    let event_type = trim_optional(query.event_type).map(|item| item.to_ascii_lowercase());
+    let time_from = parse_time_filter(query.time_from, "time_from")?;
+    let time_to = parse_time_filter(query.time_to, "time_to")?;
+
+    let mut count_builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT COUNT(*) FROM discovery_events WHERE 1=1");
+    append_event_filters(
+        &mut count_builder,
+        query.job_id,
+        query.asset_id,
+        event_type.clone(),
+        time_from,
+        time_to,
+    );
+    let total: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, job_id, asset_id, event_type, fingerprint, payload, happened_at, created_at
+         FROM discovery_events
+         WHERE 1=1",
+    );
+    append_event_filters(
+        &mut list_builder,
+        query.job_id,
+        query.asset_id,
+        event_type,
+        time_from,
+        time_to,
+    );
+    list_builder
+        .push(" ORDER BY happened_at DESC, id DESC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+
+    let items: Vec<DiscoveryEvent> = list_builder.build_query_as().fetch_all(&state.db).await?;
+
+    Ok(Json(ListDiscoveryEventsResponse {
+        items,
+        total,
+        limit: limit as u32,
+        offset: offset as u32,
+    }))
+}
+
 async fn execute_discovery_job(
     db: &sqlx::PgPool,
     job: &DiscoveryJob,
 ) -> AppResult<DiscoveryRunStats> {
     let items = collect_discovery_items(job).await?;
+    let offboarded_threshold = parse_offboarded_threshold(&job.scope);
+
     let mut stats = DiscoveryRunStats::default();
+    let mut seen_asset_ids = HashSet::new();
 
     for item in items {
         let fingerprint = build_fingerprint(&item);
+        let candidate_payload = build_candidate_payload(job.source_type.as_str(), &item);
 
-        if let (Some(hostname), Some(ip)) = (&item.hostname, &item.ip) {
-            if asset_exists_by_hostname_ip(db, hostname, ip).await? {
-                stats.matched_assets += 1;
-                continue;
+        if let Some(asset_match) = find_asset_by_hostname_ip(db, &item.hostname, &item.ip).await? {
+            stats.matched_assets += 1;
+            seen_asset_ids.insert(asset_match.id);
+
+            let profile = build_asset_profile(&item);
+            let changed = apply_asset_state_for_match(
+                db,
+                job.id,
+                asset_match.id,
+                &profile,
+                job.source_type.as_str(),
+                &fingerprint,
+                &asset_match.name,
+            )
+            .await?;
+            if changed {
+                stats.profile_changed_events += 1;
             }
+            continue;
         }
 
         if pending_candidate_exists(db, &fingerprint).await? {
@@ -248,20 +378,39 @@ async fn execute_discovery_job(
             continue;
         }
 
-        let payload = build_candidate_payload(job.source_type.as_str(), &item);
-
         sqlx::query(
             "INSERT INTO discovery_candidates (job_id, fingerprint, payload, review_status)
              VALUES ($1, $2, $3, 'pending')",
         )
         .bind(job.id)
-        .bind(fingerprint)
-        .bind(payload)
+        .bind(&fingerprint)
+        .bind(candidate_payload.clone())
         .execute(db)
         .await?;
 
         stats.queued_candidates += 1;
+
+        emit_discovery_event(
+            db,
+            job.id,
+            None,
+            EVENT_ASSET_NEW_DETECTED,
+            Some(&fingerprint),
+            &candidate_payload,
+        )
+        .await?;
+        stats.new_detected_events += 1;
     }
+
+    let offboarded_events = process_missing_assets(
+        db,
+        job.id,
+        &seen_asset_ids,
+        offboarded_threshold,
+        job.source_type.as_str(),
+    )
+    .await?;
+    stats.offboarded_suspected_events = offboarded_events as u32;
 
     Ok(stats)
 }
@@ -507,6 +656,190 @@ async fn mark_discovery_job_failed(
     .map_err(AppError::from)
 }
 
+async fn find_asset_by_hostname_ip(
+    db: &sqlx::PgPool,
+    hostname: &Option<String>,
+    ip: &Option<String>,
+) -> AppResult<Option<AssetMatch>> {
+    let (Some(hostname), Some(ip)) = (hostname.as_ref(), ip.as_ref()) else {
+        return Ok(None);
+    };
+
+    let item: Option<AssetMatch> = sqlx::query_as(
+        "SELECT id, name
+         FROM assets
+         WHERE LOWER(COALESCE(hostname, '')) = LOWER($1)
+           AND COALESCE(ip, '') = $2
+         ORDER BY id DESC
+         LIMIT 1",
+    )
+    .bind(hostname)
+    .bind(ip)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(item)
+}
+
+async fn apply_asset_state_for_match(
+    db: &sqlx::PgPool,
+    job_id: i64,
+    asset_id: i64,
+    profile: &Value,
+    source_type: &str,
+    fingerprint: &str,
+    asset_name: &str,
+) -> AppResult<bool> {
+    let existing: Option<DiscoveryAssetState> = sqlx::query_as(
+        "SELECT id, asset_id, profile, last_seen_at, missed_runs, offboarded_emitted
+         FROM discovery_asset_states
+         WHERE job_id = $1 AND asset_id = $2",
+    )
+    .bind(job_id)
+    .bind(asset_id)
+    .fetch_optional(db)
+    .await?;
+
+    let mut changed = false;
+    if let Some(state) = existing {
+        if state.profile != *profile {
+            let payload = json!({
+                "source_type": source_type,
+                "asset_id": asset_id,
+                "asset_name": asset_name,
+                "before": state.profile,
+                "after": profile,
+            });
+            emit_discovery_event(
+                db,
+                job_id,
+                Some(asset_id),
+                EVENT_ASSET_PROFILE_CHANGED,
+                Some(fingerprint),
+                &payload,
+            )
+            .await?;
+            changed = true;
+        }
+
+        sqlx::query(
+            "UPDATE discovery_asset_states
+             SET profile = $3,
+                 last_seen_at = NOW(),
+                 missed_runs = 0,
+                 offboarded_emitted = FALSE,
+                 updated_at = NOW()
+             WHERE id = $1 AND job_id = $2",
+        )
+        .bind(state.id)
+        .bind(job_id)
+        .bind(profile)
+        .execute(db)
+        .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO discovery_asset_states (job_id, asset_id, profile, last_seen_at, missed_runs, offboarded_emitted)
+             VALUES ($1, $2, $3, NOW(), 0, FALSE)",
+        )
+        .bind(job_id)
+        .bind(asset_id)
+        .bind(profile)
+        .execute(db)
+        .await?;
+    }
+
+    Ok(changed)
+}
+
+async fn process_missing_assets(
+    db: &sqlx::PgPool,
+    job_id: i64,
+    seen_asset_ids: &HashSet<i64>,
+    offboarded_threshold: i32,
+    source_type: &str,
+) -> AppResult<usize> {
+    let states: Vec<DiscoveryAssetState> = sqlx::query_as(
+        "SELECT id, asset_id, profile, last_seen_at, missed_runs, offboarded_emitted
+         FROM discovery_asset_states
+         WHERE job_id = $1",
+    )
+    .bind(job_id)
+    .fetch_all(db)
+    .await?;
+
+    let mut emitted = 0_usize;
+
+    for state in states {
+        if seen_asset_ids.contains(&state.asset_id) {
+            continue;
+        }
+
+        let next_missed = state.missed_runs.saturating_add(1);
+        let mut offboarded_emitted = state.offboarded_emitted;
+
+        if !offboarded_emitted && next_missed >= offboarded_threshold {
+            let payload = json!({
+                "source_type": source_type,
+                "asset_id": state.asset_id,
+                "missed_runs": next_missed,
+                "offboarded_threshold": offboarded_threshold,
+                "last_seen_at": state.last_seen_at,
+            });
+            emit_discovery_event(
+                db,
+                job_id,
+                Some(state.asset_id),
+                EVENT_ASSET_OFFBOARDED_SUSPECTED,
+                None,
+                &payload,
+            )
+            .await?;
+            offboarded_emitted = true;
+            emitted += 1;
+        }
+
+        sqlx::query(
+            "UPDATE discovery_asset_states
+             SET missed_runs = $2,
+                 offboarded_emitted = $3,
+                 updated_at = NOW()
+             WHERE id = $1",
+        )
+        .bind(state.id)
+        .bind(next_missed)
+        .bind(offboarded_emitted)
+        .execute(db)
+        .await?;
+    }
+
+    Ok(emitted)
+}
+
+async fn emit_discovery_event(
+    db: &sqlx::PgPool,
+    job_id: i64,
+    asset_id: Option<i64>,
+    event_type: &str,
+    fingerprint: Option<&str>,
+    payload: &Value,
+) -> AppResult<()> {
+    let payload_obj = payload.as_object().cloned().unwrap_or_default();
+
+    sqlx::query(
+        "INSERT INTO discovery_events (job_id, asset_id, event_type, fingerprint, payload)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(job_id)
+    .bind(asset_id)
+    .bind(event_type)
+    .bind(fingerprint)
+    .bind(Value::Object(payload_obj))
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
 fn build_fingerprint(item: &DiscoveryInputItem) -> String {
     if item.resource_kind == "container" {
         let cluster = item
@@ -561,6 +894,32 @@ fn build_fingerprint(item: &DiscoveryInputItem) -> String {
     format!("name:{}", item.name.trim().to_ascii_lowercase())
 }
 
+fn build_asset_profile(item: &DiscoveryInputItem) -> Value {
+    let mut profile = Map::new();
+    profile.insert("name".to_string(), Value::String(item.name.clone()));
+    profile.insert(
+        "asset_class".to_string(),
+        Value::String(item.asset_class.clone()),
+    );
+    profile.insert(
+        "resource_kind".to_string(),
+        Value::String(item.resource_kind.clone()),
+    );
+    if let Some(hostname) = &item.hostname {
+        profile.insert("hostname".to_string(), Value::String(hostname.clone()));
+    }
+    if let Some(ip) = &item.ip {
+        profile.insert("ip".to_string(), Value::String(ip.clone()));
+    }
+    if let Some(metadata_obj) = item.metadata.as_object() {
+        let mut metadata = metadata_obj.clone();
+        metadata.remove("timestamp");
+        metadata.remove("last_seen");
+        profile.insert("metadata".to_string(), Value::Object(metadata));
+    }
+    Value::Object(profile)
+}
+
 fn build_candidate_payload(source_type: &str, item: &DiscoveryInputItem) -> Value {
     let mut payload = Map::new();
     payload.insert("name".to_string(), Value::String(item.name.clone()));
@@ -587,26 +946,6 @@ fn build_candidate_payload(source_type: &str, item: &DiscoveryInputItem) -> Valu
     Value::Object(payload)
 }
 
-async fn asset_exists_by_hostname_ip(
-    db: &sqlx::PgPool,
-    hostname: &str,
-    ip: &str,
-) -> AppResult<bool> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
-            SELECT 1 FROM assets
-            WHERE LOWER(COALESCE(hostname, '')) = LOWER($1)
-              AND COALESCE(ip, '') = $2
-        )",
-    )
-    .bind(hostname)
-    .bind(ip)
-    .fetch_one(db)
-    .await?;
-
-    Ok(exists)
-}
-
 async fn pending_candidate_exists(db: &sqlx::PgPool, fingerprint: &str) -> AppResult<bool> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(
@@ -628,6 +967,53 @@ fn append_candidate_filters(builder: &mut QueryBuilder<Postgres>, review_status:
             .push(" AND review_status = ")
             .push_bind(review_status.to_ascii_lowercase());
     }
+}
+
+fn append_event_filters(
+    builder: &mut QueryBuilder<Postgres>,
+    job_id: Option<i64>,
+    asset_id: Option<i64>,
+    event_type: Option<String>,
+    time_from: Option<DateTime<Utc>>,
+    time_to: Option<DateTime<Utc>>,
+) {
+    if let Some(job_id) = job_id {
+        builder.push(" AND job_id = ").push_bind(job_id);
+    }
+    if let Some(asset_id) = asset_id {
+        builder.push(" AND asset_id = ").push_bind(asset_id);
+    }
+    if let Some(event_type) = event_type {
+        builder.push(" AND event_type = ").push_bind(event_type);
+    }
+    if let Some(time_from) = time_from {
+        builder.push(" AND happened_at >= ").push_bind(time_from);
+    }
+    if let Some(time_to) = time_to {
+        builder.push(" AND happened_at <= ").push_bind(time_to);
+    }
+}
+
+fn parse_time_filter(value: Option<String>, field: &str) -> AppResult<Option<DateTime<Utc>>> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+
+    let parsed = DateTime::parse_from_rfc3339(raw.trim()).map_err(|_| {
+        AppError::Validation(format!(
+            "{field} must be RFC3339 datetime, e.g. 2026-03-02T08:00:00Z"
+        ))
+    })?;
+
+    Ok(Some(parsed.with_timezone(&Utc)))
+}
+
+fn parse_offboarded_threshold(scope: &Value) -> i32 {
+    scope
+        .get("offboarded_threshold")
+        .and_then(Value::as_i64)
+        .map(|v| v.clamp(1, 100) as i32)
+        .unwrap_or(3)
 }
 
 fn required_trimmed(field: &str, value: String) -> AppResult<String> {

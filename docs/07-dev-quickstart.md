@@ -102,6 +102,9 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs/1/run
 
 # list pending discovery candidates
 curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates?review_status=pending"
+
+# query discovery events by asset and time range (RFC3339)
+curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/events?asset_id=1&time_from=2026-03-02T00:00:00Z&time_to=2026-03-02T23:59:59Z"
 ```
 
 Container CMDB discovery (k8s seed example):
