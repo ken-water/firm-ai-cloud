@@ -8,10 +8,41 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- Dynamic CMDB field definitions with type/length validation.
-- Asset QR code and barcode support with scan lookup API.
-- Frontend CMDB enhancements for custom fields and scan query.
-- Release governance and release-note templates.
+- None
+
+### Changed
+
+- None
+
+### Fixed
+
+- None
+
+## [0.0.2] - 2026-03-02
+
+### Added
+
+- Dynamic CMDB custom field definitions with type/length/enum validation.
+- Asset QR/barcode support and scan lookup endpoint.
+- CMDB relationship schema, CRUD APIs, and one-hop graph API.
+- Discovery jobs/candidates APIs with runnable discovery execution.
+- Multi-source discovery adapters: `zabbix_hosts`, `snmp_seed`, `k8s_seed`.
+- Candidate review APIs (`approve`/`reject`) with auto asset create/merge path.
+- Discovery event model and query API (`asset.new_detected`, `asset.profile_changed`, `asset.offboarded_suspected`).
+- Notification channels/templates/subscriptions APIs.
+- Notification dispatch with webhook retry and delivery logs.
+- Web console relation panel and discovery review workflows.
+- Integration smoke script: `scripts/test-cmdb-loop.sh`.
+- Expanded developer quickstart and troubleshooting docs.
+
+### Changed
+
+- Discovery run endpoint now performs actual collection, dedup, candidate enqueue, and event generation.
+- Event emission now triggers notification dispatch flow.
+
+### Fixed
+
+- Better validation and conflict messages for relation and code uniqueness paths.
 
 ## [0.0.1] - 2026-03-02
 
