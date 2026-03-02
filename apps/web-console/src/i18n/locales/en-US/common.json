@@ -27,6 +27,42 @@
         "barcode": "Barcode Only"
       }
     },
+    "discovery": {
+      "title": "Discovery Operations",
+      "jobsTitle": "Discovery Jobs",
+      "candidatesTitle": "Discovery Candidates (Pending Review)",
+      "actions": {
+        "refreshJobs": "Refresh Jobs",
+        "refreshCandidates": "Refresh Candidates",
+        "run": "Run Now",
+        "approve": "Approve",
+        "reject": "Reject"
+      },
+      "messages": {
+        "noJobs": "No discovery jobs found.",
+        "noCandidates": "No pending candidates."
+      },
+      "table": {
+        "job": {
+          "id": "ID",
+          "name": "Name",
+          "sourceType": "Source Type",
+          "status": "Status",
+          "lastRunStatus": "Last Run Status",
+          "lastRunAt": "Last Run At",
+          "actions": "Actions"
+        },
+        "candidate": {
+          "id": "ID",
+          "fingerprint": "Fingerprint",
+          "name": "Name",
+          "class": "Class",
+          "ip": "IP",
+          "discoveredAt": "Discovered At",
+          "actions": "Actions"
+        }
+      }
+    },
     "fields": {
       "title": "Custom Field Definitions",
       "empty": "No custom fields defined yet.",

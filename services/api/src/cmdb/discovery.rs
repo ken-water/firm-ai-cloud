@@ -39,6 +39,14 @@ pub fn routes() -> Router<AppState> {
             axum::routing::post(run_discovery_job),
         )
         .route("/discovery/candidates", get(list_discovery_candidates))
+        .route(
+            "/discovery/candidates/{candidate_id}/approve",
+            axum::routing::post(approve_discovery_candidate),
+        )
+        .route(
+            "/discovery/candidates/{candidate_id}/reject",
+            axum::routing::post(reject_discovery_candidate),
+        )
         .route("/discovery/events", get(list_discovery_events))
         .route(
             "/discovery/notification-deliveries",
@@ -165,6 +173,11 @@ struct ListNotificationDeliveriesQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReviewDiscoveryCandidateRequest {
+    reviewed_by: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct ListDiscoveryCandidatesResponse {
     items: Vec<DiscoveryCandidate>,
@@ -187,6 +200,13 @@ struct ListNotificationDeliveriesResponse {
     total: i64,
     limit: u32,
     offset: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct ReviewDiscoveryCandidateResponse {
+    candidate: DiscoveryCandidate,
+    action: String,
+    asset_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -335,6 +355,164 @@ async fn list_discovery_candidates(
         total,
         limit: limit as u32,
         offset: offset as u32,
+    }))
+}
+
+async fn approve_discovery_candidate(
+    State(state): State<AppState>,
+    Path(candidate_id): Path<i64>,
+    Json(payload): Json<ReviewDiscoveryCandidateRequest>,
+) -> AppResult<Json<ReviewDiscoveryCandidateResponse>> {
+    let reviewed_by = normalize_reviewer(payload.reviewed_by);
+    let candidate = get_candidate_by_id(&state.db, candidate_id).await?;
+    ensure_candidate_pending(&candidate)?;
+
+    let candidate_payload = candidate
+        .payload
+        .as_object()
+        .cloned()
+        .ok_or_else(|| AppError::Validation("candidate payload must be object".to_string()))?;
+
+    let name = candidate_payload
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::Validation("candidate payload missing name".to_string()))?
+        .to_string();
+    let asset_class = candidate_payload
+        .get("asset_class")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("server")
+        .to_string();
+    let hostname = candidate_payload
+        .get("hostname")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let ip = candidate_payload
+        .get("ip")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    let asset_match = find_asset_by_hostname_ip(&state.db, &hostname, &ip).await?;
+    let (action, asset_id) = if let Some(asset_match) = asset_match {
+        ("merged".to_string(), Some(asset_match.id))
+    } else {
+        let metadata = candidate_payload
+            .get("metadata")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut custom_fields = metadata;
+        if let Some(value) = candidate_payload
+            .get("resource_kind")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+        {
+            custom_fields.insert("resource_kind".to_string(), Value::String(value));
+        }
+        if let Some(value) = candidate_payload
+            .get("source_type")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+        {
+            custom_fields.insert("source_type".to_string(), Value::String(value));
+        }
+
+        let site = candidate_payload
+            .get("site")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        let department = candidate_payload
+            .get("department")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        let owner = candidate_payload
+            .get("owner")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+
+        let created_asset_id: i64 = sqlx::query_scalar(
+            "INSERT INTO assets (asset_class, name, hostname, ip, status, site, department, owner, custom_fields)
+             VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $8)
+             RETURNING id",
+        )
+        .bind(asset_class)
+        .bind(name)
+        .bind(hostname)
+        .bind(ip)
+        .bind(site)
+        .bind(department)
+        .bind(owner)
+        .bind(Value::Object(custom_fields))
+        .fetch_one(&state.db)
+        .await?;
+
+        ("created".to_string(), Some(created_asset_id))
+    };
+
+    let reviewed_candidate: DiscoveryCandidate = sqlx::query_as(
+        "UPDATE discovery_candidates
+         SET review_status = $2,
+             reviewed_by = $3,
+             reviewed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, reviewed_at, created_at, updated_at",
+    )
+    .bind(candidate_id)
+    .bind(action.as_str())
+    .bind(reviewed_by)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(ReviewDiscoveryCandidateResponse {
+        candidate: reviewed_candidate,
+        action,
+        asset_id,
+    }))
+}
+
+async fn reject_discovery_candidate(
+    State(state): State<AppState>,
+    Path(candidate_id): Path<i64>,
+    Json(payload): Json<ReviewDiscoveryCandidateRequest>,
+) -> AppResult<Json<ReviewDiscoveryCandidateResponse>> {
+    let reviewed_by = normalize_reviewer(payload.reviewed_by);
+    let candidate = get_candidate_by_id(&state.db, candidate_id).await?;
+    ensure_candidate_pending(&candidate)?;
+
+    let reviewed_candidate: DiscoveryCandidate = sqlx::query_as(
+        "UPDATE discovery_candidates
+         SET review_status = 'rejected',
+             reviewed_by = $2,
+             reviewed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, reviewed_at, created_at, updated_at",
+    )
+    .bind(candidate_id)
+    .bind(reviewed_by)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(ReviewDiscoveryCandidateResponse {
+        candidate: reviewed_candidate,
+        action: "rejected".to_string(),
+        asset_id: None,
     }))
 }
 
@@ -1360,6 +1538,46 @@ async fn pending_candidate_exists(db: &sqlx::PgPool, fingerprint: &str) -> AppRe
     .await?;
 
     Ok(exists)
+}
+
+async fn get_candidate_by_id(
+    db: &sqlx::PgPool,
+    candidate_id: i64,
+) -> AppResult<DiscoveryCandidate> {
+    let item: Option<DiscoveryCandidate> = sqlx::query_as(
+        "SELECT id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, reviewed_at, created_at, updated_at
+         FROM discovery_candidates
+         WHERE id = $1",
+    )
+    .bind(candidate_id)
+    .fetch_optional(db)
+    .await?;
+
+    item.ok_or_else(|| AppError::NotFound(format!("discovery candidate {candidate_id} not found")))
+}
+
+fn ensure_candidate_pending(candidate: &DiscoveryCandidate) -> AppResult<()> {
+    if candidate.review_status == "pending" {
+        return Ok(());
+    }
+
+    Err(AppError::Validation(format!(
+        "candidate {} is already reviewed with status '{}'",
+        candidate.id, candidate.review_status
+    )))
+}
+
+fn normalize_reviewer(value: Option<String>) -> String {
+    value
+        .and_then(|v| {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .unwrap_or_else(|| "system".to_string())
 }
 
 fn append_candidate_filters(builder: &mut QueryBuilder<Postgres>, review_status: Option<String>) {

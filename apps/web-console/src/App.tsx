@@ -50,6 +50,34 @@ type AssetRelation = {
   updated_at: string;
 };
 
+type DiscoveryJob = {
+  id: number;
+  name: string;
+  source_type: string;
+  scope: Record<string, unknown>;
+  schedule: string | null;
+  status: string;
+  is_enabled: boolean;
+  last_run_at: string | null;
+  last_run_status: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type DiscoveryCandidate = {
+  id: number;
+  job_id: number | null;
+  fingerprint: string;
+  payload: Record<string, unknown>;
+  review_status: string;
+  discovered_at: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type NewFieldForm = {
   field_key: string;
   name: string;
@@ -104,6 +132,12 @@ export function App() {
   const [creatingRelation, setCreatingRelation] = useState(false);
   const [deletingRelationId, setDeletingRelationId] = useState<number | null>(null);
   const [newRelation, setNewRelation] = useState<NewRelationForm>(defaultRelationForm);
+  const [discoveryJobs, setDiscoveryJobs] = useState<DiscoveryJob[]>([]);
+  const [discoveryCandidates, setDiscoveryCandidates] = useState<DiscoveryCandidate[]>([]);
+  const [loadingDiscoveryJobs, setLoadingDiscoveryJobs] = useState(false);
+  const [loadingDiscoveryCandidates, setLoadingDiscoveryCandidates] = useState(false);
+  const [runningDiscoveryJobId, setRunningDiscoveryJobId] = useState<number | null>(null);
+  const [reviewingCandidateId, setReviewingCandidateId] = useState<number | null>(null);
 
   const loadAssets = useCallback(async () => {
     setLoadingAssets(true);
@@ -153,6 +187,40 @@ export function App() {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setLoadingRelations(false);
+    }
+  }, []);
+
+  const loadDiscoveryJobs = useCallback(async () => {
+    setLoadingDiscoveryJobs(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/jobs`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: DiscoveryJob[] = await response.json();
+      setDiscoveryJobs(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setLoadingDiscoveryJobs(false);
+    }
+  }, []);
+
+  const loadDiscoveryCandidates = useCallback(async () => {
+    setLoadingDiscoveryCandidates(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/candidates?review_status=pending&limit=100`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: { items: DiscoveryCandidate[] } = await response.json();
+      setDiscoveryCandidates(payload.items);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setLoadingDiscoveryCandidates(false);
     }
   }, []);
 
@@ -310,6 +378,49 @@ export function App() {
     [loadRelations, selectedAssetId]
   );
 
+  const runDiscoveryJob = useCallback(async (jobId: number) => {
+    setRunningDiscoveryJobId(jobId);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/jobs/${jobId}/run`, {
+        method: "POST"
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await Promise.all([loadDiscoveryJobs(), loadDiscoveryCandidates(), loadAssets()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setRunningDiscoveryJobId(null);
+    }
+  }, [loadAssets, loadDiscoveryCandidates, loadDiscoveryJobs]);
+
+  const reviewDiscoveryCandidate = useCallback(
+    async (candidateId: number, action: "approve" | "reject") => {
+      setReviewingCandidateId(candidateId);
+      setError(null);
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/candidates/${candidateId}/${action}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ reviewed_by: "web-console" })
+        });
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response));
+        }
+        await Promise.all([loadDiscoveryCandidates(), loadAssets()]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "unknown error");
+      } finally {
+        setReviewingCandidateId(null);
+      }
+    },
+    [loadAssets, loadDiscoveryCandidates]
+  );
+
   const findAssetByCode = useCallback(async () => {
     const normalized = scanCode.trim();
     if (!normalized) {
@@ -337,8 +448,8 @@ export function App() {
   }, [scanCode, scanMode, t]);
 
   useEffect(() => {
-    void Promise.all([loadAssets(), loadFieldDefinitions()]);
-  }, [loadAssets, loadFieldDefinitions]);
+    void Promise.all([loadAssets(), loadFieldDefinitions(), loadDiscoveryJobs(), loadDiscoveryCandidates()]);
+  }, [loadAssets, loadFieldDefinitions, loadDiscoveryCandidates, loadDiscoveryJobs]);
 
   useEffect(() => {
     if (assets.length === 0 || selectedAssetId) {
@@ -422,6 +533,109 @@ export function App() {
           <p style={{ marginTop: "0.5rem" }}>
             {t("cmdb.scan.hit")}: #{scanResult.id} {scanResult.name} ({scanResult.asset_class})
           </p>
+        )}
+      </section>
+
+      <section style={{ marginBottom: "1.5rem" }}>
+        <h2 style={sectionTitleStyle}>{t("cmdb.discovery.title")}</h2>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+          <button onClick={() => void loadDiscoveryJobs()} disabled={loadingDiscoveryJobs}>
+            {loadingDiscoveryJobs ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.refreshJobs")}
+          </button>
+          <button onClick={() => void loadDiscoveryCandidates()} disabled={loadingDiscoveryCandidates}>
+            {loadingDiscoveryCandidates ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.refreshCandidates")}
+          </button>
+        </div>
+
+        <h3 style={subSectionTitleStyle}>{t("cmdb.discovery.jobsTitle")}</h3>
+        {discoveryJobs.length === 0 ? (
+          <p>{t("cmdb.discovery.messages.noJobs")}</p>
+        ) : (
+          <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
+            <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+              <thead>
+                <tr>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.job.id")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.job.name")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.job.sourceType")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.job.status")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.job.lastRunStatus")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.job.lastRunAt")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.job.actions")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {discoveryJobs.map((job) => (
+                  <tr key={job.id}>
+                    <td style={cellStyle}>{job.id}</td>
+                    <td style={cellStyle}>{job.name}</td>
+                    <td style={cellStyle}>{job.source_type}</td>
+                    <td style={cellStyle}>{job.status}</td>
+                    <td style={cellStyle}>{job.last_run_status ?? "-"}</td>
+                    <td style={cellStyle}>{job.last_run_at ? new Date(job.last_run_at).toLocaleString() : "-"}</td>
+                    <td style={cellStyle}>
+                      <button onClick={() => void runDiscoveryJob(job.id)} disabled={runningDiscoveryJobId === job.id}>
+                        {runningDiscoveryJobId === job.id ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.run")}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <h3 style={subSectionTitleStyle}>{t("cmdb.discovery.candidatesTitle")}</h3>
+        {discoveryCandidates.length === 0 ? (
+          <p>{t("cmdb.discovery.messages.noCandidates")}</p>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", minWidth: "1100px", width: "100%" }}>
+              <thead>
+                <tr>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.id")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.fingerprint")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.name")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.class")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.ip")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.discoveredAt")}</th>
+                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.actions")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {discoveryCandidates.map((candidate) => (
+                  <tr key={candidate.id}>
+                    <td style={cellStyle}>{candidate.id}</td>
+                    <td style={cellStyle}>{candidate.fingerprint}</td>
+                    <td style={cellStyle}>{readPayloadString(candidate.payload, "name") ?? "-"}</td>
+                    <td style={cellStyle}>{readPayloadString(candidate.payload, "asset_class") ?? "-"}</td>
+                    <td style={cellStyle}>{readPayloadString(candidate.payload, "ip") ?? "-"}</td>
+                    <td style={cellStyle}>{new Date(candidate.discovered_at).toLocaleString()}</td>
+                    <td style={cellStyle}>
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <button
+                          onClick={() => void reviewDiscoveryCandidate(candidate.id, "approve")}
+                          disabled={reviewingCandidateId === candidate.id}
+                        >
+                          {reviewingCandidateId === candidate.id
+                            ? t("cmdb.actions.loading")
+                            : t("cmdb.discovery.actions.approve")}
+                        </button>
+                        <button
+                          onClick={() => void reviewDiscoveryCandidate(candidate.id, "reject")}
+                          disabled={reviewingCandidateId === candidate.id}
+                        >
+                          {reviewingCandidateId === candidate.id
+                            ? t("cmdb.actions.loading")
+                            : t("cmdb.discovery.actions.reject")}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
 
@@ -726,6 +940,17 @@ function sampleValueForField(definition: FieldDefinition): unknown {
   }
 }
 
+function readPayloadString(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return null;
+}
+
 function renderCustomFields(value: Record<string, unknown>): string {
   const entries = Object.entries(value);
   if (entries.length === 0) {
@@ -746,6 +971,12 @@ function renderCustomFields(value: Record<string, unknown>): string {
 const sectionTitleStyle: CSSProperties = {
   marginTop: 0,
   marginBottom: "0.5rem"
+};
+
+const subSectionTitleStyle: CSSProperties = {
+  marginTop: 0,
+  marginBottom: "0.5rem",
+  fontSize: "1rem"
 };
 
 const cellStyle: CSSProperties = {
