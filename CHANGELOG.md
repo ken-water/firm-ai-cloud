@@ -19,6 +19,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - `auth_sessions`
 - Developer OIDC smoke test script: `scripts/test-oidc-dev.sh`.
 - GitHub Actions CI workflow: `.github/workflows/ci.yml`.
+- Web console sign-in session panel with header-mode and bearer-token mode.
 
 ### Changed
 
@@ -26,6 +27,8 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Developer quickstart now documents OIDC env settings, bearer-token flow, and OIDC smoke validation.
 - OIDC dev smoke script now verifies invalid-token deny and session revocation behavior.
 - RBAC coverage doc now includes CI verification and auth suite runbook.
+- Web console now applies role-aware action visibility for CMDB/discovery/notification write operations.
+- Web console now detects bearer session expiry and returns users to sign-in.
 
 ### Fixed
 

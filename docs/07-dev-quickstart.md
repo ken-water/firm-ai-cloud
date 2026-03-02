@@ -326,6 +326,18 @@ Optional frontend auth user override for RBAC-protected APIs:
 VITE_AUTH_USER=admin npm run dev
 ```
 
+Optional frontend bearer token bootstrap:
+
+```bash
+VITE_AUTH_TOKEN=<access_token_from_oidc_callback> npm run dev
+```
+
+Notes:
+
+- Web console now has a built-in sign-in session panel.
+- Header mode (`x-auth-user`) is for local/dev usage.
+- Bearer mode is preferred for OIDC session testing.
+
 ## 5. One-Command Dev Entry
 
 ```bash

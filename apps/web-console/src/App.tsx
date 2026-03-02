@@ -148,6 +148,30 @@ type NewNotificationSubscriptionForm = {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8080";
 const API_AUTH_USER = (import.meta.env.VITE_AUTH_USER ?? "admin").trim();
+const API_AUTH_TOKEN = (import.meta.env.VITE_AUTH_TOKEN ?? "").trim();
+const AUTH_SESSION_STORAGE_KEY = "cloudops.auth.session.v1";
+const AUTH_SESSION_EXPIRED_EVENT = "cloudops.auth.session-expired";
+
+type AuthMode = "header" | "bearer";
+
+type AuthSession = {
+  mode: AuthMode;
+  principal: string;
+  token: string | null;
+};
+
+type AuthIdentity = {
+  user: {
+    id: number;
+    username: string;
+    display_name: string | null;
+    email: string | null;
+  };
+  roles: string[];
+};
+
+const runtimeDefaultSession = deriveDefaultAuthSession();
+let runtimeAuthSession: AuthSession | null = loadStoredAuthSession() ?? runtimeDefaultSession;
 
 const defaultFieldForm: NewFieldForm = {
   field_key: "",
@@ -187,6 +211,18 @@ const defaultNotificationSubscriptionForm: NewNotificationSubscriptionForm = {
 
 export function App() {
   const { t } = useTranslation();
+  const [authSession, setAuthSession] = useState<AuthSession | null>(runtimeAuthSession);
+  const [authIdentity, setAuthIdentity] = useState<AuthIdentity | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const [loginMode, setLoginMode] = useState<AuthMode>(runtimeAuthSession?.mode ?? "header");
+  const [loginPrincipal, setLoginPrincipal] = useState<string>(
+    runtimeAuthSession?.mode === "header" ? runtimeAuthSession.principal : API_AUTH_USER
+  );
+  const [loginToken, setLoginToken] = useState<string>(
+    runtimeAuthSession?.mode === "bearer" ? runtimeAuthSession.token ?? "" : API_AUTH_TOKEN
+  );
   const [assets, setAssets] = useState<Asset[]>([]);
   const [fieldDefinitions, setFieldDefinitions] = useState<FieldDefinition[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -226,6 +262,128 @@ export function App() {
     useState<NewNotificationTemplateForm>(defaultNotificationTemplateForm);
   const [newNotificationSubscription, setNewNotificationSubscription] =
     useState<NewNotificationSubscriptionForm>(defaultNotificationSubscriptionForm);
+  const roleSet = useMemo(() => new Set(authIdentity?.roles ?? []), [authIdentity?.roles]);
+  const canWriteCmdb = roleSet.has("admin") || roleSet.has("operator");
+  const canAccessAdmin = roleSet.has("admin");
+  const roleText = useMemo(() => (authIdentity?.roles.length ? authIdentity.roles.join(", ") : "-"), [authIdentity]);
+
+  const applyAuthSession = useCallback((session: AuthSession | null) => {
+    runtimeAuthSession = session;
+    persistAuthSession(session);
+    setAuthSession(session);
+  }, []);
+
+  const loadCurrentIdentity = useCallback(async () => {
+    const response = await apiFetch(`${API_BASE_URL}/api/v1/auth/me`);
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response));
+    }
+    const payload: AuthIdentity = await response.json();
+    return payload;
+  }, []);
+
+  const signIn = useCallback(async () => {
+    const normalizedPrincipal = loginPrincipal.trim();
+    const normalizedToken = loginToken.trim();
+    setAuthError(null);
+    setAuthNotice(null);
+
+    if (loginMode === "header") {
+      if (!normalizedPrincipal) {
+        setAuthError(t("auth.messages.usernameRequired"));
+        return;
+      }
+      applyAuthSession({
+        mode: "header",
+        principal: normalizedPrincipal,
+        token: null
+      });
+      return;
+    }
+
+    if (!normalizedToken) {
+      setAuthError(t("auth.messages.tokenRequired"));
+      return;
+    }
+
+    applyAuthSession({
+      mode: "bearer",
+      principal: "oidc-session",
+      token: normalizedToken
+    });
+  }, [applyAuthSession, loginMode, loginPrincipal, loginToken, t]);
+
+  const signOut = useCallback(async () => {
+    if (runtimeAuthSession?.mode === "bearer" && runtimeAuthSession.token) {
+      try {
+        await apiFetch(`${API_BASE_URL}/api/v1/auth/logout`, { method: "POST" });
+      } catch {
+        // Best-effort session revoke; local sign-out still proceeds.
+      }
+    }
+
+    applyAuthSession(null);
+    setAuthIdentity(null);
+    setAuthError(null);
+    setAuthNotice(t("auth.messages.signedOut"));
+    setError(null);
+  }, [applyAuthSession, t]);
+
+  useEffect(() => {
+    const onSessionExpired = () => {
+      applyAuthSession(null);
+      setAuthIdentity(null);
+      setAuthError(null);
+      setAuthNotice(t("auth.messages.sessionExpired"));
+      setError(null);
+    };
+
+    window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, onSessionExpired);
+    return () => window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, onSessionExpired);
+  }, [applyAuthSession, t]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!authSession) {
+      setAuthLoading(false);
+      setAuthIdentity(null);
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError(null);
+    void loadCurrentIdentity()
+      .then((identity) => {
+        if (cancelled) {
+          return;
+        }
+        setAuthIdentity(identity);
+        if (authSession.mode === "header" && authSession.principal !== identity.user.username) {
+          applyAuthSession({
+            ...authSession,
+            principal: identity.user.username
+          });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        applyAuthSession(null);
+        setAuthIdentity(null);
+        setAuthError(err instanceof Error ? err.message : t("cmdb.messages.error"));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAuthLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applyAuthSession, authSession, loadCurrentIdentity, t]);
 
   const loadAssets = useCallback(async () => {
     setLoadingAssets(true);
@@ -233,7 +391,7 @@ export function App() {
     try {
       const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets?limit=50`);
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(await readErrorMessage(response));
       }
       const payload: AssetListResponse = await response.json();
       setAssets(payload.items);
@@ -250,7 +408,7 @@ export function App() {
     try {
       const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/field-definitions`);
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(await readErrorMessage(response));
       }
       const payload: FieldDefinition[] = await response.json();
       setFieldDefinitions(payload);
@@ -364,6 +522,11 @@ export function App() {
   }, []);
 
   const createSampleAsset = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
     setCreatingSample(true);
     setError(null);
     try {
@@ -405,9 +568,14 @@ export function App() {
     } finally {
       setCreatingSample(false);
     }
-  }, [fieldDefinitions, loadAssets]);
+  }, [canWriteCmdb, fieldDefinitions, loadAssets, t]);
 
   const createFieldDefinition = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
     setCreatingField(true);
     setError(null);
     try {
@@ -449,9 +617,14 @@ export function App() {
     } finally {
       setCreatingField(false);
     }
-  }, [newField, loadFieldDefinitions]);
+  }, [canWriteCmdb, newField, loadFieldDefinitions, t]);
 
   const createRelation = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
     const srcAssetId = Number.parseInt(selectedAssetId, 10);
     const dstAssetId = Number.parseInt(newRelation.dst_asset_id, 10);
     if (!Number.isFinite(srcAssetId) || srcAssetId <= 0) {
@@ -489,10 +662,15 @@ export function App() {
     } finally {
       setCreatingRelation(false);
     }
-  }, [loadRelations, newRelation.dst_asset_id, newRelation.relation_type, newRelation.source, selectedAssetId, t]);
+  }, [canWriteCmdb, loadRelations, newRelation.dst_asset_id, newRelation.relation_type, newRelation.source, selectedAssetId, t]);
 
   const deleteRelation = useCallback(
     async (relationId: number) => {
+      if (!canWriteCmdb) {
+        setError(t("auth.messages.forbiddenAction"));
+        return;
+      }
+
       const srcAssetId = Number.parseInt(selectedAssetId, 10);
       if (!Number.isFinite(srcAssetId) || srcAssetId <= 0) {
         return;
@@ -514,10 +692,15 @@ export function App() {
         setDeletingRelationId(null);
       }
     },
-    [loadRelations, selectedAssetId]
+    [canWriteCmdb, loadRelations, selectedAssetId, t]
   );
 
   const runDiscoveryJob = useCallback(async (jobId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
     setRunningDiscoveryJobId(jobId);
     setError(null);
     try {
@@ -533,10 +716,15 @@ export function App() {
     } finally {
       setRunningDiscoveryJobId(null);
     }
-  }, [loadAssets, loadDiscoveryCandidates, loadDiscoveryJobs]);
+  }, [canWriteCmdb, loadAssets, loadDiscoveryCandidates, loadDiscoveryJobs, t]);
 
   const reviewDiscoveryCandidate = useCallback(
     async (candidateId: number, action: "approve" | "reject") => {
+      if (!canWriteCmdb) {
+        setError(t("auth.messages.forbiddenAction"));
+        return;
+      }
+
       setReviewingCandidateId(candidateId);
       setError(null);
       try {
@@ -557,10 +745,15 @@ export function App() {
         setReviewingCandidateId(null);
       }
     },
-    [loadAssets, loadDiscoveryCandidates]
+    [canWriteCmdb, loadAssets, loadDiscoveryCandidates, t]
   );
 
   const createNotificationChannel = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
     const name = newNotificationChannel.name.trim();
     const target = newNotificationChannel.target.trim();
     if (!name) {
@@ -613,9 +806,14 @@ export function App() {
     } finally {
       setCreatingNotificationChannel(false);
     }
-  }, [loadNotificationChannels, newNotificationChannel, t]);
+  }, [canWriteCmdb, loadNotificationChannels, newNotificationChannel, t]);
 
   const createNotificationTemplate = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
     const eventType = newNotificationTemplate.event_type.trim();
     const titleTemplate = newNotificationTemplate.title_template.trim();
     const bodyTemplate = newNotificationTemplate.body_template.trim();
@@ -656,9 +854,14 @@ export function App() {
     } finally {
       setCreatingNotificationTemplate(false);
     }
-  }, [loadNotificationTemplates, newNotificationTemplate, t]);
+  }, [canWriteCmdb, loadNotificationTemplates, newNotificationTemplate, t]);
 
   const createNotificationSubscription = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
     const channelId = Number.parseInt(newNotificationSubscription.channel_id, 10);
     const eventType = newNotificationSubscription.event_type.trim();
     if (!Number.isFinite(channelId) || channelId <= 0) {
@@ -695,7 +898,7 @@ export function App() {
     } finally {
       setCreatingNotificationSubscription(false);
     }
-  }, [loadNotificationSubscriptions, newNotificationSubscription, t]);
+  }, [canWriteCmdb, loadNotificationSubscriptions, newNotificationSubscription, t]);
 
   const findAssetByCode = useCallback(async () => {
     const normalized = scanCode.trim();
@@ -724,6 +927,9 @@ export function App() {
   }, [scanCode, scanMode, t]);
 
   useEffect(() => {
+    if (!authIdentity) {
+      return;
+    }
     void Promise.all([
       loadAssets(),
       loadFieldDefinitions(),
@@ -740,7 +946,8 @@ export function App() {
     loadDiscoveryJobs,
     loadNotificationChannels,
     loadNotificationTemplates,
-    loadNotificationSubscriptions
+    loadNotificationSubscriptions,
+    authIdentity
   ]);
 
   useEffect(() => {
@@ -792,12 +999,104 @@ export function App() {
     return { upstream, downstream };
   }, [relations, selectedAssetNumericId]);
 
+  if (!authSession || !authIdentity) {
+    return (
+      <main style={{ fontFamily: "sans-serif", padding: "2rem", lineHeight: 1.5 }}>
+        <header style={{ marginBottom: "1rem" }}>
+          <h1 style={{ marginBottom: "0.25rem" }}>{t("app.title")}</h1>
+          <p style={{ marginTop: 0 }}>{t("app.subtitle")}</p>
+        </header>
+
+        {authNotice && <p style={{ color: "#00695c" }}>{authNotice}</p>}
+        {authError && <p style={{ color: "#b00020" }}>{authError}</p>}
+
+        <section style={{ border: "1px solid #ddd", borderRadius: "8px", padding: "1rem", maxWidth: "720px" }}>
+          <h2 style={{ marginTop: 0 }}>{t("auth.title")}</h2>
+          <p style={{ marginTop: 0 }}>{t("auth.subtitle")}</p>
+
+          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+            <label>
+              {t("auth.modeLabel")}{" "}
+              <select value={loginMode} onChange={(event) => setLoginMode(event.target.value as AuthMode)}>
+                <option value="header">{t("auth.modes.header")}</option>
+                <option value="bearer">{t("auth.modes.bearer")}</option>
+              </select>
+            </label>
+
+            {loginMode === "header" ? (
+              <label>
+                {t("auth.usernameLabel")}{" "}
+                <input
+                  value={loginPrincipal}
+                  onChange={(event) => setLoginPrincipal(event.target.value)}
+                  placeholder={t("auth.usernamePlaceholder")}
+                />
+              </label>
+            ) : (
+              <label style={{ flex: "1 1 420px" }}>
+                {t("auth.tokenLabel")}{" "}
+                <input
+                  value={loginToken}
+                  onChange={(event) => setLoginToken(event.target.value)}
+                  placeholder={t("auth.tokenPlaceholder")}
+                  style={{ width: "100%", minWidth: "320px" }}
+                />
+              </label>
+            )}
+
+            <button onClick={() => void signIn()} disabled={authLoading}>
+              {authLoading ? t("auth.signingIn") : t("auth.signIn")}
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main style={{ fontFamily: "sans-serif", padding: "2rem", lineHeight: 1.5 }}>
       <header style={{ marginBottom: "1rem" }}>
         <h1 style={{ marginBottom: "0.25rem" }}>{t("app.title")}</h1>
         <p style={{ marginTop: 0 }}>{t("app.subtitle")}</p>
       </header>
+
+      <section
+        style={{
+          marginBottom: "1rem",
+          border: "1px solid #ddd",
+          borderRadius: "8px",
+          padding: "0.75rem",
+          display: "flex",
+          gap: "0.75rem",
+          flexWrap: "wrap",
+          alignItems: "center"
+        }}
+      >
+        <strong>{t("auth.status", { username: authIdentity.user.username, roles: roleText })}</strong>
+        <span>{t("auth.statusMode", { mode: authSession.mode })}</span>
+        <button onClick={() => void signOut()}>{t("auth.signOut")}</button>
+      </section>
+
+      {authNotice && <p style={{ color: "#00695c" }}>{authNotice}</p>}
+
+      {!canWriteCmdb && <p style={{ color: "#6d4c41" }}>{t("auth.messages.readOnly")}</p>}
+
+      <nav style={{ marginBottom: "1rem", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+        <a href="#section-scan">{t("auth.navigation.scan")}</a>
+        <a href="#section-discovery">{t("auth.navigation.discovery")}</a>
+        <a href="#section-notifications">{t("auth.navigation.notifications")}</a>
+        <a href="#section-fields">{t("auth.navigation.fields")}</a>
+        <a href="#section-relations">{t("auth.navigation.relations")}</a>
+        <a href="#section-assets">{t("auth.navigation.assets")}</a>
+        {canAccessAdmin && <a href="#section-admin">{t("auth.navigation.admin")}</a>}
+      </nav>
+
+      {canAccessAdmin && (
+        <section id="section-admin" style={{ marginBottom: "1.5rem" }}>
+          <h2 style={sectionTitleStyle}>{t("auth.adminPanel.title")}</h2>
+          <p style={{ marginTop: 0 }}>{t("auth.adminPanel.description")}</p>
+        </section>
+      )}
 
       <section style={{ marginBottom: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <button onClick={() => void loadAssets()} disabled={loadingAssets}>
@@ -806,9 +1105,11 @@ export function App() {
         <button onClick={() => void loadFieldDefinitions()} disabled={loadingFields}>
           {loadingFields ? t("cmdb.actions.loading") : t("cmdb.actions.refreshFields")}
         </button>
-        <button onClick={() => void createSampleAsset()} disabled={creatingSample}>
-          {creatingSample ? t("cmdb.actions.creating") : t("cmdb.actions.createSample")}
-        </button>
+        {canWriteCmdb && (
+          <button onClick={() => void createSampleAsset()} disabled={creatingSample}>
+            {creatingSample ? t("cmdb.actions.creating") : t("cmdb.actions.createSample")}
+          </button>
+        )}
       </section>
 
       {error && (
@@ -817,7 +1118,7 @@ export function App() {
         </p>
       )}
 
-      <section style={{ marginBottom: "1.5rem" }}>
+      <section id="section-scan" style={{ marginBottom: "1.5rem" }}>
         <h2 style={sectionTitleStyle}>{t("cmdb.scan.title")}</h2>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
           <input
@@ -842,7 +1143,7 @@ export function App() {
         )}
       </section>
 
-      <section style={{ marginBottom: "1.5rem" }}>
+      <section id="section-discovery" style={{ marginBottom: "1.5rem" }}>
         <h2 style={sectionTitleStyle}>{t("cmdb.discovery.title")}</h2>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
           <button onClick={() => void loadDiscoveryJobs()} disabled={loadingDiscoveryJobs}>
@@ -880,9 +1181,13 @@ export function App() {
                     <td style={cellStyle}>{job.last_run_status ?? "-"}</td>
                     <td style={cellStyle}>{job.last_run_at ? new Date(job.last_run_at).toLocaleString() : "-"}</td>
                     <td style={cellStyle}>
-                      <button onClick={() => void runDiscoveryJob(job.id)} disabled={runningDiscoveryJobId === job.id}>
-                        {runningDiscoveryJobId === job.id ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.run")}
-                      </button>
+                      {canWriteCmdb ? (
+                        <button onClick={() => void runDiscoveryJob(job.id)} disabled={runningDiscoveryJobId === job.id}>
+                          {runningDiscoveryJobId === job.id ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.run")}
+                        </button>
+                      ) : (
+                        <span>{t("auth.labels.readOnly")}</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -918,24 +1223,28 @@ export function App() {
                     <td style={cellStyle}>{readPayloadString(candidate.payload, "ip") ?? "-"}</td>
                     <td style={cellStyle}>{new Date(candidate.discovered_at).toLocaleString()}</td>
                     <td style={cellStyle}>
-                      <div style={{ display: "flex", gap: "0.5rem" }}>
-                        <button
-                          onClick={() => void reviewDiscoveryCandidate(candidate.id, "approve")}
-                          disabled={reviewingCandidateId === candidate.id}
-                        >
-                          {reviewingCandidateId === candidate.id
-                            ? t("cmdb.actions.loading")
-                            : t("cmdb.discovery.actions.approve")}
-                        </button>
-                        <button
-                          onClick={() => void reviewDiscoveryCandidate(candidate.id, "reject")}
-                          disabled={reviewingCandidateId === candidate.id}
-                        >
-                          {reviewingCandidateId === candidate.id
-                            ? t("cmdb.actions.loading")
-                            : t("cmdb.discovery.actions.reject")}
-                        </button>
-                      </div>
+                      {canWriteCmdb ? (
+                        <div style={{ display: "flex", gap: "0.5rem" }}>
+                          <button
+                            onClick={() => void reviewDiscoveryCandidate(candidate.id, "approve")}
+                            disabled={reviewingCandidateId === candidate.id}
+                          >
+                            {reviewingCandidateId === candidate.id
+                              ? t("cmdb.actions.loading")
+                              : t("cmdb.discovery.actions.approve")}
+                          </button>
+                          <button
+                            onClick={() => void reviewDiscoveryCandidate(candidate.id, "reject")}
+                            disabled={reviewingCandidateId === candidate.id}
+                          >
+                            {reviewingCandidateId === candidate.id
+                              ? t("cmdb.actions.loading")
+                              : t("cmdb.discovery.actions.reject")}
+                          </button>
+                        </div>
+                      ) : (
+                        <span>{t("auth.labels.readOnly")}</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -945,7 +1254,7 @@ export function App() {
         )}
       </section>
 
-      <section style={{ marginBottom: "1.5rem" }}>
+      <section id="section-notifications" style={{ marginBottom: "1.5rem" }}>
         <h2 style={sectionTitleStyle}>{t("cmdb.notifications.title")}</h2>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
           <button onClick={() => void loadNotificationChannels()} disabled={loadingNotificationChannels}>
@@ -964,55 +1273,59 @@ export function App() {
         </div>
 
         <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.channelsTitle")}</h3>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-          <input
-            value={newNotificationChannel.name}
-            onChange={(event) =>
-              setNewNotificationChannel((prev) => ({
-                ...prev,
-                name: event.target.value
-              }))
-            }
-            placeholder={t("cmdb.notifications.form.channelName")}
-          />
-          <select
-            value={newNotificationChannel.channel_type}
-            onChange={(event) =>
-              setNewNotificationChannel((prev) => ({
-                ...prev,
-                channel_type: event.target.value as "email" | "webhook"
-              }))
-            }
-          >
-            <option value="webhook">webhook</option>
-            <option value="email">email</option>
-          </select>
-          <input
-            value={newNotificationChannel.target}
-            onChange={(event) =>
-              setNewNotificationChannel((prev) => ({
-                ...prev,
-                target: event.target.value
-              }))
-            }
-            placeholder={t("cmdb.notifications.form.target")}
-            style={{ minWidth: "260px" }}
-          />
-          <input
-            value={newNotificationChannel.config_json}
-            onChange={(event) =>
-              setNewNotificationChannel((prev) => ({
-                ...prev,
-                config_json: event.target.value
-              }))
-            }
-            placeholder={t("cmdb.notifications.form.configJson")}
-            style={{ minWidth: "240px" }}
-          />
-          <button onClick={() => void createNotificationChannel()} disabled={creatingNotificationChannel}>
-            {creatingNotificationChannel ? t("cmdb.actions.creating") : t("cmdb.notifications.actions.createChannel")}
-          </button>
-        </div>
+        {canWriteCmdb ? (
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+            <input
+              value={newNotificationChannel.name}
+              onChange={(event) =>
+                setNewNotificationChannel((prev) => ({
+                  ...prev,
+                  name: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.notifications.form.channelName")}
+            />
+            <select
+              value={newNotificationChannel.channel_type}
+              onChange={(event) =>
+                setNewNotificationChannel((prev) => ({
+                  ...prev,
+                  channel_type: event.target.value as "email" | "webhook"
+                }))
+              }
+            >
+              <option value="webhook">webhook</option>
+              <option value="email">email</option>
+            </select>
+            <input
+              value={newNotificationChannel.target}
+              onChange={(event) =>
+                setNewNotificationChannel((prev) => ({
+                  ...prev,
+                  target: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.notifications.form.target")}
+              style={{ minWidth: "260px" }}
+            />
+            <input
+              value={newNotificationChannel.config_json}
+              onChange={(event) =>
+                setNewNotificationChannel((prev) => ({
+                  ...prev,
+                  config_json: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.notifications.form.configJson")}
+              style={{ minWidth: "240px" }}
+            />
+            <button onClick={() => void createNotificationChannel()} disabled={creatingNotificationChannel}>
+              {creatingNotificationChannel ? t("cmdb.actions.creating") : t("cmdb.notifications.actions.createChannel")}
+            </button>
+          </div>
+        ) : (
+          <p>{t("auth.labels.readOnly")}</p>
+        )}
         {notificationChannels.length === 0 ? (
           <p>{t("cmdb.notifications.messages.noChannels")}</p>
         ) : (
@@ -1045,43 +1358,47 @@ export function App() {
         )}
 
         <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.templatesTitle")}</h3>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-          <input
-            value={newNotificationTemplate.event_type}
-            onChange={(event) =>
-              setNewNotificationTemplate((prev) => ({
-                ...prev,
-                event_type: event.target.value
-              }))
-            }
-            placeholder={t("cmdb.notifications.form.eventType")}
-          />
-          <input
-            value={newNotificationTemplate.title_template}
-            onChange={(event) =>
-              setNewNotificationTemplate((prev) => ({
-                ...prev,
-                title_template: event.target.value
-              }))
-            }
-            placeholder={t("cmdb.notifications.form.titleTemplate")}
-            style={{ minWidth: "260px" }}
-          />
-          <input
-            value={newNotificationTemplate.body_template}
-            onChange={(event) =>
-              setNewNotificationTemplate((prev) => ({
-                ...prev,
-                body_template: event.target.value
-              }))
-            }
-            placeholder={t("cmdb.notifications.form.bodyTemplate")}
-            style={{ minWidth: "320px" }}
-          />
-          <button onClick={() => void createNotificationTemplate()} disabled={creatingNotificationTemplate}>
-            {creatingNotificationTemplate ? t("cmdb.actions.creating") : t("cmdb.notifications.actions.createTemplate")}
-          </button>
-        </div>
+        {canWriteCmdb ? (
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+            <input
+              value={newNotificationTemplate.event_type}
+              onChange={(event) =>
+                setNewNotificationTemplate((prev) => ({
+                  ...prev,
+                  event_type: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.notifications.form.eventType")}
+            />
+            <input
+              value={newNotificationTemplate.title_template}
+              onChange={(event) =>
+                setNewNotificationTemplate((prev) => ({
+                  ...prev,
+                  title_template: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.notifications.form.titleTemplate")}
+              style={{ minWidth: "260px" }}
+            />
+            <input
+              value={newNotificationTemplate.body_template}
+              onChange={(event) =>
+                setNewNotificationTemplate((prev) => ({
+                  ...prev,
+                  body_template: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.notifications.form.bodyTemplate")}
+              style={{ minWidth: "320px" }}
+            />
+            <button onClick={() => void createNotificationTemplate()} disabled={creatingNotificationTemplate}>
+              {creatingNotificationTemplate ? t("cmdb.actions.creating") : t("cmdb.notifications.actions.createTemplate")}
+            </button>
+          </div>
+        ) : (
+          <p>{t("auth.labels.readOnly")}</p>
+        )}
         {notificationTemplates.length === 0 ? (
           <p>{t("cmdb.notifications.messages.noTemplates")}</p>
         ) : (
@@ -1114,59 +1431,63 @@ export function App() {
         )}
 
         <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.subscriptionsTitle")}</h3>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-          <select
-            value={newNotificationSubscription.channel_id}
-            onChange={(event) =>
-              setNewNotificationSubscription((prev) => ({
-                ...prev,
-                channel_id: event.target.value
-              }))
-            }
-          >
-            <option value="">{t("cmdb.notifications.form.selectChannel")}</option>
-            {notificationChannels.map((channel) => (
-              <option key={channel.id} value={channel.id}>
-                #{channel.id} {channel.name} ({channel.channel_type})
-              </option>
-            ))}
-          </select>
-          <input
-            value={newNotificationSubscription.event_type}
-            onChange={(event) =>
-              setNewNotificationSubscription((prev) => ({
-                ...prev,
-                event_type: event.target.value
-              }))
-            }
-            placeholder={t("cmdb.notifications.form.eventType")}
-          />
-          <input
-            value={newNotificationSubscription.site}
-            onChange={(event) =>
-              setNewNotificationSubscription((prev) => ({
-                ...prev,
-                site: event.target.value
-              }))
-            }
-            placeholder={t("cmdb.notifications.form.siteOptional")}
-          />
-          <input
-            value={newNotificationSubscription.department}
-            onChange={(event) =>
-              setNewNotificationSubscription((prev) => ({
-                ...prev,
-                department: event.target.value
-              }))
-            }
-            placeholder={t("cmdb.notifications.form.departmentOptional")}
-          />
-          <button onClick={() => void createNotificationSubscription()} disabled={creatingNotificationSubscription}>
-            {creatingNotificationSubscription
-              ? t("cmdb.actions.creating")
-              : t("cmdb.notifications.actions.createSubscription")}
-          </button>
-        </div>
+        {canWriteCmdb ? (
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+            <select
+              value={newNotificationSubscription.channel_id}
+              onChange={(event) =>
+                setNewNotificationSubscription((prev) => ({
+                  ...prev,
+                  channel_id: event.target.value
+                }))
+              }
+            >
+              <option value="">{t("cmdb.notifications.form.selectChannel")}</option>
+              {notificationChannels.map((channel) => (
+                <option key={channel.id} value={channel.id}>
+                  #{channel.id} {channel.name} ({channel.channel_type})
+                </option>
+              ))}
+            </select>
+            <input
+              value={newNotificationSubscription.event_type}
+              onChange={(event) =>
+                setNewNotificationSubscription((prev) => ({
+                  ...prev,
+                  event_type: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.notifications.form.eventType")}
+            />
+            <input
+              value={newNotificationSubscription.site}
+              onChange={(event) =>
+                setNewNotificationSubscription((prev) => ({
+                  ...prev,
+                  site: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.notifications.form.siteOptional")}
+            />
+            <input
+              value={newNotificationSubscription.department}
+              onChange={(event) =>
+                setNewNotificationSubscription((prev) => ({
+                  ...prev,
+                  department: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.notifications.form.departmentOptional")}
+            />
+            <button onClick={() => void createNotificationSubscription()} disabled={creatingNotificationSubscription}>
+              {creatingNotificationSubscription
+                ? t("cmdb.actions.creating")
+                : t("cmdb.notifications.actions.createSubscription")}
+            </button>
+          </div>
+        ) : (
+          <p>{t("auth.labels.readOnly")}</p>
+        )}
         {notificationSubscriptions.length === 0 ? (
           <p>{t("cmdb.notifications.messages.noSubscriptions")}</p>
         ) : (
@@ -1208,65 +1529,69 @@ export function App() {
         )}
       </section>
 
-      <section style={{ marginBottom: "1.5rem" }}>
+      <section id="section-fields" style={{ marginBottom: "1.5rem" }}>
         <h2 style={sectionTitleStyle}>{t("cmdb.fields.title")}</h2>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-          <input
-            value={newField.field_key}
-            onChange={(event) => setNewField((prev) => ({ ...prev, field_key: event.target.value }))}
-            placeholder={t("cmdb.fields.form.fieldKey")}
-          />
-          <input
-            value={newField.name}
-            onChange={(event) => setNewField((prev) => ({ ...prev, name: event.target.value }))}
-            placeholder={t("cmdb.fields.form.name")}
-          />
-          <select
-            value={newField.field_type}
-            onChange={(event) => setNewField((prev) => ({ ...prev, field_type: event.target.value }))}
-          >
-            <option value="text">text</option>
-            <option value="integer">integer</option>
-            <option value="float">float</option>
-            <option value="boolean">boolean</option>
-            <option value="enum">enum</option>
-            <option value="date">date</option>
-            <option value="datetime">datetime</option>
-          </select>
-          <input
-            value={newField.max_length}
-            onChange={(event) => setNewField((prev) => ({ ...prev, max_length: event.target.value }))}
-            placeholder={t("cmdb.fields.form.maxLength")}
-            style={{ width: "140px" }}
-          />
-          {newField.field_type === "enum" && (
+        {canWriteCmdb ? (
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
             <input
-              value={newField.options_csv}
-              onChange={(event) => setNewField((prev) => ({ ...prev, options_csv: event.target.value }))}
-              placeholder={t("cmdb.fields.form.enumOptions")}
-              style={{ minWidth: "250px" }}
+              value={newField.field_key}
+              onChange={(event) => setNewField((prev) => ({ ...prev, field_key: event.target.value }))}
+              placeholder={t("cmdb.fields.form.fieldKey")}
             />
-          )}
-          <label>
             <input
-              type="checkbox"
-              checked={newField.required}
-              onChange={(event) => setNewField((prev) => ({ ...prev, required: event.target.checked }))}
-            />{" "}
-            {t("cmdb.fields.form.required")}
-          </label>
-          <label>
+              value={newField.name}
+              onChange={(event) => setNewField((prev) => ({ ...prev, name: event.target.value }))}
+              placeholder={t("cmdb.fields.form.name")}
+            />
+            <select
+              value={newField.field_type}
+              onChange={(event) => setNewField((prev) => ({ ...prev, field_type: event.target.value }))}
+            >
+              <option value="text">text</option>
+              <option value="integer">integer</option>
+              <option value="float">float</option>
+              <option value="boolean">boolean</option>
+              <option value="enum">enum</option>
+              <option value="date">date</option>
+              <option value="datetime">datetime</option>
+            </select>
             <input
-              type="checkbox"
-              checked={newField.scanner_enabled}
-              onChange={(event) => setNewField((prev) => ({ ...prev, scanner_enabled: event.target.checked }))}
-            />{" "}
-            {t("cmdb.fields.form.scannerEnabled")}
-          </label>
-          <button onClick={() => void createFieldDefinition()} disabled={creatingField}>
-            {creatingField ? t("cmdb.actions.creating") : t("cmdb.fields.form.create")}
-          </button>
-        </div>
+              value={newField.max_length}
+              onChange={(event) => setNewField((prev) => ({ ...prev, max_length: event.target.value }))}
+              placeholder={t("cmdb.fields.form.maxLength")}
+              style={{ width: "140px" }}
+            />
+            {newField.field_type === "enum" && (
+              <input
+                value={newField.options_csv}
+                onChange={(event) => setNewField((prev) => ({ ...prev, options_csv: event.target.value }))}
+                placeholder={t("cmdb.fields.form.enumOptions")}
+                style={{ minWidth: "250px" }}
+              />
+            )}
+            <label>
+              <input
+                type="checkbox"
+                checked={newField.required}
+                onChange={(event) => setNewField((prev) => ({ ...prev, required: event.target.checked }))}
+              />{" "}
+              {t("cmdb.fields.form.required")}
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={newField.scanner_enabled}
+                onChange={(event) => setNewField((prev) => ({ ...prev, scanner_enabled: event.target.checked }))}
+              />{" "}
+              {t("cmdb.fields.form.scannerEnabled")}
+            </label>
+            <button onClick={() => void createFieldDefinition()} disabled={creatingField}>
+              {creatingField ? t("cmdb.actions.creating") : t("cmdb.fields.form.create")}
+            </button>
+          </div>
+        ) : (
+          <p>{t("auth.labels.readOnly")}</p>
+        )}
 
         {fieldDefinitions.length === 0 ? (
           <p>{t("cmdb.fields.empty")}</p>
@@ -1304,7 +1629,7 @@ export function App() {
         )}
       </section>
 
-      <section style={{ marginBottom: "1.5rem" }}>
+      <section id="section-relations" style={{ marginBottom: "1.5rem" }}>
         <h2 style={sectionTitleStyle}>{t("cmdb.relations.title")}</h2>
         {emptyState ? (
           <p>{t("cmdb.relations.messages.noAssets")}</p>
@@ -1339,39 +1664,45 @@ export function App() {
               })}
             </p>
 
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem", alignItems: "center" }}>
-              <span>{t("cmdb.relations.form.targetAsset")}</span>
-              <select
-                value={newRelation.dst_asset_id}
-                onChange={(event) => setNewRelation((prev) => ({ ...prev, dst_asset_id: event.target.value }))}
+            {canWriteCmdb ? (
+              <div
+                style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem", alignItems: "center" }}
               >
-                <option value="">{t("cmdb.relations.form.selectTarget")}</option>
-                {assets.map((asset) => (
-                  <option key={asset.id} value={asset.id}>
-                    #{asset.id} {asset.name}
-                  </option>
-                ))}
-              </select>
+                <span>{t("cmdb.relations.form.targetAsset")}</span>
+                <select
+                  value={newRelation.dst_asset_id}
+                  onChange={(event) => setNewRelation((prev) => ({ ...prev, dst_asset_id: event.target.value }))}
+                >
+                  <option value="">{t("cmdb.relations.form.selectTarget")}</option>
+                  {assets.map((asset) => (
+                    <option key={asset.id} value={asset.id}>
+                      #{asset.id} {asset.name}
+                    </option>
+                  ))}
+                </select>
 
-              <input
-                value={newRelation.relation_type}
-                onChange={(event) => setNewRelation((prev) => ({ ...prev, relation_type: event.target.value }))}
-                placeholder={t("cmdb.relations.form.relationType")}
-              />
+                <input
+                  value={newRelation.relation_type}
+                  onChange={(event) => setNewRelation((prev) => ({ ...prev, relation_type: event.target.value }))}
+                  placeholder={t("cmdb.relations.form.relationType")}
+                />
 
-              <select
-                value={newRelation.source}
-                onChange={(event) => setNewRelation((prev) => ({ ...prev, source: event.target.value }))}
-              >
-                <option value="manual">manual</option>
-                <option value="discovery">discovery</option>
-                <option value="import">import</option>
-              </select>
+                <select
+                  value={newRelation.source}
+                  onChange={(event) => setNewRelation((prev) => ({ ...prev, source: event.target.value }))}
+                >
+                  <option value="manual">manual</option>
+                  <option value="discovery">discovery</option>
+                  <option value="import">import</option>
+                </select>
 
-              <button onClick={() => void createRelation()} disabled={creatingRelation}>
-                {creatingRelation ? t("cmdb.actions.creating") : t("cmdb.relations.actions.create")}
-              </button>
-            </div>
+                <button onClick={() => void createRelation()} disabled={creatingRelation}>
+                  {creatingRelation ? t("cmdb.actions.creating") : t("cmdb.relations.actions.create")}
+                </button>
+              </div>
+            ) : (
+              <p>{t("auth.labels.readOnly")}</p>
+            )}
 
             {relations.length === 0 ? (
               <p>{t("cmdb.relations.messages.empty")}</p>
@@ -1403,14 +1734,18 @@ export function App() {
                         <td style={cellStyle}>{relation.source}</td>
                         <td style={cellStyle}>{new Date(relation.updated_at).toLocaleString()}</td>
                         <td style={cellStyle}>
-                          <button
-                            onClick={() => void deleteRelation(relation.id)}
-                            disabled={deletingRelationId === relation.id}
-                          >
-                            {deletingRelationId === relation.id
-                              ? t("cmdb.actions.loading")
-                              : t("cmdb.relations.actions.delete")}
-                          </button>
+                          {canWriteCmdb ? (
+                            <button
+                              onClick={() => void deleteRelation(relation.id)}
+                              disabled={deletingRelationId === relation.id}
+                            >
+                              {deletingRelationId === relation.id
+                                ? t("cmdb.actions.loading")
+                                : t("cmdb.relations.actions.delete")}
+                            </button>
+                          ) : (
+                            <span>{t("auth.labels.readOnly")}</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -1422,7 +1757,7 @@ export function App() {
         )}
       </section>
 
-      <section>
+      <section id="section-assets">
         <h2 style={sectionTitleStyle}>{t("cmdb.assets.title")}</h2>
         {emptyState ? (
           <p>{t("cmdb.messages.empty")}</p>
@@ -1473,31 +1808,53 @@ export function App() {
   );
 }
 
-function readErrorMessage(response: Response): Promise<string> {
-  return response
-    .json()
-    .then((payload: unknown) => {
-      if (payload && typeof payload === "object" && "error" in payload) {
-        const value = (payload as { error?: unknown }).error;
-        if (typeof value === "string" && value.length > 0) {
-          return value;
-        }
-      }
-      return `HTTP ${response.status}`;
-    })
-    .catch(() => `HTTP ${response.status}`);
-}
-
-function apiFetch(input: string, init?: RequestInit): Promise<Response> {
-  const headers = new Headers(init?.headers ?? undefined);
-  if (API_AUTH_USER.length > 0) {
-    headers.set("x-auth-user", API_AUTH_USER);
+async function readErrorMessage(response: Response): Promise<string> {
+  const message = await extractApiErrorMessage(response.clone());
+  if (response.status === 403) {
+    if (message && isSessionExpiredError(message)) {
+      return "Session is invalid or expired. Please sign in again.";
+    }
+    if (message) {
+      return `Unauthorized: ${message}`;
+    }
+    return "Unauthorized: your current role cannot perform this action.";
   }
 
-  return fetch(input, {
+  return message ?? `HTTP ${response.status}`;
+}
+
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers ?? undefined);
+  if (runtimeAuthSession?.mode === "header") {
+    const principal = runtimeAuthSession.principal.trim();
+    if (principal.length > 0) {
+      headers.set("x-auth-user", principal);
+    }
+  }
+  if (runtimeAuthSession?.mode === "bearer") {
+    const token = runtimeAuthSession.token?.trim() ?? "";
+    if (token.length > 0) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
+  const response = await fetch(input, {
     ...init,
     headers
   });
+
+  if (response.status === 403 && runtimeAuthSession?.mode === "bearer") {
+    const message = await extractApiErrorMessage(response.clone());
+    if (message && isSessionExpiredError(message)) {
+      runtimeAuthSession = null;
+      persistAuthSession(null);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT));
+      }
+    }
+  }
+
+  return response;
 }
 
 function trimToNull(value: string): string | null {
@@ -1552,6 +1909,106 @@ function renderCustomFields(value: Record<string, unknown>): string {
     return preview;
   }
   return `${preview} ...`;
+}
+
+function deriveDefaultAuthSession(): AuthSession | null {
+  if (API_AUTH_TOKEN.length > 0) {
+    return {
+      mode: "bearer",
+      principal: "oidc-session",
+      token: API_AUTH_TOKEN
+    };
+  }
+
+  if (API_AUTH_USER.length > 0) {
+    return {
+      mode: "header",
+      principal: API_AUTH_USER,
+      token: null
+    };
+  }
+
+  return null;
+}
+
+function loadStoredAuthSession(): AuthSession | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const raw = window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    const mode = (parsed as { mode?: unknown }).mode;
+    const principal = (parsed as { principal?: unknown }).principal;
+    const token = (parsed as { token?: unknown }).token;
+
+    if (mode === "header" && typeof principal === "string" && principal.trim().length > 0) {
+      return {
+        mode: "header",
+        principal: principal.trim(),
+        token: null
+      };
+    }
+
+    if (mode === "bearer" && typeof token === "string" && token.trim().length > 0) {
+      return {
+        mode: "bearer",
+        principal: typeof principal === "string" ? principal : "oidc-session",
+        token: token.trim()
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function persistAuthSession(session: AuthSession | null): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (!session) {
+    window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+    return;
+  }
+
+  window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(session));
+}
+
+function isSessionExpiredError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("invalid or expired")
+    || normalized.includes("bearer token cannot be empty")
+    || normalized.includes("authorization header is invalid")
+  );
+}
+
+async function extractApiErrorMessage(response: Response): Promise<string | null> {
+  try {
+    const payload = (await response.json()) as unknown;
+    if (payload && typeof payload === "object" && "error" in payload) {
+      const value = (payload as { error?: unknown }).error;
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 const sectionTitleStyle: CSSProperties = {

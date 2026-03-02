@@ -3,6 +3,48 @@
     "title": "CloudOps One",
     "subtitle": "Integrated CMDB, monitoring, and workflow platform."
   },
+  "auth": {
+    "title": "Sign in",
+    "subtitle": "Use local header mode for development or bearer token mode for OIDC sessions.",
+    "modeLabel": "Authentication Mode",
+    "modes": {
+      "header": "Header (x-auth-user)",
+      "bearer": "Bearer Token"
+    },
+    "usernameLabel": "Username",
+    "usernamePlaceholder": "admin",
+    "tokenLabel": "Bearer Token",
+    "tokenPlaceholder": "Paste access token from OIDC callback",
+    "signIn": "Sign In",
+    "signingIn": "Signing In...",
+    "signOut": "Sign Out",
+    "status": "Signed in as {{username}} (roles: {{roles}})",
+    "statusMode": "Mode: {{mode}}",
+    "navigation": {
+      "scan": "Scan",
+      "discovery": "Discovery",
+      "notifications": "Notifications",
+      "fields": "Fields",
+      "relations": "Relations",
+      "assets": "Assets",
+      "admin": "System Admin"
+    },
+    "adminPanel": {
+      "title": "System Admin Surface",
+      "description": "You have administrator access for IAM and Audit APIs."
+    },
+    "labels": {
+      "readOnly": "Read-only"
+    },
+    "messages": {
+      "usernameRequired": "Username is required for header mode.",
+      "tokenRequired": "Bearer token is required.",
+      "sessionExpired": "Session expired. Please sign in again.",
+      "signedOut": "Signed out.",
+      "forbiddenAction": "Your current role does not allow this action.",
+      "readOnly": "Read-only mode: write actions are hidden for your current role."
+    }
+  },
   "cmdb": {
     "actions": {
       "refreshAssets": "Refresh Assets",
