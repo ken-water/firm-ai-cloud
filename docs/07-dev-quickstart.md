@@ -296,9 +296,17 @@ This command:
 bash scripts/dev-down.sh
 ```
 
-## 7. Troubleshooting
+## 7. Security Checks
 
-### 7.1 Discovery job run fails
+RBAC matrix integration check (requires API running):
+
+```bash
+bash scripts/test-rbac-policy.sh
+```
+
+## 8. Troubleshooting
+
+### 8.1 Discovery job run fails
 
 - Check `source_type` and `scope` format first.
 - For `zabbix_hosts`, confirm:
@@ -308,21 +316,21 @@ bash scripts/dev-down.sh
 - Query recent events:
   - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/events?limit=20"`
 
-### 7.2 Candidate approve fails
+### 8.2 Candidate approve fails
 
 - Common reason: candidate already reviewed (not `pending`).
 - Verify candidate state:
   - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates?limit=50"`
 - If merge/create conflicts happen, retry after checking duplicated assets (`hostname + ip`).
 
-### 7.3 Notification not delivered
+### 8.3 Notification not delivered
 
 - Verify channel/template/subscription all enabled.
 - Check delivery logs:
   - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-deliveries?limit=50"`
 - For webhook channels, inspect `status`, `attempts`, `response_code`, and `last_error`.
 
-## 8. Integration Smoke Test
+## 9. Integration Smoke Test
 
 Run end-to-end CMDB loop smoke test (relations + discovery + candidate review + notification dispatch):
 

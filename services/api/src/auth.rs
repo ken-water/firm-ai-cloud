@@ -163,30 +163,46 @@ fn read_auth_user(headers: &HeaderMap) -> AppResult<&str> {
 fn required_permission(method: &Method, path: &str) -> Option<String> {
     let normalized = normalize_rbac_path(path);
 
-    if normalized.starts_with("/audit/logs")
-        || normalized.starts_with("/logs")
-        || normalized.starts_with("/iam/users")
-        || normalized.starts_with("/iam/roles")
-        || normalized.starts_with("/users")
-        || normalized.starts_with("/roles")
+    if matches_scope(&normalized, "/audit/logs")
+        || matches_scope(&normalized, "/logs")
+        || matches_scope(&normalized, "/iam/users")
+        || matches_scope(&normalized, "/iam/roles")
+        || matches_scope(&normalized, "/users")
+        || matches_scope(&normalized, "/roles")
     {
         return Some("system.admin".to_string());
     }
 
-    let base = if normalized.starts_with("/cmdb/discovery/notification-")
-        || normalized.starts_with("/discovery/notification-")
+    let base = if matches_scope(&normalized, "/cmdb/discovery/notification-channels")
+        || matches_scope(&normalized, "/cmdb/discovery/notification-templates")
+        || matches_scope(&normalized, "/cmdb/discovery/notification-subscriptions")
+        || matches_scope(&normalized, "/discovery/notification-channels")
+        || matches_scope(&normalized, "/discovery/notification-templates")
+        || matches_scope(&normalized, "/discovery/notification-subscriptions")
     {
         "cmdb.notifications"
-    } else if normalized.starts_with("/cmdb/discovery") || normalized.starts_with("/discovery") {
+    } else if matches_scope(&normalized, "/cmdb/discovery")
+        || matches_scope(&normalized, "/discovery")
+    {
         "cmdb.discovery"
-    } else if normalized.starts_with("/cmdb/field-definitions")
-        || normalized.starts_with("/field-definitions")
+    } else if matches_scope(&normalized, "/cmdb/field-definitions")
+        || matches_scope(&normalized, "/field-definitions")
     {
         "cmdb.field_definitions"
-    } else if normalized.starts_with("/cmdb/relations") || normalized.starts_with("/relations") {
+    } else if matches_scope(&normalized, "/cmdb/relations")
+        || matches_scope(&normalized, "/relations")
+    {
         "cmdb.relations"
-    } else if normalized.starts_with("/cmdb/assets") || normalized.starts_with("/assets") {
+    } else if matches_scope(&normalized, "/cmdb/assets") || matches_scope(&normalized, "/assets") {
         "cmdb.assets"
+    } else if matches_scope(&normalized, "/workflow/requests")
+        || matches_scope(&normalized, "/workflows/requests")
+    {
+        "workflow.requests"
+    } else if matches_scope(&normalized, "/workflow/approvals")
+        || matches_scope(&normalized, "/workflows/approvals")
+    {
+        "workflow.approvals"
     } else {
         return None;
     };
@@ -210,6 +226,16 @@ fn normalize_rbac_path(path: &str) -> String {
     } else {
         path.to_string()
     }
+}
+
+fn matches_scope(path: &str, scope: &str) -> bool {
+    if path == scope {
+        return true;
+    }
+
+    path.strip_prefix(scope)
+        .map(|rest| rest.starts_with('/'))
+        .unwrap_or(false)
 }
 
 fn is_read_method(method: &Method) -> bool {
@@ -254,80 +280,220 @@ mod tests {
 
     use super::required_permission;
 
+    fn assert_permission(method: Method, path: &str, expected: &str) {
+        assert_eq!(
+            required_permission(&method, path).as_deref(),
+            Some(expected)
+        );
+    }
+
     #[test]
     fn maps_assets_read_permission() {
-        assert_eq!(
-            required_permission(&Method::GET, "/api/v1/cmdb/assets").as_deref(),
-            Some("cmdb.assets.read")
-        );
+        assert_permission(Method::GET, "/api/v1/cmdb/assets", "cmdb.assets.read");
     }
 
     #[test]
     fn maps_assets_write_permission() {
-        assert_eq!(
-            required_permission(&Method::POST, "/api/v1/cmdb/assets").as_deref(),
-            Some("cmdb.assets.write")
-        );
+        assert_permission(Method::POST, "/api/v1/cmdb/assets", "cmdb.assets.write");
     }
 
     #[test]
     fn maps_notification_permissions() {
-        assert_eq!(
-            required_permission(
-                &Method::GET,
-                "/api/v1/cmdb/discovery/notification-subscriptions"
-            )
-            .as_deref(),
-            Some("cmdb.notifications.read")
+        assert_permission(
+            Method::GET,
+            "/api/v1/cmdb/discovery/notification-subscriptions",
+            "cmdb.notifications.read",
         );
     }
 
     #[test]
     fn maps_discovery_write_permission() {
-        assert_eq!(
-            required_permission(&Method::POST, "/api/v1/cmdb/discovery/jobs/1/run").as_deref(),
-            Some("cmdb.discovery.write")
+        assert_permission(
+            Method::POST,
+            "/api/v1/cmdb/discovery/jobs/1/run",
+            "cmdb.discovery.write",
         );
     }
 
     #[test]
     fn maps_iam_permission() {
-        assert_eq!(
-            required_permission(&Method::GET, "/api/v1/iam/users").as_deref(),
-            Some("system.admin")
-        );
+        assert_permission(Method::GET, "/api/v1/iam/users", "system.admin");
     }
 
     #[test]
     fn maps_relative_assets_permission() {
-        assert_eq!(
-            required_permission(&Method::GET, "/assets").as_deref(),
-            Some("cmdb.assets.read")
-        );
+        assert_permission(Method::GET, "/assets", "cmdb.assets.read");
     }
 
     #[test]
     fn maps_relative_iam_permission() {
-        assert_eq!(
-            required_permission(&Method::GET, "/users").as_deref(),
-            Some("system.admin")
-        );
+        assert_permission(Method::GET, "/users", "system.admin");
     }
 
     #[test]
     fn maps_audit_permission() {
-        assert_eq!(
-            required_permission(&Method::GET, "/api/v1/audit/logs").as_deref(),
-            Some("system.admin")
-        );
+        assert_permission(Method::GET, "/api/v1/audit/logs", "system.admin");
     }
 
     #[test]
     fn maps_relative_audit_permission() {
-        assert_eq!(
-            required_permission(&Method::GET, "/logs").as_deref(),
-            Some("system.admin")
+        assert_permission(Method::GET, "/logs", "system.admin");
+    }
+
+    #[test]
+    fn workflow_permission_mapping_ready_for_future_routes() {
+        assert_permission(
+            Method::GET,
+            "/api/v1/workflow/requests",
+            "workflow.requests.read",
         );
+        assert_permission(
+            Method::POST,
+            "/api/v1/workflow/requests",
+            "workflow.requests.write",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/workflow/approvals",
+            "workflow.approvals.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/workflow/approvals",
+            "workflow.approvals.write",
+        );
+    }
+
+    #[test]
+    fn permission_matrix_covers_existing_protected_endpoints() {
+        let coverage = vec![
+            (Method::GET, "/api/v1/cmdb/assets", "cmdb.assets.read"),
+            (
+                Method::GET,
+                "/api/v1/cmdb/assets/by-code/QR-1",
+                "cmdb.assets.read",
+            ),
+            (Method::POST, "/api/v1/cmdb/assets", "cmdb.assets.write"),
+            (
+                Method::GET,
+                "/api/v1/cmdb/assets/1/graph",
+                "cmdb.assets.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/cmdb/field-definitions",
+                "cmdb.field_definitions.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/cmdb/field-definitions",
+                "cmdb.field_definitions.write",
+            ),
+            (
+                Method::PATCH,
+                "/api/v1/cmdb/field-definitions/1",
+                "cmdb.field_definitions.write",
+            ),
+            (Method::GET, "/api/v1/cmdb/relations", "cmdb.relations.read"),
+            (
+                Method::POST,
+                "/api/v1/cmdb/relations",
+                "cmdb.relations.write",
+            ),
+            (
+                Method::DELETE,
+                "/api/v1/cmdb/relations/1",
+                "cmdb.relations.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/cmdb/discovery/jobs",
+                "cmdb.discovery.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/cmdb/discovery/jobs",
+                "cmdb.discovery.write",
+            ),
+            (
+                Method::POST,
+                "/api/v1/cmdb/discovery/jobs/1/run",
+                "cmdb.discovery.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/cmdb/discovery/candidates",
+                "cmdb.discovery.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/cmdb/discovery/candidates/1/approve",
+                "cmdb.discovery.write",
+            ),
+            (
+                Method::POST,
+                "/api/v1/cmdb/discovery/candidates/1/reject",
+                "cmdb.discovery.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/cmdb/discovery/events",
+                "cmdb.discovery.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/cmdb/discovery/notification-deliveries",
+                "cmdb.discovery.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/cmdb/discovery/notification-channels",
+                "cmdb.notifications.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/cmdb/discovery/notification-channels",
+                "cmdb.notifications.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/cmdb/discovery/notification-templates",
+                "cmdb.notifications.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/cmdb/discovery/notification-templates",
+                "cmdb.notifications.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/cmdb/discovery/notification-subscriptions",
+                "cmdb.notifications.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/cmdb/discovery/notification-subscriptions",
+                "cmdb.notifications.write",
+            ),
+            (Method::GET, "/api/v1/iam/users", "system.admin"),
+            (Method::POST, "/api/v1/iam/users", "system.admin"),
+            (Method::PATCH, "/api/v1/iam/users/1", "system.admin"),
+            (Method::GET, "/api/v1/iam/roles", "system.admin"),
+            (Method::POST, "/api/v1/iam/roles", "system.admin"),
+            (Method::PATCH, "/api/v1/iam/roles/1", "system.admin"),
+            (Method::GET, "/api/v1/audit/logs", "system.admin"),
+        ];
+
+        for (method, path, permission) in coverage {
+            assert_permission(method, path, permission);
+        }
+    }
+
+    #[test]
+    fn denies_lookalike_prefix_paths_by_default() {
+        assert!(required_permission(&Method::GET, "/api/v1/cmdb/assetsx").is_none());
+        assert!(required_permission(&Method::GET, "/api/v1/iam/usersx").is_none());
+        assert!(required_permission(&Method::GET, "/api/v1/audit/logsx").is_none());
     }
 
     #[test]
