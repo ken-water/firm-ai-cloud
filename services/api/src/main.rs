@@ -1,5 +1,6 @@
 mod audit;
 mod auth;
+mod auth_api;
 mod cmdb;
 mod error;
 mod iam;
@@ -13,7 +14,7 @@ use common::config::AppConfig;
 use common::models::{HealthResponse, PingResponse};
 use error::AppResult;
 use sqlx::postgres::PgPoolOptions;
-use state::AppState;
+use state::{AppState, OidcSettings};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -38,6 +39,19 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         db: db_pool,
         rbac_enabled: config.rbac_enabled,
+        oidc: OidcSettings {
+            enabled: config.oidc_enabled,
+            authorization_endpoint: config.oidc_authorization_endpoint,
+            token_endpoint: config.oidc_token_endpoint,
+            userinfo_endpoint: config.oidc_userinfo_endpoint,
+            client_id: config.oidc_client_id,
+            client_secret: config.oidc_client_secret,
+            redirect_uri: config.oidc_redirect_uri,
+            scope: config.oidc_scope,
+            auto_provision: config.oidc_auto_provision,
+            session_ttl_minutes: config.oidc_session_ttl_minutes,
+            dev_mode_enabled: config.oidc_dev_mode_enabled,
+        },
     };
     let app = build_router(state);
 
@@ -104,6 +118,7 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/v1/ping", get(ping_handler))
+        .nest("/api/v1/auth", auth_api::routes())
         .nest("/api/v1/cmdb", cmdb_routes)
         .nest("/api/v1/iam", iam_routes)
         .nest("/api/v1/audit", audit_routes)

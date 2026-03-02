@@ -27,13 +27,33 @@ cargo run -p api
 
 RBAC is enabled by default (`AUTH_RBAC_ENABLED=true`).
 For local development, a bootstrap admin user `admin` is created automatically by migration.
-When calling protected APIs directly, include:
+Protected APIs support two auth modes:
+
+- Legacy dev header mode (for local bootstrap and scripts)
+- OIDC session bearer token mode (recommended baseline for SSO flow)
+
+For legacy header mode:
 
 ```bash
 AUTH_HEADER='x-auth-user: admin'
 ```
 
-All `/api/v1/cmdb/*` and `/api/v1/iam/*` endpoints below require this header.
+For bearer mode (after OIDC callback):
+
+```bash
+BEARER_HEADER='Authorization: Bearer <access_token>'
+```
+
+All `/api/v1/cmdb/*`, `/api/v1/iam/*`, and `/api/v1/audit/*` routes require an authenticated principal.
+
+Minimal OIDC env settings for local dev mode:
+
+```bash
+export AUTH_OIDC_ENABLED=true
+export AUTH_OIDC_DEV_MODE_ENABLED=true
+export AUTH_OIDC_REDIRECT_URI='http://127.0.0.1:8080/api/v1/auth/oidc/callback'
+export AUTH_OIDC_AUTO_PROVISION=false
+```
 
 Health check:
 
@@ -140,6 +160,7 @@ CMDB relation APIs:
 ```bash
 # create a relation: source asset depends on target asset
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/relations \
+  -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{
     "src_asset_id": 1,
@@ -149,13 +170,14 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/relations \
   }'
 
 # list all relations that involve asset 1
-curl "http://127.0.0.1:8080/api/v1/cmdb/relations?asset_id=1"
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/relations?asset_id=1"
 
 # get one-hop relation graph for asset 1
-curl "http://127.0.0.1:8080/api/v1/cmdb/assets/1/graph"
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/assets/1/graph"
 
 # delete relation
-curl -X DELETE http://127.0.0.1:8080/api/v1/cmdb/relations/1
+curl -X DELETE http://127.0.0.1:8080/api/v1/cmdb/relations/1 \
+  -H "$AUTH_HEADER"
 ```
 
 CMDB discovery APIs:
@@ -163,6 +185,7 @@ CMDB discovery APIs:
 ```bash
 # create a zabbix host discovery job (MVP supports mock_hosts in scope for local testing)
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs \
+  -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "zabbix-host-discovery",
@@ -176,29 +199,33 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs \
   }'
 
 # trigger a discovery run
-curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs/1/run
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs/1/run \
+  -H "$AUTH_HEADER"
 
 # list pending discovery candidates
-curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates?review_status=pending"
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates?review_status=pending"
 
 # approve a candidate (create or merge asset automatically)
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates/1/approve \
+  -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{ "reviewed_by": "ops-admin" }'
 
 # reject a candidate
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates/2/reject \
+  -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{ "reviewed_by": "ops-admin" }'
 
 # query discovery events by asset and time range (RFC3339)
-curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/events?asset_id=1&time_from=2026-03-02T00:00:00Z&time_to=2026-03-02T23:59:59Z"
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/discovery/events?asset_id=1&time_from=2026-03-02T00:00:00Z&time_to=2026-03-02T23:59:59Z"
 ```
 
 Container CMDB discovery (k8s seed example):
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs \
+  -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "k8s-container-discovery",
@@ -224,6 +251,7 @@ CMDB discovery notification APIs:
 ```bash
 # create a notification channel
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-channels \
+  -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "platform-webhook",
@@ -238,6 +266,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-channels \
 
 # create a template
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-templates \
+  -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{
     "event_type": "asset.offboarded_suspected",
@@ -247,6 +276,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-templates 
 
 # subscribe event to channel
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-subscriptions \
+  -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{
     "channel_id": 1,
@@ -256,7 +286,24 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-subscripti
   }'
 
 # list delivery logs
-curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-deliveries?status=delivered"
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-deliveries?status=delivered"
+```
+
+OIDC auth APIs:
+
+```bash
+# start OIDC login and get authorization URL + state token
+curl "http://127.0.0.1:8080/api/v1/auth/oidc/start?return_to=%2Fconsole"
+
+# complete callback in dev mode format:
+# code=dev::<sub>::<email>::<name>&state=<state-from-start>
+curl "http://127.0.0.1:8080/api/v1/auth/oidc/callback?code=dev::oidc-sub-1::oidc.user@example.local::OIDC%20User&state=<state>"
+
+# query current identity with bearer token
+curl -H "$BEARER_HEADER" http://127.0.0.1:8080/api/v1/auth/me
+
+# revoke current bearer session
+curl -X POST -H "$BEARER_HEADER" http://127.0.0.1:8080/api/v1/auth/logout
 ```
 
 ## 4. Run Frontend
@@ -302,6 +349,12 @@ RBAC matrix integration check (requires API running):
 
 ```bash
 bash scripts/test-rbac-policy.sh
+```
+
+OIDC dev-flow smoke check (requires API running with `AUTH_OIDC_ENABLED=true` and `AUTH_OIDC_DEV_MODE_ENABLED=true`):
+
+```bash
+bash scripts/test-oidc-dev.sh
 ```
 
 ## 8. Troubleshooting

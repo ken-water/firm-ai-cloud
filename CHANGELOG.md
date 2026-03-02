@@ -8,15 +8,25 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- None
+- OIDC baseline authentication APIs:
+  - `GET /api/v1/auth/oidc/start`
+  - `GET /api/v1/auth/oidc/callback`
+  - `GET /api/v1/auth/me`
+  - `POST /api/v1/auth/logout`
+- OIDC identity/session schema:
+  - `iam_external_identities`
+  - `auth_oidc_login_states`
+  - `auth_sessions`
+- Developer OIDC smoke test script: `scripts/test-oidc-dev.sh`.
 
 ### Changed
 
-- None
+- RBAC principal resolution now supports either `x-auth-user` header or `Authorization: Bearer <session_token>`.
+- Developer quickstart now documents OIDC env settings, bearer-token flow, and OIDC smoke validation.
 
 ### Fixed
 
-- None
+- Normalized protected API examples in quickstart to consistently include auth headers.
 
 ## [0.0.2] - 2026-03-02
 

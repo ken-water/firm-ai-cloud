@@ -66,7 +66,7 @@ assert_code 200 "" GET "${API_BASE_URL}/health"
 
 log "Protected endpoints should deny missing auth header"
 assert_code 403 "" GET "${API_BASE_URL}/api/v1/cmdb/assets"
-grep -q '"x-auth-user header is required"' "$LAST_BODY_FILE" || {
+grep -q "header or bearer token is required" "$LAST_BODY_FILE" || {
   echo "ERROR: missing-header response is not consistent English message" >&2
   cat "$LAST_BODY_FILE" >&2 || true
   exit 1

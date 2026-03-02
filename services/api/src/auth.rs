@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::State,
-    http::{HeaderMap, Method, Request},
+    http::{HeaderMap, Method, Request, header::AUTHORIZATION},
     middleware::Next,
     response::Response,
 };
@@ -23,6 +23,11 @@ struct PermissionCheckRecord {
     allowed: bool,
 }
 
+#[derive(Debug, FromRow)]
+struct SessionUserRecord {
+    username: String,
+}
+
 pub async fn rbac_guard(
     State(state): State<AppState>,
     request: Request<Body>,
@@ -35,14 +40,14 @@ pub async fn rbac_guard(
     let method = request.method().clone();
     let path = request.uri().path().to_string();
 
-    let user = read_auth_user(request.headers())?;
+    let user = resolve_auth_user(&state, request.headers()).await?;
     let permission = match required_permission(&method, &path) {
         Some(value) => value,
         None => {
             write_audit_log_best_effort(
                 &state.db,
                 AuditLogWriteInput {
-                    actor: user.to_string(),
+                    actor: user.clone(),
                     action: "auth.permission_denied".to_string(),
                     target_type: "route".to_string(),
                     target_id: Some(path.clone()),
@@ -64,16 +69,16 @@ pub async fn rbac_guard(
         }
     };
 
-    let permission_check = check_permission(&state, user, &permission).await?;
+    let permission_check = check_permission(&state, &user, &permission).await?;
 
     if !permission_check.user_exists {
         write_audit_log_best_effort(
             &state.db,
             AuditLogWriteInput {
-                actor: user.to_string(),
+                actor: user.clone(),
                 action: "auth.login".to_string(),
                 target_type: "user".to_string(),
-                target_id: Some(user.to_string()),
+                target_id: Some(user.clone()),
                 result: "failed".to_string(),
                 message: Some("user does not exist or is disabled".to_string()),
                 metadata: json!({
@@ -93,7 +98,7 @@ pub async fn rbac_guard(
         write_audit_log_best_effort(
             &state.db,
             AuditLogWriteInput {
-                actor: user.to_string(),
+                actor: user.clone(),
                 action: "auth.permission_denied".to_string(),
                 target_type: "route".to_string(),
                 target_id: Some(path.clone()),
@@ -124,7 +129,7 @@ pub async fn rbac_guard(
     write_audit_log_best_effort(
         &state.db,
         AuditLogWriteInput {
-            actor: user.to_string(),
+            actor: user.clone(),
             action: "auth.login".to_string(),
             target_type: "route".to_string(),
             target_id: Some(path.clone()),
@@ -141,10 +146,24 @@ pub async fn rbac_guard(
     Ok(next.run(request).await)
 }
 
-fn read_auth_user(headers: &HeaderMap) -> AppResult<&str> {
-    let raw = headers
-        .get(AUTH_USER_HEADER)
-        .ok_or_else(|| AppError::Forbidden(format!("{AUTH_USER_HEADER} header is required")))?;
+pub async fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> AppResult<String> {
+    if let Some(user) = read_auth_user_header(headers)? {
+        return Ok(user);
+    }
+
+    if let Some(token) = read_bearer_token(headers)? {
+        return resolve_user_from_bearer_token(state, &token).await;
+    }
+
+    Err(AppError::Forbidden(format!(
+        "{AUTH_USER_HEADER} header or bearer token is required"
+    )))
+}
+
+fn read_auth_user_header(headers: &HeaderMap) -> AppResult<Option<String>> {
+    let Some(raw) = headers.get(AUTH_USER_HEADER) else {
+        return Ok(None);
+    };
 
     let value = raw
         .to_str()
@@ -157,7 +176,59 @@ fn read_auth_user(headers: &HeaderMap) -> AppResult<&str> {
         )));
     }
 
-    Ok(value)
+    Ok(Some(value.to_string()))
+}
+
+pub fn read_bearer_token(headers: &HeaderMap) -> AppResult<Option<String>> {
+    let Some(raw) = headers.get(AUTHORIZATION) else {
+        return Ok(None);
+    };
+
+    let value = raw
+        .to_str()
+        .map_err(|_| AppError::Forbidden("authorization header is invalid".to_string()))?;
+
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(AppError::Forbidden(
+            "authorization header cannot be empty".to_string(),
+        ));
+    }
+
+    let lower = value.to_ascii_lowercase();
+    if !lower.starts_with("bearer ") {
+        return Err(AppError::Forbidden(
+            "authorization header must use Bearer token".to_string(),
+        ));
+    }
+
+    let token = value[7..].trim();
+    if token.is_empty() {
+        return Err(AppError::Forbidden(
+            "bearer token cannot be empty".to_string(),
+        ));
+    }
+
+    Ok(Some(token.to_string()))
+}
+
+async fn resolve_user_from_bearer_token(state: &AppState, token: &str) -> AppResult<String> {
+    let session: Option<SessionUserRecord> = sqlx::query_as(
+        "SELECT u.username
+         FROM auth_sessions s
+         INNER JOIN iam_users u ON u.id = s.user_id
+         WHERE s.id = $1
+           AND s.revoked_at IS NULL
+           AND s.expires_at > NOW()
+           AND u.is_enabled = TRUE",
+    )
+    .bind(token)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let session = session
+        .ok_or_else(|| AppError::Forbidden("bearer token is invalid or expired".to_string()))?;
+    Ok(session.username)
 }
 
 fn required_permission(method: &Method, path: &str) -> Option<String> {
@@ -276,9 +347,9 @@ async fn check_permission(
 
 #[cfg(test)]
 mod tests {
-    use axum::http::Method;
+    use axum::http::{HeaderMap, HeaderValue, Method, header::AUTHORIZATION};
 
-    use super::required_permission;
+    use super::{read_bearer_token, required_permission};
 
     fn assert_permission(method: Method, path: &str, expected: &str) {
         assert_eq!(
@@ -499,5 +570,24 @@ mod tests {
     #[test]
     fn rejects_unknown_path() {
         assert!(required_permission(&Method::GET, "/api/v1/cmdb/unknown").is_none());
+    }
+
+    #[test]
+    fn reads_bearer_token_from_authorization_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer token-123"));
+        let token = read_bearer_token(&headers).expect("bearer token should parse");
+        assert_eq!(token.as_deref(), Some("token-123"));
+    }
+
+    #[test]
+    fn rejects_non_bearer_authorization_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Basic abc123"));
+        let err = read_bearer_token(&headers).expect_err("non-bearer should fail");
+        assert_eq!(
+            err.to_string(),
+            "authorization header must use Bearer token"
+        );
     }
 }
