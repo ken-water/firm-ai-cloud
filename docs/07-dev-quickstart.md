@@ -131,6 +131,43 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs \
   }'
 ```
 
+CMDB discovery notification APIs:
+
+```bash
+# create a notification channel
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-channels \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "platform-webhook",
+    "channel_type": "webhook",
+    "target": "https://example.local/cmdb-events",
+    "config": {
+      "headers": {
+        "Authorization": "Bearer replace-me"
+      }
+    }
+  }'
+
+# create a template
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-templates \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "event_type": "asset.offboarded_suspected",
+    "title_template": "Asset offboarded suspected",
+    "body_template": "Asset {{asset_id}} has been missing for {{missed_runs}} runs."
+  }'
+
+# subscribe event to channel
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-subscriptions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "channel_id": 1,
+    "event_type": "asset.offboarded_suspected",
+    "site": "dc-a",
+    "department": "platform"
+  }'
+```
+
 ## 4. Run Frontend
 
 ```bash
