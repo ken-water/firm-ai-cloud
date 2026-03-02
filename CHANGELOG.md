@@ -32,6 +32,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Notification channels/templates/subscriptions APIs.
 - Notification dispatch with webhook retry and delivery logs.
 - Web console relation panel and discovery review workflows.
+- Web console notification rule/subscription management workflows.
 - Integration smoke script: `scripts/test-cmdb-loop.sh`.
 - Expanded developer quickstart and troubleshooting docs.
 
