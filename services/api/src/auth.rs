@@ -5,10 +5,12 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use serde_json::json;
 use sqlx::FromRow;
 use tracing::warn;
 
 use crate::{
+    audit::{AuditLogWriteInput, write_audit_log_best_effort},
     error::{AppError, AppResult},
     state::AppState,
 };
@@ -34,21 +36,79 @@ pub async fn rbac_guard(
     let path = request.uri().path().to_string();
 
     let user = read_auth_user(request.headers())?;
-    let permission = required_permission(&method, &path).ok_or_else(|| {
-        AppError::Forbidden(format!(
-            "no RBAC permission mapping found for route '{path}'"
-        ))
-    })?;
+    let permission = match required_permission(&method, &path) {
+        Some(value) => value,
+        None => {
+            write_audit_log_best_effort(
+                &state.db,
+                AuditLogWriteInput {
+                    actor: user.to_string(),
+                    action: "auth.permission_denied".to_string(),
+                    target_type: "route".to_string(),
+                    target_id: Some(path.clone()),
+                    result: "denied".to_string(),
+                    message: Some(format!(
+                        "no RBAC permission mapping found for route '{path}'"
+                    )),
+                    metadata: json!({
+                        "method": method.to_string(),
+                        "path": path
+                    }),
+                },
+            )
+            .await;
+
+            return Err(AppError::Forbidden(format!(
+                "no RBAC permission mapping found for route '{path}'"
+            )));
+        }
+    };
 
     let permission_check = check_permission(&state, user, &permission).await?;
 
     if !permission_check.user_exists {
+        write_audit_log_best_effort(
+            &state.db,
+            AuditLogWriteInput {
+                actor: user.to_string(),
+                action: "auth.login".to_string(),
+                target_type: "user".to_string(),
+                target_id: Some(user.to_string()),
+                result: "failed".to_string(),
+                message: Some("user does not exist or is disabled".to_string()),
+                metadata: json!({
+                    "method": method.to_string(),
+                    "path": path,
+                    "permission": permission
+                }),
+            },
+        )
+        .await;
         return Err(AppError::Forbidden(format!(
             "user '{user}' does not exist or is disabled"
         )));
     }
 
     if !permission_check.allowed {
+        write_audit_log_best_effort(
+            &state.db,
+            AuditLogWriteInput {
+                actor: user.to_string(),
+                action: "auth.permission_denied".to_string(),
+                target_type: "route".to_string(),
+                target_id: Some(path.clone()),
+                result: "denied".to_string(),
+                message: Some(format!(
+                    "permission denied: '{user}' cannot access '{permission}'"
+                )),
+                metadata: json!({
+                    "method": method.to_string(),
+                    "path": path,
+                    "permission": permission
+                }),
+            },
+        )
+        .await;
         warn!(
             user,
             permission,
@@ -60,6 +120,23 @@ pub async fn rbac_guard(
             "permission denied: '{user}' cannot access '{permission}'"
         )));
     }
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: user.to_string(),
+            action: "auth.login".to_string(),
+            target_type: "route".to_string(),
+            target_id: Some(path.clone()),
+            result: "success".to_string(),
+            message: None,
+            metadata: json!({
+                "method": method.to_string(),
+                "permission": permission
+            }),
+        },
+    )
+    .await;
 
     Ok(next.run(request).await)
 }
@@ -86,7 +163,9 @@ fn read_auth_user(headers: &HeaderMap) -> AppResult<&str> {
 fn required_permission(method: &Method, path: &str) -> Option<String> {
     let normalized = normalize_rbac_path(path);
 
-    if normalized.starts_with("/iam/users")
+    if normalized.starts_with("/audit/logs")
+        || normalized.starts_with("/logs")
+        || normalized.starts_with("/iam/users")
         || normalized.starts_with("/iam/roles")
         || normalized.starts_with("/users")
         || normalized.starts_with("/roles")
@@ -231,6 +310,22 @@ mod tests {
     fn maps_relative_iam_permission() {
         assert_eq!(
             required_permission(&Method::GET, "/users").as_deref(),
+            Some("system.admin")
+        );
+    }
+
+    #[test]
+    fn maps_audit_permission() {
+        assert_eq!(
+            required_permission(&Method::GET, "/api/v1/audit/logs").as_deref(),
+            Some("system.admin")
+        );
+    }
+
+    #[test]
+    fn maps_relative_audit_permission() {
+        assert_eq!(
+            required_permission(&Method::GET, "/logs").as_deref(),
             Some("system.admin")
         );
     }

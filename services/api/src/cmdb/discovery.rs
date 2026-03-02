@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
+    http::HeaderMap,
     routing::get,
 };
 use chrono::{DateTime, Utc};
@@ -13,8 +14,11 @@ use serde_json::{Map, Value, json};
 use sqlx::{Postgres, QueryBuilder};
 use tokio::time::sleep;
 
-use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use crate::{
+    audit::write_from_headers_best_effort,
+    error::{AppError, AppResult},
+};
 
 const SOURCE_ZABBIX_HOSTS: &str = "zabbix_hosts";
 const SOURCE_SNMP_SEED: &str = "snmp_seed";
@@ -243,6 +247,7 @@ struct AssetMatch {
 
 async fn create_discovery_job(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateDiscoveryJobRequest>,
 ) -> AppResult<Json<DiscoveryJob>> {
     let name = required_trimmed("name", payload.name)?;
@@ -264,6 +269,21 @@ async fn create_discovery_job(
     .fetch_one(&state.db)
     .await?;
 
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.discovery_job.create",
+        "discovery_job",
+        Some(job.id.to_string()),
+        "success",
+        None,
+        json!({
+            "name": &job.name,
+            "source_type": &job.source_type
+        }),
+    )
+    .await;
+
     Ok(Json(job))
 }
 
@@ -281,6 +301,7 @@ async fn list_discovery_jobs(State(state): State<AppState>) -> AppResult<Json<Ve
 
 async fn run_discovery_job(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(job_id): Path<i64>,
 ) -> AppResult<Json<RunDiscoveryJobResponse>> {
     let existing: Option<DiscoveryJob> = sqlx::query_as(
@@ -307,6 +328,23 @@ async fn run_discovery_job(
     match run_result {
         Ok(stats) => {
             let final_job = mark_discovery_job_success(&state.db, job_id).await?;
+            write_from_headers_best_effort(
+                &state.db,
+                &headers,
+                "cmdb.discovery_job.run",
+                "discovery_job",
+                Some(job_id.to_string()),
+                "success",
+                None,
+                json!({
+                    "new_detected_events": stats.new_detected_events,
+                    "profile_changed_events": stats.profile_changed_events,
+                    "offboarded_suspected_events": stats.offboarded_suspected_events,
+                    "queued_candidates": stats.queued_candidates,
+                    "skipped_candidates": stats.skipped_candidates
+                }),
+            )
+            .await;
             Ok(Json(RunDiscoveryJobResponse {
                 job: final_job,
                 stats,
@@ -315,6 +353,17 @@ async fn run_discovery_job(
         Err(err) => {
             let message = err.to_string();
             let _ = mark_discovery_job_failed(&state.db, job_id, &message).await;
+            write_from_headers_best_effort(
+                &state.db,
+                &headers,
+                "cmdb.discovery_job.run",
+                "discovery_job",
+                Some(job_id.to_string()),
+                "failed",
+                Some(message.clone()),
+                json!({}),
+            )
+            .await;
             Err(err)
         }
     }
@@ -360,6 +409,7 @@ async fn list_discovery_candidates(
 
 async fn approve_discovery_candidate(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(candidate_id): Path<i64>,
     Json(payload): Json<ReviewDiscoveryCandidateRequest>,
 ) -> AppResult<Json<ReviewDiscoveryCandidateResponse>> {
@@ -479,6 +529,21 @@ async fn approve_discovery_candidate(
     .fetch_one(&state.db)
     .await?;
 
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.discovery_candidate.approve",
+        "discovery_candidate",
+        Some(reviewed_candidate.id.to_string()),
+        "success",
+        None,
+        json!({
+            "action": action,
+            "asset_id": asset_id
+        }),
+    )
+    .await;
+
     Ok(Json(ReviewDiscoveryCandidateResponse {
         candidate: reviewed_candidate,
         action,
@@ -488,6 +553,7 @@ async fn approve_discovery_candidate(
 
 async fn reject_discovery_candidate(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(candidate_id): Path<i64>,
     Json(payload): Json<ReviewDiscoveryCandidateRequest>,
 ) -> AppResult<Json<ReviewDiscoveryCandidateResponse>> {
@@ -508,6 +574,18 @@ async fn reject_discovery_candidate(
     .bind(reviewed_by)
     .fetch_one(&state.db)
     .await?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.discovery_candidate.reject",
+        "discovery_candidate",
+        Some(reviewed_candidate.id.to_string()),
+        "success",
+        None,
+        json!({}),
+    )
+    .await;
 
     Ok(Json(ReviewDiscoveryCandidateResponse {
         candidate: reviewed_candidate,

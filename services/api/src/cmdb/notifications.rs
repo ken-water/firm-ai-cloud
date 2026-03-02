@@ -1,6 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Query, State},
+    http::HeaderMap,
     routing::get,
 };
 use chrono::{DateTime, Utc};
@@ -9,8 +10,11 @@ use serde_json::Value;
 use sqlx::Postgres;
 use sqlx::QueryBuilder;
 
-use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use crate::{
+    audit::write_from_headers_best_effort,
+    error::{AppError, AppResult},
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -107,6 +111,7 @@ struct ListNotificationSubscriptionsQuery {
 
 async fn create_notification_channel(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateNotificationChannelRequest>,
 ) -> AppResult<Json<NotificationChannel>> {
     let name = required_trimmed("name", payload.name)?;
@@ -127,6 +132,21 @@ async fn create_notification_channel(
     .bind(is_enabled)
     .fetch_one(&state.db)
     .await?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.notification_channel.create",
+        "notification_channel",
+        Some(item.id.to_string()),
+        "success",
+        None,
+        serde_json::json!({
+            "channel_type": &item.channel_type,
+            "name": &item.name
+        }),
+    )
+    .await;
 
     Ok(Json(item))
 }
@@ -153,6 +173,7 @@ async fn list_notification_channels(
 
 async fn create_notification_template(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateNotificationTemplateRequest>,
 ) -> AppResult<Json<NotificationTemplate>> {
     let event_type = normalize_event_type(payload.event_type)?;
@@ -171,6 +192,20 @@ async fn create_notification_template(
     .bind(is_enabled)
     .fetch_one(&state.db)
     .await?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.notification_template.create",
+        "notification_template",
+        Some(item.id.to_string()),
+        "success",
+        None,
+        serde_json::json!({
+            "event_type": &item.event_type
+        }),
+    )
+    .await;
 
     Ok(Json(item))
 }
@@ -197,6 +232,7 @@ async fn list_notification_templates(
 
 async fn create_notification_subscription(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateNotificationSubscriptionRequest>,
 ) -> AppResult<Json<NotificationSubscription>> {
     let event_type = normalize_event_type(payload.event_type)?;
@@ -219,6 +255,21 @@ async fn create_notification_subscription(
     .fetch_one(&state.db)
     .await
     .map_err(map_subscription_conflict)?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.notification_subscription.create",
+        "notification_subscription",
+        Some(item.id.to_string()),
+        "success",
+        None,
+        serde_json::json!({
+            "channel_id": item.channel_id,
+            "event_type": &item.event_type
+        }),
+    )
+    .await;
 
     Ok(Json(item))
 }

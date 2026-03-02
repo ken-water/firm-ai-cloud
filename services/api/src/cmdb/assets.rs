@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
+    http::HeaderMap,
     routing::get,
 };
 use chrono::{DateTime, Utc};
@@ -10,8 +11,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::{Postgres, QueryBuilder};
 
-use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use crate::{
+    audit::write_from_headers_best_effort,
+    error::{AppError, AppResult},
+};
 
 use super::field_definitions::{
     FieldDefinitionRecord, fetch_enabled_definitions, validate_custom_field_value,
@@ -132,6 +136,7 @@ async fn list_assets(
 
 async fn create_asset(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateAssetRequest>,
 ) -> AppResult<Json<Asset>> {
     let asset_class = required_field("asset_class", payload.asset_class)?;
@@ -170,6 +175,21 @@ async fn create_asset(
     .fetch_one(&state.db)
     .await
     .map_err(map_asset_conflict)?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.asset.create",
+        "asset",
+        Some(asset.id.to_string()),
+        "success",
+        None,
+        serde_json::json!({
+            "asset_class": &asset.asset_class,
+            "name": &asset.name
+        }),
+    )
+    .await;
 
     Ok(Json(asset))
 }

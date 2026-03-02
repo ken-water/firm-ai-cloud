@@ -1,3 +1,4 @@
+mod audit;
 mod auth;
 mod cmdb;
 mod error;
@@ -92,11 +93,20 @@ fn build_router(state: AppState) -> Router {
         ));
     }
 
+    let mut audit_routes = audit::routes();
+    if state.rbac_enabled {
+        audit_routes = audit_routes.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::rbac_guard,
+        ));
+    }
+
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/v1/ping", get(ping_handler))
         .nest("/api/v1/cmdb", cmdb_routes)
         .nest("/api/v1/iam", iam_routes)
+        .nest("/api/v1/audit", audit_routes)
         .with_state(state)
         .layer(cors)
 }

@@ -90,6 +90,21 @@ curl -X POST -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/iam/users/2/roles/2
 curl -X DELETE -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/iam/users/2/roles/2
 ```
 
+Audit APIs (admin read-only):
+
+```bash
+# query latest audit logs
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/audit/logs?limit=20"
+
+# filter by actor and time range (RFC3339)
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/audit/logs?actor=admin&time_from=2026-03-02T00:00:00Z&time_to=2026-03-02T23:59:59Z"
+```
+
+Notes:
+
+- `audit_logs` is append-only (UPDATE/DELETE are blocked by DB trigger).
+- Permission-denied actions and CMDB/IAM write actions are persisted with actor/action/target/result/timestamp.
+
 CMDB asset APIs:
 
 ```bash

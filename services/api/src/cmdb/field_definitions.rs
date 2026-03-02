@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use axum::{
     Json, Router,
     extract::{Path, State},
+    http::HeaderMap,
     routing::{get, patch},
 };
 use chrono::{DateTime, NaiveDate, Utc};
@@ -11,8 +12,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
 
-use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use crate::{
+    audit::write_from_headers_best_effort,
+    error::{AppError, AppResult},
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -156,6 +160,7 @@ async fn list_field_definitions(
 
 async fn create_field_definition(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateFieldDefinitionRequest>,
 ) -> AppResult<Json<FieldDefinitionResponse>> {
     let normalized = normalize_field_definition_input(
@@ -186,11 +191,27 @@ async fn create_field_definition(
     .await
     .map_err(map_field_definition_conflict)?;
 
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.field_definition.create",
+        "field_definition",
+        Some(record.id.to_string()),
+        "success",
+        None,
+        serde_json::json!({
+            "field_key": &record.field_key,
+            "field_type": &record.field_type
+        }),
+    )
+    .await;
+
     Ok(Json(to_response(record)?))
 }
 
 async fn update_field_definition(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(field_id): Path<i64>,
     Json(payload): Json<UpdateFieldDefinitionRequest>,
 ) -> AppResult<Json<FieldDefinitionResponse>> {
@@ -242,6 +263,21 @@ async fn update_field_definition(
     .bind(field_id)
     .fetch_one(&state.db)
     .await?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.field_definition.update",
+        "field_definition",
+        Some(updated.id.to_string()),
+        "success",
+        None,
+        serde_json::json!({
+            "field_key": &updated.field_key,
+            "field_type": &updated.field_type
+        }),
+    )
+    .await;
 
     Ok(Json(to_response(updated)?))
 }

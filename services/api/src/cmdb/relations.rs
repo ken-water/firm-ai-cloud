@@ -1,6 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
+    http::HeaderMap,
     routing::get,
 };
 use chrono::{DateTime, Utc};
@@ -8,8 +9,11 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, QueryBuilder};
 use std::collections::HashSet;
 
-use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use crate::{
+    audit::write_from_headers_best_effort,
+    error::{AppError, AppResult},
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -77,6 +81,7 @@ struct AssetGraphEdge {
 
 async fn create_relation(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateRelationRequest>,
 ) -> AppResult<Json<AssetRelation>> {
     validate_self_loop(
@@ -104,6 +109,22 @@ async fn create_relation(
     .await
     .map_err(map_relation_conflict)?;
 
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.relation.create",
+        "relation",
+        Some(relation.id.to_string()),
+        "success",
+        None,
+        serde_json::json!({
+            "src_asset_id": relation.src_asset_id,
+            "dst_asset_id": relation.dst_asset_id,
+            "relation_type": &relation.relation_type
+        }),
+    )
+    .await;
+
     Ok(Json(relation))
 }
 
@@ -128,6 +149,7 @@ async fn list_relations(
 
 async fn delete_relation(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(relation_id): Path<i64>,
 ) -> AppResult<Json<DeleteRelationResponse>> {
     let deleted: Option<i64> = sqlx::query_scalar(
@@ -144,6 +166,18 @@ async fn delete_relation(
             "relation {relation_id} not found"
         )));
     }
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.relation.delete",
+        "relation",
+        Some(relation_id.to_string()),
+        "success",
+        None,
+        serde_json::json!({}),
+    )
+    .await;
 
     Ok(Json(DeleteRelationResponse {
         id: relation_id,

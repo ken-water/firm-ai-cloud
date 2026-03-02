@@ -3,13 +3,16 @@ use std::collections::HashMap;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
+    http::HeaderMap,
     routing::{get, patch, post},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::{FromRow, Postgres, QueryBuilder};
 
 use crate::{
+    audit::write_from_headers_best_effort,
     error::{AppError, AppResult},
     state::AppState,
 };
@@ -214,6 +217,7 @@ async fn list_users(
 
 async fn create_user(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateUserRequest>,
 ) -> AppResult<Json<IamUser>> {
     let username = normalize_username(payload.username)?;
@@ -236,6 +240,21 @@ async fn create_user(
     .await
     .map_err(map_user_conflict)?;
 
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "iam.user.create",
+        "iam_user",
+        Some(row.id.to_string()),
+        "success",
+        None,
+        json!({
+            "username": &row.username,
+            "auth_source": &row.auth_source
+        }),
+    )
+    .await;
+
     Ok(Json(IamUser {
         id: row.id,
         username: row.username,
@@ -251,6 +270,7 @@ async fn create_user(
 
 async fn update_user(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(user_id): Path<i64>,
     Json(payload): Json<UpdateUserRequest>,
 ) -> AppResult<Json<IamUser>> {
@@ -299,6 +319,21 @@ async fn update_user(
         .map_err(map_user_conflict)?;
 
     let item = load_user_by_id(&state, user_id).await?;
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "iam.user.update",
+        "iam_user",
+        Some(item.id.to_string()),
+        "success",
+        None,
+        json!({
+            "username": &item.username,
+            "is_enabled": item.is_enabled
+        }),
+    )
+    .await;
+
     Ok(Json(item))
 }
 
@@ -339,6 +374,7 @@ async fn list_user_roles(
 
 async fn bind_user_role(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((user_id, role_id)): Path<(i64, i64)>,
 ) -> AppResult<Json<RoleBindingActionResponse>> {
     ensure_user_exists(&state, user_id).await?;
@@ -360,6 +396,20 @@ async fn bind_user_role(
         "already_bound"
     };
 
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "iam.user_role.bind",
+        "iam_user_role",
+        Some(format!("{user_id}:{role_id}")),
+        "success",
+        None,
+        json!({
+            "status": status
+        }),
+    )
+    .await;
+
     Ok(Json(RoleBindingActionResponse {
         user_id,
         role_id,
@@ -369,6 +419,7 @@ async fn bind_user_role(
 
 async fn unbind_user_role(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path((user_id, role_id)): Path<(i64, i64)>,
 ) -> AppResult<Json<RoleBindingActionResponse>> {
     ensure_user_exists(&state, user_id).await?;
@@ -389,6 +440,20 @@ async fn unbind_user_role(
     } else {
         "not_bound"
     };
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "iam.user_role.unbind",
+        "iam_user_role",
+        Some(format!("{user_id}:{role_id}")),
+        "success",
+        None,
+        json!({
+            "status": status
+        }),
+    )
+    .await;
 
     Ok(Json(RoleBindingActionResponse {
         user_id,
@@ -450,6 +515,7 @@ async fn list_roles(
 
 async fn create_role(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<CreateRoleRequest>,
 ) -> AppResult<Json<IamRole>> {
     let role_key = normalize_role_key(payload.role_key)?;
@@ -468,6 +534,21 @@ async fn create_role(
     .await
     .map_err(map_role_conflict)?;
 
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "iam.role.create",
+        "iam_role",
+        Some(row.id.to_string()),
+        "success",
+        None,
+        json!({
+            "role_key": &row.role_key,
+            "is_system": row.is_system
+        }),
+    )
+    .await;
+
     Ok(Json(IamRole {
         id: row.id,
         role_key: row.role_key,
@@ -481,6 +562,7 @@ async fn create_role(
 
 async fn update_role(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(role_id): Path<i64>,
     Json(payload): Json<UpdateRoleRequest>,
 ) -> AppResult<Json<IamRole>> {
@@ -523,6 +605,21 @@ async fn update_role(
         .map_err(map_role_conflict)?;
 
     let item = load_role_by_id(&state, role_id).await?;
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "iam.role.update",
+        "iam_role",
+        Some(item.id.to_string()),
+        "success",
+        None,
+        json!({
+            "role_key": &item.role_key,
+            "is_system": item.is_system
+        }),
+    )
+    .await;
+
     Ok(Json(item))
 }
 
