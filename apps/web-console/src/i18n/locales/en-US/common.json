@@ -63,6 +63,73 @@
         }
       }
     },
+    "notifications": {
+      "title": "Notification Rules",
+      "channelsTitle": "Notification Channels",
+      "templatesTitle": "Notification Templates",
+      "subscriptionsTitle": "Event Subscriptions",
+      "actions": {
+        "refreshChannels": "Refresh Channels",
+        "refreshTemplates": "Refresh Templates",
+        "refreshSubscriptions": "Refresh Subscriptions",
+        "createChannel": "Create Channel",
+        "createTemplate": "Create Template",
+        "createSubscription": "Create Subscription"
+      },
+      "messages": {
+        "noChannels": "No notification channels found.",
+        "noTemplates": "No notification templates found.",
+        "noSubscriptions": "No notification subscriptions found."
+      },
+      "validation": {
+        "channelNameRequired": "Notification channel name is required.",
+        "targetRequired": "Notification target is required.",
+        "configInvalidJson": "Config must be valid JSON.",
+        "configMustBeObject": "Config JSON must be an object.",
+        "eventTypeRequired": "Event type is required.",
+        "templateTitleRequired": "Template title is required.",
+        "templateBodyRequired": "Template body is required.",
+        "channelRequired": "Please select a notification channel."
+      },
+      "form": {
+        "channelName": "Channel Name",
+        "target": "Target (email or webhook URL)",
+        "configJson": "Config JSON",
+        "eventType": "Event Type",
+        "titleTemplate": "Title Template",
+        "bodyTemplate": "Body Template",
+        "selectChannel": "Select channel",
+        "siteOptional": "Site (optional)",
+        "departmentOptional": "Department (optional)"
+      },
+      "table": {
+        "channel": {
+          "id": "ID",
+          "name": "Name",
+          "type": "Type",
+          "target": "Target",
+          "enabled": "Enabled",
+          "updatedAt": "Updated At"
+        },
+        "template": {
+          "id": "ID",
+          "eventType": "Event Type",
+          "titleTemplate": "Title Template",
+          "bodyTemplate": "Body Template",
+          "enabled": "Enabled",
+          "updatedAt": "Updated At"
+        },
+        "subscription": {
+          "id": "ID",
+          "eventType": "Event Type",
+          "channel": "Channel",
+          "target": "Target",
+          "scope": "Scope (Site/Department)",
+          "enabled": "Enabled",
+          "updatedAt": "Updated At"
+        }
+      }
+    },
     "fields": {
       "title": "Custom Field Definitions",
       "empty": "No custom fields defined yet.",

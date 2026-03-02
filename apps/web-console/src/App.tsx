@@ -78,6 +78,38 @@ type DiscoveryCandidate = {
   updated_at: string;
 };
 
+type NotificationChannel = {
+  id: number;
+  name: string;
+  channel_type: string;
+  target: string;
+  config: Record<string, unknown>;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type NotificationTemplate = {
+  id: number;
+  event_type: string;
+  title_template: string;
+  body_template: string;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type NotificationSubscription = {
+  id: number;
+  channel_id: number;
+  event_type: string;
+  site: string | null;
+  department: string | null;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 type NewFieldForm = {
   field_key: string;
   name: string;
@@ -92,6 +124,26 @@ type NewRelationForm = {
   dst_asset_id: string;
   relation_type: string;
   source: string;
+};
+
+type NewNotificationChannelForm = {
+  name: string;
+  channel_type: "email" | "webhook";
+  target: string;
+  config_json: string;
+};
+
+type NewNotificationTemplateForm = {
+  event_type: string;
+  title_template: string;
+  body_template: string;
+};
+
+type NewNotificationSubscriptionForm = {
+  channel_id: string;
+  event_type: string;
+  site: string;
+  department: string;
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8080";
@@ -110,6 +162,26 @@ const defaultRelationForm: NewRelationForm = {
   dst_asset_id: "",
   relation_type: "depends_on",
   source: "manual"
+};
+
+const defaultNotificationChannelForm: NewNotificationChannelForm = {
+  name: "",
+  channel_type: "webhook",
+  target: "",
+  config_json: "{}"
+};
+
+const defaultNotificationTemplateForm: NewNotificationTemplateForm = {
+  event_type: "asset.new_detected",
+  title_template: "Discovery Event: {{event_type}}",
+  body_template: "{{payload}}"
+};
+
+const defaultNotificationSubscriptionForm: NewNotificationSubscriptionForm = {
+  channel_id: "",
+  event_type: "asset.new_detected",
+  site: "",
+  department: ""
 };
 
 export function App() {
@@ -138,6 +210,21 @@ export function App() {
   const [loadingDiscoveryCandidates, setLoadingDiscoveryCandidates] = useState(false);
   const [runningDiscoveryJobId, setRunningDiscoveryJobId] = useState<number | null>(null);
   const [reviewingCandidateId, setReviewingCandidateId] = useState<number | null>(null);
+  const [notificationChannels, setNotificationChannels] = useState<NotificationChannel[]>([]);
+  const [notificationTemplates, setNotificationTemplates] = useState<NotificationTemplate[]>([]);
+  const [notificationSubscriptions, setNotificationSubscriptions] = useState<NotificationSubscription[]>([]);
+  const [loadingNotificationChannels, setLoadingNotificationChannels] = useState(false);
+  const [loadingNotificationTemplates, setLoadingNotificationTemplates] = useState(false);
+  const [loadingNotificationSubscriptions, setLoadingNotificationSubscriptions] = useState(false);
+  const [creatingNotificationChannel, setCreatingNotificationChannel] = useState(false);
+  const [creatingNotificationTemplate, setCreatingNotificationTemplate] = useState(false);
+  const [creatingNotificationSubscription, setCreatingNotificationSubscription] = useState(false);
+  const [newNotificationChannel, setNewNotificationChannel] =
+    useState<NewNotificationChannelForm>(defaultNotificationChannelForm);
+  const [newNotificationTemplate, setNewNotificationTemplate] =
+    useState<NewNotificationTemplateForm>(defaultNotificationTemplateForm);
+  const [newNotificationSubscription, setNewNotificationSubscription] =
+    useState<NewNotificationSubscriptionForm>(defaultNotificationSubscriptionForm);
 
   const loadAssets = useCallback(async () => {
     setLoadingAssets(true);
@@ -221,6 +308,57 @@ export function App() {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setLoadingDiscoveryCandidates(false);
+    }
+  }, []);
+
+  const loadNotificationChannels = useCallback(async () => {
+    setLoadingNotificationChannels(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-channels`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: NotificationChannel[] = await response.json();
+      setNotificationChannels(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setLoadingNotificationChannels(false);
+    }
+  }, []);
+
+  const loadNotificationTemplates = useCallback(async () => {
+    setLoadingNotificationTemplates(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-templates`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: NotificationTemplate[] = await response.json();
+      setNotificationTemplates(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setLoadingNotificationTemplates(false);
+    }
+  }, []);
+
+  const loadNotificationSubscriptions = useCallback(async () => {
+    setLoadingNotificationSubscriptions(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-subscriptions`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: NotificationSubscription[] = await response.json();
+      setNotificationSubscriptions(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setLoadingNotificationSubscriptions(false);
     }
   }, []);
 
@@ -421,6 +559,143 @@ export function App() {
     [loadAssets, loadDiscoveryCandidates]
   );
 
+  const createNotificationChannel = useCallback(async () => {
+    const name = newNotificationChannel.name.trim();
+    const target = newNotificationChannel.target.trim();
+    if (!name) {
+      setError(t("cmdb.notifications.validation.channelNameRequired"));
+      return;
+    }
+    if (!target) {
+      setError(t("cmdb.notifications.validation.targetRequired"));
+      return;
+    }
+
+    let config: Record<string, unknown> = {};
+    const configRaw = newNotificationChannel.config_json.trim();
+    if (configRaw.length > 0) {
+      try {
+        const parsed = JSON.parse(configRaw) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setError(t("cmdb.notifications.validation.configMustBeObject"));
+          return;
+        }
+        config = parsed as Record<string, unknown>;
+      } catch {
+        setError(t("cmdb.notifications.validation.configInvalidJson"));
+        return;
+      }
+    }
+
+    setCreatingNotificationChannel(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-channels`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          name,
+          channel_type: newNotificationChannel.channel_type,
+          target,
+          config
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      setNewNotificationChannel(defaultNotificationChannelForm);
+      await loadNotificationChannels();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setCreatingNotificationChannel(false);
+    }
+  }, [loadNotificationChannels, newNotificationChannel, t]);
+
+  const createNotificationTemplate = useCallback(async () => {
+    const eventType = newNotificationTemplate.event_type.trim();
+    const titleTemplate = newNotificationTemplate.title_template.trim();
+    const bodyTemplate = newNotificationTemplate.body_template.trim();
+    if (!eventType) {
+      setError(t("cmdb.notifications.validation.eventTypeRequired"));
+      return;
+    }
+    if (!titleTemplate) {
+      setError(t("cmdb.notifications.validation.templateTitleRequired"));
+      return;
+    }
+    if (!bodyTemplate) {
+      setError(t("cmdb.notifications.validation.templateBodyRequired"));
+      return;
+    }
+
+    setCreatingNotificationTemplate(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-templates`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          event_type: eventType,
+          title_template: titleTemplate,
+          body_template: bodyTemplate
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      setNewNotificationTemplate((prev) => ({ ...prev, title_template: "", body_template: "" }));
+      await loadNotificationTemplates();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setCreatingNotificationTemplate(false);
+    }
+  }, [loadNotificationTemplates, newNotificationTemplate, t]);
+
+  const createNotificationSubscription = useCallback(async () => {
+    const channelId = Number.parseInt(newNotificationSubscription.channel_id, 10);
+    const eventType = newNotificationSubscription.event_type.trim();
+    if (!Number.isFinite(channelId) || channelId <= 0) {
+      setError(t("cmdb.notifications.validation.channelRequired"));
+      return;
+    }
+    if (!eventType) {
+      setError(t("cmdb.notifications.validation.eventTypeRequired"));
+      return;
+    }
+
+    setCreatingNotificationSubscription(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-subscriptions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          channel_id: channelId,
+          event_type: eventType,
+          site: trimToNull(newNotificationSubscription.site),
+          department: trimToNull(newNotificationSubscription.department)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      setNewNotificationSubscription((prev) => ({ ...prev, site: "", department: "" }));
+      await loadNotificationSubscriptions();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setCreatingNotificationSubscription(false);
+    }
+  }, [loadNotificationSubscriptions, newNotificationSubscription, t]);
+
   const findAssetByCode = useCallback(async () => {
     const normalized = scanCode.trim();
     if (!normalized) {
@@ -448,8 +723,24 @@ export function App() {
   }, [scanCode, scanMode, t]);
 
   useEffect(() => {
-    void Promise.all([loadAssets(), loadFieldDefinitions(), loadDiscoveryJobs(), loadDiscoveryCandidates()]);
-  }, [loadAssets, loadFieldDefinitions, loadDiscoveryCandidates, loadDiscoveryJobs]);
+    void Promise.all([
+      loadAssets(),
+      loadFieldDefinitions(),
+      loadDiscoveryJobs(),
+      loadDiscoveryCandidates(),
+      loadNotificationChannels(),
+      loadNotificationTemplates(),
+      loadNotificationSubscriptions()
+    ]);
+  }, [
+    loadAssets,
+    loadFieldDefinitions,
+    loadDiscoveryCandidates,
+    loadDiscoveryJobs,
+    loadNotificationChannels,
+    loadNotificationTemplates,
+    loadNotificationSubscriptions
+  ]);
 
   useEffect(() => {
     if (assets.length === 0 || selectedAssetId) {
@@ -476,6 +767,20 @@ export function App() {
     }
     return map;
   }, [assets]);
+  const notificationChannelNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const channel of notificationChannels) {
+      map.set(channel.id, channel.name);
+    }
+    return map;
+  }, [notificationChannels]);
+  const notificationChannelById = useMemo(() => {
+    const map = new Map<number, NotificationChannel>();
+    for (const channel of notificationChannels) {
+      map.set(channel.id, channel);
+    }
+    return map;
+  }, [notificationChannels]);
   const selectedAssetNumericId = useMemo(() => Number.parseInt(selectedAssetId, 10), [selectedAssetId]);
   const relationSummary = useMemo(() => {
     if (!Number.isFinite(selectedAssetNumericId) || selectedAssetNumericId <= 0) {
@@ -633,6 +938,269 @@ export function App() {
                     </td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section style={{ marginBottom: "1.5rem" }}>
+        <h2 style={sectionTitleStyle}>{t("cmdb.notifications.title")}</h2>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+          <button onClick={() => void loadNotificationChannels()} disabled={loadingNotificationChannels}>
+            {loadingNotificationChannels ? t("cmdb.actions.loading") : t("cmdb.notifications.actions.refreshChannels")}
+          </button>
+          <button onClick={() => void loadNotificationTemplates()} disabled={loadingNotificationTemplates}>
+            {loadingNotificationTemplates
+              ? t("cmdb.actions.loading")
+              : t("cmdb.notifications.actions.refreshTemplates")}
+          </button>
+          <button onClick={() => void loadNotificationSubscriptions()} disabled={loadingNotificationSubscriptions}>
+            {loadingNotificationSubscriptions
+              ? t("cmdb.actions.loading")
+              : t("cmdb.notifications.actions.refreshSubscriptions")}
+          </button>
+        </div>
+
+        <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.channelsTitle")}</h3>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+          <input
+            value={newNotificationChannel.name}
+            onChange={(event) =>
+              setNewNotificationChannel((prev) => ({
+                ...prev,
+                name: event.target.value
+              }))
+            }
+            placeholder={t("cmdb.notifications.form.channelName")}
+          />
+          <select
+            value={newNotificationChannel.channel_type}
+            onChange={(event) =>
+              setNewNotificationChannel((prev) => ({
+                ...prev,
+                channel_type: event.target.value as "email" | "webhook"
+              }))
+            }
+          >
+            <option value="webhook">webhook</option>
+            <option value="email">email</option>
+          </select>
+          <input
+            value={newNotificationChannel.target}
+            onChange={(event) =>
+              setNewNotificationChannel((prev) => ({
+                ...prev,
+                target: event.target.value
+              }))
+            }
+            placeholder={t("cmdb.notifications.form.target")}
+            style={{ minWidth: "260px" }}
+          />
+          <input
+            value={newNotificationChannel.config_json}
+            onChange={(event) =>
+              setNewNotificationChannel((prev) => ({
+                ...prev,
+                config_json: event.target.value
+              }))
+            }
+            placeholder={t("cmdb.notifications.form.configJson")}
+            style={{ minWidth: "240px" }}
+          />
+          <button onClick={() => void createNotificationChannel()} disabled={creatingNotificationChannel}>
+            {creatingNotificationChannel ? t("cmdb.actions.creating") : t("cmdb.notifications.actions.createChannel")}
+          </button>
+        </div>
+        {notificationChannels.length === 0 ? (
+          <p>{t("cmdb.notifications.messages.noChannels")}</p>
+        ) : (
+          <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
+            <table style={{ borderCollapse: "collapse", minWidth: "900px", width: "100%" }}>
+              <thead>
+                <tr>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.id")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.name")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.type")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.target")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.enabled")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.updatedAt")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {notificationChannels.map((channel) => (
+                  <tr key={channel.id}>
+                    <td style={cellStyle}>{channel.id}</td>
+                    <td style={cellStyle}>{channel.name}</td>
+                    <td style={cellStyle}>{channel.channel_type}</td>
+                    <td style={cellStyle}>{channel.target}</td>
+                    <td style={cellStyle}>{channel.is_enabled ? "Yes" : "No"}</td>
+                    <td style={cellStyle}>{new Date(channel.updated_at).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.templatesTitle")}</h3>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+          <input
+            value={newNotificationTemplate.event_type}
+            onChange={(event) =>
+              setNewNotificationTemplate((prev) => ({
+                ...prev,
+                event_type: event.target.value
+              }))
+            }
+            placeholder={t("cmdb.notifications.form.eventType")}
+          />
+          <input
+            value={newNotificationTemplate.title_template}
+            onChange={(event) =>
+              setNewNotificationTemplate((prev) => ({
+                ...prev,
+                title_template: event.target.value
+              }))
+            }
+            placeholder={t("cmdb.notifications.form.titleTemplate")}
+            style={{ minWidth: "260px" }}
+          />
+          <input
+            value={newNotificationTemplate.body_template}
+            onChange={(event) =>
+              setNewNotificationTemplate((prev) => ({
+                ...prev,
+                body_template: event.target.value
+              }))
+            }
+            placeholder={t("cmdb.notifications.form.bodyTemplate")}
+            style={{ minWidth: "320px" }}
+          />
+          <button onClick={() => void createNotificationTemplate()} disabled={creatingNotificationTemplate}>
+            {creatingNotificationTemplate ? t("cmdb.actions.creating") : t("cmdb.notifications.actions.createTemplate")}
+          </button>
+        </div>
+        {notificationTemplates.length === 0 ? (
+          <p>{t("cmdb.notifications.messages.noTemplates")}</p>
+        ) : (
+          <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
+            <table style={{ borderCollapse: "collapse", minWidth: "1100px", width: "100%" }}>
+              <thead>
+                <tr>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.template.id")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.template.eventType")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.template.titleTemplate")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.template.bodyTemplate")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.template.enabled")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.template.updatedAt")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {notificationTemplates.map((template) => (
+                  <tr key={template.id}>
+                    <td style={cellStyle}>{template.id}</td>
+                    <td style={cellStyle}>{template.event_type}</td>
+                    <td style={cellStyle}>{template.title_template}</td>
+                    <td style={cellStyle}>{template.body_template}</td>
+                    <td style={cellStyle}>{template.is_enabled ? "Yes" : "No"}</td>
+                    <td style={cellStyle}>{new Date(template.updated_at).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.subscriptionsTitle")}</h3>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+          <select
+            value={newNotificationSubscription.channel_id}
+            onChange={(event) =>
+              setNewNotificationSubscription((prev) => ({
+                ...prev,
+                channel_id: event.target.value
+              }))
+            }
+          >
+            <option value="">{t("cmdb.notifications.form.selectChannel")}</option>
+            {notificationChannels.map((channel) => (
+              <option key={channel.id} value={channel.id}>
+                #{channel.id} {channel.name} ({channel.channel_type})
+              </option>
+            ))}
+          </select>
+          <input
+            value={newNotificationSubscription.event_type}
+            onChange={(event) =>
+              setNewNotificationSubscription((prev) => ({
+                ...prev,
+                event_type: event.target.value
+              }))
+            }
+            placeholder={t("cmdb.notifications.form.eventType")}
+          />
+          <input
+            value={newNotificationSubscription.site}
+            onChange={(event) =>
+              setNewNotificationSubscription((prev) => ({
+                ...prev,
+                site: event.target.value
+              }))
+            }
+            placeholder={t("cmdb.notifications.form.siteOptional")}
+          />
+          <input
+            value={newNotificationSubscription.department}
+            onChange={(event) =>
+              setNewNotificationSubscription((prev) => ({
+                ...prev,
+                department: event.target.value
+              }))
+            }
+            placeholder={t("cmdb.notifications.form.departmentOptional")}
+          />
+          <button onClick={() => void createNotificationSubscription()} disabled={creatingNotificationSubscription}>
+            {creatingNotificationSubscription
+              ? t("cmdb.actions.creating")
+              : t("cmdb.notifications.actions.createSubscription")}
+          </button>
+        </div>
+        {notificationSubscriptions.length === 0 ? (
+          <p>{t("cmdb.notifications.messages.noSubscriptions")}</p>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", minWidth: "1100px", width: "100%" }}>
+              <thead>
+                <tr>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.id")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.eventType")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.channel")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.target")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.scope")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.enabled")}</th>
+                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.updatedAt")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {notificationSubscriptions.map((subscription) => {
+                  const channel = notificationChannelById.get(subscription.channel_id);
+                  return (
+                    <tr key={subscription.id}>
+                      <td style={cellStyle}>{subscription.id}</td>
+                      <td style={cellStyle}>{subscription.event_type}</td>
+                      <td style={cellStyle}>
+                        #{subscription.channel_id} {notificationChannelNameById.get(subscription.channel_id) ?? "-"}
+                      </td>
+                      <td style={cellStyle}>{channel?.target ?? "-"}</td>
+                      <td style={cellStyle}>
+                        {subscription.site ?? "*"} / {subscription.department ?? "*"}
+                      </td>
+                      <td style={cellStyle}>{subscription.is_enabled ? "Yes" : "No"}</td>
+                      <td style={cellStyle}>{new Date(subscription.updated_at).toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -917,6 +1485,11 @@ function readErrorMessage(response: Response): Promise<string> {
       return `HTTP ${response.status}`;
     })
     .catch(() => `HTTP ${response.status}`);
+}
+
+function trimToNull(value: string): string | null {
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
 }
 
 function sampleValueForField(definition: FieldDefinition): unknown {
