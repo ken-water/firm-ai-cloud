@@ -5,7 +5,8 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
+use std::collections::HashSet;
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -13,6 +14,7 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/relations", get(list_relations).post(create_relation))
+        .route("/assets/{asset_id}/graph", get(get_asset_graph))
         .route(
             "/relations/{relation_id}",
             axum::routing::delete(delete_relation),
@@ -47,6 +49,30 @@ struct ListRelationsQuery {
 struct DeleteRelationResponse {
     id: i64,
     deleted: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AssetGraphResponse {
+    root_asset_id: i64,
+    nodes: Vec<AssetGraphNode>,
+    edges: Vec<AssetGraphEdge>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct AssetGraphNode {
+    id: i64,
+    name: String,
+    asset_class: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AssetGraphEdge {
+    id: i64,
+    src_asset_id: i64,
+    dst_asset_id: i64,
+    relation_type: String,
+    source: String,
 }
 
 async fn create_relation(
@@ -125,6 +151,63 @@ async fn delete_relation(
     }))
 }
 
+async fn get_asset_graph(
+    State(state): State<AppState>,
+    Path(asset_id): Path<i64>,
+) -> AppResult<Json<AssetGraphResponse>> {
+    let root_node: Option<AssetGraphNode> = sqlx::query_as(
+        "SELECT id, name, asset_class, status
+         FROM assets
+         WHERE id = $1",
+    )
+    .bind(asset_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let root_node =
+        root_node.ok_or_else(|| AppError::NotFound(format!("asset {asset_id} not found")))?;
+
+    let relations: Vec<AssetRelation> = sqlx::query_as(
+        "SELECT id, src_asset_id, dst_asset_id, relation_type, source, created_at, updated_at
+         FROM asset_relations
+         WHERE src_asset_id = $1 OR dst_asset_id = $1
+         ORDER BY id DESC",
+    )
+    .bind(asset_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut asset_ids = HashSet::new();
+    asset_ids.insert(asset_id);
+    for relation in &relations {
+        asset_ids.insert(relation.src_asset_id);
+        asset_ids.insert(relation.dst_asset_id);
+    }
+
+    let mut nodes = fetch_graph_nodes(&state.db, asset_ids).await?;
+    if !nodes.iter().any(|node| node.id == root_node.id) {
+        nodes.push(root_node);
+    }
+    nodes.sort_by_key(|node| node.id);
+
+    let edges = relations
+        .into_iter()
+        .map(|item| AssetGraphEdge {
+            id: item.id,
+            src_asset_id: item.src_asset_id,
+            dst_asset_id: item.dst_asset_id,
+            relation_type: item.relation_type,
+            source: item.source,
+        })
+        .collect();
+
+    Ok(Json(AssetGraphResponse {
+        root_asset_id: asset_id,
+        nodes,
+        edges,
+    }))
+}
+
 fn validate_self_loop(src_asset_id: i64, dst_asset_id: i64, relation_type: &str) -> AppResult<()> {
     if src_asset_id != dst_asset_id {
         return Ok(());
@@ -198,4 +281,24 @@ fn map_relation_conflict(err: sqlx::Error) -> AppError {
         }
     }
     AppError::Database(err)
+}
+
+async fn fetch_graph_nodes(db: &PgPool, ids: HashSet<i64>) -> AppResult<Vec<AssetGraphNode>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut qb: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT id, name, asset_class, status FROM assets WHERE id IN (");
+    let mut separated = qb.separated(", ");
+    for id in ids {
+        separated.push_bind(id);
+    }
+    separated.push_unseparated(")");
+    drop(separated);
+
+    qb.build_query_as()
+        .fetch_all(db)
+        .await
+        .map_err(AppError::from)
 }
