@@ -1,3 +1,4 @@
+mod auth;
 mod cmdb;
 mod error;
 mod state;
@@ -32,7 +33,10 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to run database migrations")?;
 
     let addr: SocketAddr = config.bind_addr().parse().context("invalid bind address")?;
-    let state = AppState { db: db_pool };
+    let state = AppState {
+        db: db_pool,
+        rbac_enabled: config.rbac_enabled,
+    };
     let app = build_router(state);
 
     info!(%addr, "api service starting");
@@ -71,10 +75,16 @@ fn build_router(state: AppState) -> Router {
         ])
         .allow_headers(Any);
 
+    let mut cmdb_routes = cmdb::routes();
+    if state.rbac_enabled {
+        cmdb_routes = cmdb_routes
+            .route_layer(axum::middleware::from_fn_with_state(state.clone(), auth::rbac_guard));
+    }
+
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/v1/ping", get(ping_handler))
-        .nest("/api/v1/cmdb", cmdb::routes())
+        .nest("/api/v1/cmdb", cmdb_routes)
         .with_state(state)
         .layer(cors)
 }

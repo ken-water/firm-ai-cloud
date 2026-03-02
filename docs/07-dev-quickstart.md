@@ -25,6 +25,14 @@ bash scripts/install.sh --skip-docker-install --mirror cn
 cargo run -p api
 ```
 
+RBAC is enabled by default (`AUTH_RBAC_ENABLED=true`).
+For local development, a bootstrap admin user `admin` is created automatically by migration.
+When calling CMDB APIs directly, include:
+
+```bash
+AUTH_HEADER='x-auth-user: admin'
+```
+
 Health check:
 
 ```bash
@@ -36,10 +44,11 @@ CMDB field definition APIs:
 
 ```bash
 # list custom field definitions
-curl http://127.0.0.1:8080/api/v1/cmdb/field-definitions
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/field-definitions
 
 # create a custom field definition
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/field-definitions \
+  -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{
     "field_key": "serial_no",
@@ -55,10 +64,11 @@ CMDB asset APIs:
 
 ```bash
 # list assets
-curl http://127.0.0.1:8080/api/v1/cmdb/assets
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/assets
 
 # create an asset
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets \
+  -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{
     "asset_class": "server",
@@ -77,7 +87,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets \
   }'
 
 # scan lookup by qr or barcode
-curl http://127.0.0.1:8080/api/v1/cmdb/assets/by-code/QR-100001?mode=auto
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/assets/by-code/QR-100001?mode=auto
 ```
 
 CMDB relation APIs:
@@ -216,6 +226,12 @@ Optional frontend API base override:
 
 ```bash
 VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev
+```
+
+Optional frontend auth user override for RBAC-protected APIs:
+
+```bash
+VITE_AUTH_USER=admin npm run dev
 ```
 
 ## 5. One-Command Dev Entry

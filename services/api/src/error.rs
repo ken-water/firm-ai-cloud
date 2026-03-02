@@ -14,6 +14,8 @@ pub enum AppError {
     #[error("{0}")]
     Validation(String),
     #[error("{0}")]
+    Forbidden(String),
+    #[error("{0}")]
     NotFound(String),
     #[error(transparent)]
     Database(#[from] sqlx::Error),
@@ -30,6 +32,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::Database(err) => {
                 error!(error = ?err, "database request failed");

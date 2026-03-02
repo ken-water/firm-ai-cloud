@@ -147,6 +147,7 @@ type NewNotificationSubscriptionForm = {
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8080";
+const API_AUTH_USER = (import.meta.env.VITE_AUTH_USER ?? "admin").trim();
 
 const defaultFieldForm: NewFieldForm = {
   field_key: "",
@@ -230,7 +231,7 @@ export function App() {
     setLoadingAssets(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/assets?limit=50`);
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets?limit=50`);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -247,7 +248,7 @@ export function App() {
     setLoadingFields(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/field-definitions`);
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/field-definitions`);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
@@ -264,7 +265,7 @@ export function App() {
     setLoadingRelations(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/relations?asset_id=${assetId}`);
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/relations?asset_id=${assetId}`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
@@ -281,7 +282,7 @@ export function App() {
     setLoadingDiscoveryJobs(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/jobs`);
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/jobs`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
@@ -298,7 +299,7 @@ export function App() {
     setLoadingDiscoveryCandidates(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/candidates?review_status=pending&limit=100`);
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/candidates?review_status=pending&limit=100`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
@@ -315,7 +316,7 @@ export function App() {
     setLoadingNotificationChannels(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-channels`);
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-channels`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
@@ -332,7 +333,7 @@ export function App() {
     setLoadingNotificationTemplates(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-templates`);
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-templates`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
@@ -349,7 +350,7 @@ export function App() {
     setLoadingNotificationSubscriptions(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-subscriptions`);
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-subscriptions`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
@@ -388,7 +389,7 @@ export function App() {
         custom_fields: customFields
       };
 
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/assets`, {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -430,7 +431,7 @@ export function App() {
           .filter((item) => item.length > 0);
       }
 
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/field-definitions`, {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/field-definitions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -465,7 +466,7 @@ export function App() {
     setCreatingRelation(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/relations`, {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/relations`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -500,7 +501,7 @@ export function App() {
       setDeletingRelationId(relationId);
       setError(null);
       try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/relations/${relationId}`, {
+        const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/relations/${relationId}`, {
           method: "DELETE"
         });
         if (!response.ok) {
@@ -520,7 +521,7 @@ export function App() {
     setRunningDiscoveryJobId(jobId);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/jobs/${jobId}/run`, {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/jobs/${jobId}/run`, {
         method: "POST"
       });
       if (!response.ok) {
@@ -539,7 +540,7 @@ export function App() {
       setReviewingCandidateId(candidateId);
       setError(null);
       try {
-        const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/candidates/${candidateId}/${action}`, {
+        const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/candidates/${candidateId}/${action}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json"
@@ -590,7 +591,7 @@ export function App() {
     setCreatingNotificationChannel(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-channels`, {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-channels`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -634,7 +635,7 @@ export function App() {
     setCreatingNotificationTemplate(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-templates`, {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-templates`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -672,7 +673,7 @@ export function App() {
     setCreatingNotificationSubscription(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-subscriptions`, {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-subscriptions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -707,7 +708,7 @@ export function App() {
     setError(null);
     setScanResult(null);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${API_BASE_URL}/api/v1/cmdb/assets/by-code/${encodeURIComponent(normalized)}?mode=${scanMode}`
       );
       if (!response.ok) {
@@ -1485,6 +1486,18 @@ function readErrorMessage(response: Response): Promise<string> {
       return `HTTP ${response.status}`;
     })
     .catch(() => `HTTP ${response.status}`);
+}
+
+function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers ?? undefined);
+  if (API_AUTH_USER.length > 0) {
+    headers.set("x-auth-user", API_AUTH_USER);
+  }
+
+  return fetch(input, {
+    ...init,
+    headers
+  });
 }
 
 function trimToNull(value: string): string | null {

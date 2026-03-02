@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub log_level: String,
     pub database_url: String,
     pub db_max_connections: u32,
+    pub rbac_enabled: bool,
 }
 
 impl AppConfig {
@@ -21,6 +22,7 @@ impl AppConfig {
             "postgres://cloudops:cloudops_local_change_me@127.0.0.1:5432/cloudops".to_string()
         });
         let db_max_connections = parse_u32_env("DB_MAX_CONNECTIONS", 10)?;
+        let rbac_enabled = parse_bool_env("AUTH_RBAC_ENABLED", true)?;
 
         Ok(Self {
             host,
@@ -28,6 +30,7 @@ impl AppConfig {
             log_level,
             database_url,
             db_max_connections,
+            rbac_enabled,
         })
     }
 
@@ -62,6 +65,23 @@ fn parse_u32_env(key: &str, default: u32) -> Result<u32, ConfigError> {
     }
 }
 
+fn parse_bool_env(key: &str, default: bool) -> Result<bool, ConfigError> {
+    match env::var(key) {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "1" | "true" | "yes" | "on" => Ok(true),
+                "0" | "false" | "no" | "off" => Ok(false),
+                _ => Err(ConfigError::InvalidBool {
+                    key: key.to_string(),
+                    value,
+                }),
+            }
+        }
+        Err(_) => Ok(default),
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("invalid number for {key}: {value}")]
@@ -70,6 +90,8 @@ pub enum ConfigError {
         value: String,
         source: ParseIntError,
     },
+    #[error("invalid boolean for {key}: {value}")]
+    InvalidBool { key: String, value: String },
 }
 
 #[cfg(test)]
@@ -82,6 +104,7 @@ mod tests {
         assert_eq!(cfg.port, 8080);
         assert_eq!(cfg.host, "0.0.0.0");
         assert_eq!(cfg.db_max_connections, 10);
+        assert!(cfg.rbac_enabled);
         assert_eq!(
             cfg.database_url,
             "postgres://cloudops:cloudops_local_change_me@127.0.0.1:5432/cloudops"
