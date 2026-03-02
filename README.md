@@ -69,6 +69,7 @@ Details: [docs/06-offline-installation.md](docs/06-offline-installation.md)
 - [Technical blueprint](docs/03-technical-blueprint.md)
 - [ADR-0001 data stack decision](docs/04-adr-data-and-search-stack.md)
 - [Developer quickstart](docs/07-dev-quickstart.md)
+- [v0.0.2 sprint backlog](docs/09-v0.0.2-sprint-backlog.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
