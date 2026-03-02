@@ -1,0 +1,11 @@
+{
+  "app": {
+    "title": "CloudOps One",
+    "subtitle": "English-first, localization-ready cloud operations platform.",
+    "points": {
+      "cmdb": "CMDB and asset relationship management",
+      "monitoring": "Real-time Zabbix-based monitoring dashboards",
+      "ticketing": "Ticketing and workflow automation"
+    }
+  }
+}

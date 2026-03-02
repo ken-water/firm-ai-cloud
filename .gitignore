@@ -1,0 +1,13 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node
+node_modules/
+apps/web-console/dist/
+
+# Env / local overrides
+deploy/.env
+
+# Build artifacts
+dist/
