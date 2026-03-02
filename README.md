@@ -70,6 +70,7 @@ Details: [docs/06-offline-installation.md](docs/06-offline-installation.md)
 - [ADR-0001 data stack decision](docs/04-adr-data-and-search-stack.md)
 - [Developer quickstart](docs/07-dev-quickstart.md)
 - [v0.0.2 sprint backlog](docs/09-v0.0.2-sprint-backlog.md)
+- [Security operations guide (v0.0.3)](docs/11-security-operations-v0.0.3.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 

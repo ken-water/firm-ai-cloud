@@ -20,6 +20,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Developer OIDC smoke test script: `scripts/test-oidc-dev.sh`.
 - GitHub Actions CI workflow: `.github/workflows/ci.yml`.
 - Web console sign-in session panel with header-mode and bearer-token mode.
+- Security operations guide for v0.0.3: `docs/11-security-operations-v0.0.3.md`.
 
 ### Changed
 
@@ -29,6 +30,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - RBAC coverage doc now includes CI verification and auth suite runbook.
 - Web console now applies role-aware action visibility for CMDB/discovery/notification write operations.
 - Web console now detects bearer session expiry and returns users to sign-in.
+- Release governance now includes a mandatory security-change release checklist.
 
 ### Fixed
 

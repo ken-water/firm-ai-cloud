@@ -98,3 +98,17 @@ Before publishing, confirm all items:
 The release owner is responsible for quality and completeness of release notes.
 
 Pull requests that create a release tag without detailed release notes should be rejected.
+
+## 9. Security Change Checklist (Mandatory for Auth/RBAC/Audit Scope)
+
+If a release includes security-sensitive changes (authentication, RBAC, audit, session handling, identity mapping), add the checklist below to release preparation:
+
+- [ ] Security-impact endpoints and role/permission changes are explicitly documented.
+- [ ] OIDC environment variable changes and default behavior are documented.
+- [ ] Session/token lifecycle changes (issuance, expiry, revoke) are documented.
+- [ ] Audit logging behavior changes and retention impact are documented.
+- [ ] Validation includes auth/RBAC regression coverage (unit/integration/CI).
+
+Reference:
+
+- `docs/11-security-operations-v0.0.3.md`
