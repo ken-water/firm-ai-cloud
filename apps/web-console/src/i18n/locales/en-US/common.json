@@ -50,6 +50,36 @@
         "enabled": "Enabled"
       }
     },
+    "relations": {
+      "title": "Asset Relations",
+      "summary": "Upstream: {{upstream}} | Downstream: {{downstream}}",
+      "form": {
+        "sourceAsset": "Source Asset",
+        "targetAsset": "Target Asset",
+        "selectTarget": "Select target asset",
+        "relationType": "Relation Type"
+      },
+      "actions": {
+        "refresh": "Refresh Relations",
+        "create": "Create Relation",
+        "delete": "Delete"
+      },
+      "messages": {
+        "empty": "No relations found for selected asset.",
+        "noAssets": "No assets available. Create assets first.",
+        "selectSource": "Please select a source asset.",
+        "selectTarget": "Please select a target asset."
+      },
+      "table": {
+        "id": "ID",
+        "source": "Source",
+        "target": "Target",
+        "type": "Relation Type",
+        "origin": "Source Type",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      }
+    },
     "assets": {
       "title": "CMDB Assets"
     },

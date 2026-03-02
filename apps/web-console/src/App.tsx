@@ -40,6 +40,16 @@ type FieldDefinition = {
   updated_at: string;
 };
 
+type AssetRelation = {
+  id: number;
+  src_asset_id: number;
+  dst_asset_id: number;
+  relation_type: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type NewFieldForm = {
   field_key: string;
   name: string;
@@ -48,6 +58,12 @@ type NewFieldForm = {
   options_csv: string;
   required: boolean;
   scanner_enabled: boolean;
+};
+
+type NewRelationForm = {
+  dst_asset_id: string;
+  relation_type: string;
+  source: string;
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8080";
@@ -60,6 +76,12 @@ const defaultFieldForm: NewFieldForm = {
   options_csv: "",
   required: false,
   scanner_enabled: false
+};
+
+const defaultRelationForm: NewRelationForm = {
+  dst_asset_id: "",
+  relation_type: "depends_on",
+  source: "manual"
 };
 
 export function App() {
@@ -76,6 +98,12 @@ export function App() {
   const [scanMode, setScanMode] = useState<"auto" | "qr" | "barcode">("auto");
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<Asset | null>(null);
+  const [relations, setRelations] = useState<AssetRelation[]>([]);
+  const [loadingRelations, setLoadingRelations] = useState(false);
+  const [selectedAssetId, setSelectedAssetId] = useState<string>("");
+  const [creatingRelation, setCreatingRelation] = useState(false);
+  const [deletingRelationId, setDeletingRelationId] = useState<number | null>(null);
+  const [newRelation, setNewRelation] = useState<NewRelationForm>(defaultRelationForm);
 
   const loadAssets = useCallback(async () => {
     setLoadingAssets(true);
@@ -108,6 +136,23 @@ export function App() {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setLoadingFields(false);
+    }
+  }, []);
+
+  const loadRelations = useCallback(async (assetId: number) => {
+    setLoadingRelations(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/relations?asset_id=${assetId}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AssetRelation[] = await response.json();
+      setRelations(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setLoadingRelations(false);
     }
   }, []);
 
@@ -199,6 +244,72 @@ export function App() {
     }
   }, [newField, loadFieldDefinitions]);
 
+  const createRelation = useCallback(async () => {
+    const srcAssetId = Number.parseInt(selectedAssetId, 10);
+    const dstAssetId = Number.parseInt(newRelation.dst_asset_id, 10);
+    if (!Number.isFinite(srcAssetId) || srcAssetId <= 0) {
+      setError(t("cmdb.relations.messages.selectSource"));
+      return;
+    }
+    if (!Number.isFinite(dstAssetId) || dstAssetId <= 0) {
+      setError(t("cmdb.relations.messages.selectTarget"));
+      return;
+    }
+
+    setCreatingRelation(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/relations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          src_asset_id: srcAssetId,
+          dst_asset_id: dstAssetId,
+          relation_type: newRelation.relation_type,
+          source: newRelation.source
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      setNewRelation((prev) => ({ ...prev, dst_asset_id: "" }));
+      await loadRelations(srcAssetId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setCreatingRelation(false);
+    }
+  }, [loadRelations, newRelation.dst_asset_id, newRelation.relation_type, newRelation.source, selectedAssetId, t]);
+
+  const deleteRelation = useCallback(
+    async (relationId: number) => {
+      const srcAssetId = Number.parseInt(selectedAssetId, 10);
+      if (!Number.isFinite(srcAssetId) || srcAssetId <= 0) {
+        return;
+      }
+
+      setDeletingRelationId(relationId);
+      setError(null);
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/v1/cmdb/relations/${relationId}`, {
+          method: "DELETE"
+        });
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response));
+        }
+        await loadRelations(srcAssetId);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "unknown error");
+      } finally {
+        setDeletingRelationId(null);
+      }
+    },
+    [loadRelations, selectedAssetId]
+  );
+
   const findAssetByCode = useCallback(async () => {
     const normalized = scanCode.trim();
     if (!normalized) {
@@ -229,7 +340,40 @@ export function App() {
     void Promise.all([loadAssets(), loadFieldDefinitions()]);
   }, [loadAssets, loadFieldDefinitions]);
 
+  useEffect(() => {
+    if (assets.length === 0 || selectedAssetId) {
+      return;
+    }
+    const firstAssetId = String(assets[0].id);
+    setSelectedAssetId(firstAssetId);
+  }, [assets, selectedAssetId]);
+
+  useEffect(() => {
+    const assetId = Number.parseInt(selectedAssetId, 10);
+    if (!Number.isFinite(assetId) || assetId <= 0) {
+      setRelations([]);
+      return;
+    }
+    void loadRelations(assetId);
+  }, [loadRelations, selectedAssetId]);
+
   const emptyState = useMemo(() => assets.length === 0, [assets]);
+  const assetNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const asset of assets) {
+      map.set(asset.id, asset.name);
+    }
+    return map;
+  }, [assets]);
+  const selectedAssetNumericId = useMemo(() => Number.parseInt(selectedAssetId, 10), [selectedAssetId]);
+  const relationSummary = useMemo(() => {
+    if (!Number.isFinite(selectedAssetNumericId) || selectedAssetNumericId <= 0) {
+      return { upstream: 0, downstream: 0 };
+    }
+    const upstream = relations.filter((item) => item.dst_asset_id === selectedAssetNumericId).length;
+    const downstream = relations.filter((item) => item.src_asset_id === selectedAssetNumericId).length;
+    return { upstream, downstream };
+  }, [relations, selectedAssetNumericId]);
 
   return (
     <main style={{ fontFamily: "sans-serif", padding: "2rem", lineHeight: 1.5 }}>
@@ -374,6 +518,124 @@ export function App() {
               </tbody>
             </table>
           </div>
+        )}
+      </section>
+
+      <section style={{ marginBottom: "1.5rem" }}>
+        <h2 style={sectionTitleStyle}>{t("cmdb.relations.title")}</h2>
+        {emptyState ? (
+          <p>{t("cmdb.relations.messages.noAssets")}</p>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.5rem" }}>
+              <span>{t("cmdb.relations.form.sourceAsset")}</span>
+              <select value={selectedAssetId} onChange={(event) => setSelectedAssetId(event.target.value)}>
+                {assets.map((asset) => (
+                  <option key={asset.id} value={asset.id}>
+                    #{asset.id} {asset.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => {
+                  const id = Number.parseInt(selectedAssetId, 10);
+                  if (Number.isFinite(id) && id > 0) {
+                    void loadRelations(id);
+                  }
+                }}
+                disabled={loadingRelations}
+              >
+                {loadingRelations ? t("cmdb.actions.loading") : t("cmdb.relations.actions.refresh")}
+              </button>
+            </div>
+
+            <p style={{ marginTop: 0, marginBottom: "0.75rem" }}>
+              {t("cmdb.relations.summary", {
+                upstream: relationSummary.upstream,
+                downstream: relationSummary.downstream
+              })}
+            </p>
+
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem", alignItems: "center" }}>
+              <span>{t("cmdb.relations.form.targetAsset")}</span>
+              <select
+                value={newRelation.dst_asset_id}
+                onChange={(event) => setNewRelation((prev) => ({ ...prev, dst_asset_id: event.target.value }))}
+              >
+                <option value="">{t("cmdb.relations.form.selectTarget")}</option>
+                {assets.map((asset) => (
+                  <option key={asset.id} value={asset.id}>
+                    #{asset.id} {asset.name}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                value={newRelation.relation_type}
+                onChange={(event) => setNewRelation((prev) => ({ ...prev, relation_type: event.target.value }))}
+                placeholder={t("cmdb.relations.form.relationType")}
+              />
+
+              <select
+                value={newRelation.source}
+                onChange={(event) => setNewRelation((prev) => ({ ...prev, source: event.target.value }))}
+              >
+                <option value="manual">manual</option>
+                <option value="discovery">discovery</option>
+                <option value="import">import</option>
+              </select>
+
+              <button onClick={() => void createRelation()} disabled={creatingRelation}>
+                {creatingRelation ? t("cmdb.actions.creating") : t("cmdb.relations.actions.create")}
+              </button>
+            </div>
+
+            {relations.length === 0 ? (
+              <p>{t("cmdb.relations.messages.empty")}</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "900px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={cellStyle}>{t("cmdb.relations.table.id")}</th>
+                      <th style={cellStyle}>{t("cmdb.relations.table.source")}</th>
+                      <th style={cellStyle}>{t("cmdb.relations.table.target")}</th>
+                      <th style={cellStyle}>{t("cmdb.relations.table.type")}</th>
+                      <th style={cellStyle}>{t("cmdb.relations.table.origin")}</th>
+                      <th style={cellStyle}>{t("cmdb.relations.table.updatedAt")}</th>
+                      <th style={cellStyle}>{t("cmdb.relations.table.actions")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {relations.map((relation) => (
+                      <tr key={relation.id}>
+                        <td style={cellStyle}>{relation.id}</td>
+                        <td style={cellStyle}>
+                          #{relation.src_asset_id} {assetNameById.get(relation.src_asset_id) ?? "-"}
+                        </td>
+                        <td style={cellStyle}>
+                          #{relation.dst_asset_id} {assetNameById.get(relation.dst_asset_id) ?? "-"}
+                        </td>
+                        <td style={cellStyle}>{relation.relation_type}</td>
+                        <td style={cellStyle}>{relation.source}</td>
+                        <td style={cellStyle}>{new Date(relation.updated_at).toLocaleString()}</td>
+                        <td style={cellStyle}>
+                          <button
+                            onClick={() => void deleteRelation(relation.id)}
+                            disabled={deletingRelationId === relation.id}
+                          >
+                            {deletingRelationId === relation.id
+                              ? t("cmdb.actions.loading")
+                              : t("cmdb.relations.actions.delete")}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
       </section>
 
