@@ -32,12 +32,39 @@ curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/api/v1/ping
 ```
 
+CMDB asset APIs:
+
+```bash
+# list assets
+curl http://127.0.0.1:8080/api/v1/cmdb/assets
+
+# create an asset
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "asset_class": "server",
+    "name": "sample-asset",
+    "hostname": "sample.local",
+    "ip": "10.0.0.10",
+    "status": "active",
+    "site": "dc-a",
+    "department": "platform",
+    "owner": "ops"
+  }'
+```
+
 ## 4. Run Frontend
 
 ```bash
 cd apps/web-console
 npm install
 npm run dev
+```
+
+Optional frontend API base override:
+
+```bash
+VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev
 ```
 
 ## 5. One-Command Dev Entry

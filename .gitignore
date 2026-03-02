@@ -5,6 +5,8 @@ target/
 # Node
 node_modules/
 apps/web-console/dist/
+apps/web-console/src/**/*.js
+apps/web-console/tsconfig.tsbuildinfo
 
 # Env / local overrides
 deploy/.env

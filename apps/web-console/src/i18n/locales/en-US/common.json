@@ -1,11 +1,30 @@
 {
   "app": {
     "title": "CloudOps One",
-    "subtitle": "English-first, localization-ready cloud operations platform.",
-    "points": {
-      "cmdb": "CMDB and asset relationship management",
-      "monitoring": "Real-time Zabbix-based monitoring dashboards",
-      "ticketing": "Ticketing and workflow automation"
+    "subtitle": "CMDB asset list (first implementation slice)."
+  },
+  "cmdb": {
+    "actions": {
+      "refresh": "Refresh",
+      "loading": "Loading...",
+      "createSample": "Create Sample Asset",
+      "creating": "Creating..."
+    },
+    "messages": {
+      "empty": "No assets found. Create one sample asset to get started.",
+      "error": "Request failed"
+    },
+    "table": {
+      "id": "ID",
+      "class": "Class",
+      "name": "Name",
+      "hostname": "Hostname",
+      "ip": "IP",
+      "status": "Status",
+      "site": "Site",
+      "department": "Department",
+      "owner": "Owner",
+      "updatedAt": "Updated At"
     }
   }
 }
