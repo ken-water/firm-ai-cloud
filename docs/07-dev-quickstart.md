@@ -27,11 +27,13 @@ cargo run -p api
 
 RBAC is enabled by default (`AUTH_RBAC_ENABLED=true`).
 For local development, a bootstrap admin user `admin` is created automatically by migration.
-When calling CMDB APIs directly, include:
+When calling protected APIs directly, include:
 
 ```bash
 AUTH_HEADER='x-auth-user: admin'
 ```
+
+All `/api/v1/cmdb/*` and `/api/v1/iam/*` endpoints below require this header.
 
 Health check:
 
@@ -58,6 +60,34 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/field-definitions \
     "required": true,
     "scanner_enabled": true
   }'
+```
+
+IAM APIs (admin only):
+
+```bash
+# list users
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/iam/users
+
+# create a local user
+curl -X POST http://127.0.0.1:8080/api/v1/iam/users \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "username": "operator01",
+    "display_name": "Ops Operator 01",
+    "email": "operator01@example.local",
+    "auth_source": "local",
+    "is_enabled": true
+  }'
+
+# list roles
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/iam/roles
+
+# bind role 2 to user 2
+curl -X POST -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/iam/users/2/roles/2
+
+# unbind role
+curl -X DELETE -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/iam/users/2/roles/2
 ```
 
 CMDB asset APIs:

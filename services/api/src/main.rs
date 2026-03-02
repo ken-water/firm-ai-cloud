@@ -1,6 +1,7 @@
 mod auth;
 mod cmdb;
 mod error;
+mod iam;
 mod state;
 
 use std::net::SocketAddr;
@@ -77,14 +78,25 @@ fn build_router(state: AppState) -> Router {
 
     let mut cmdb_routes = cmdb::routes();
     if state.rbac_enabled {
-        cmdb_routes = cmdb_routes
-            .route_layer(axum::middleware::from_fn_with_state(state.clone(), auth::rbac_guard));
+        cmdb_routes = cmdb_routes.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::rbac_guard,
+        ));
+    }
+
+    let mut iam_routes = iam::routes();
+    if state.rbac_enabled {
+        iam_routes = iam_routes.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::rbac_guard,
+        ));
     }
 
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/v1/ping", get(ping_handler))
         .nest("/api/v1/cmdb", cmdb_routes)
+        .nest("/api/v1/iam", iam_routes)
         .with_state(state)
         .layer(cors)
 }

@@ -35,7 +35,9 @@ pub async fn rbac_guard(
 
     let user = read_auth_user(request.headers())?;
     let permission = required_permission(&method, &path).ok_or_else(|| {
-        AppError::Forbidden(format!("no RBAC permission mapping found for route '{path}'"))
+        AppError::Forbidden(format!(
+            "no RBAC permission mapping found for route '{path}'"
+        ))
     })?;
 
     let permission_check = check_permission(&state, user, &permission).await?;
@@ -82,15 +84,29 @@ fn read_auth_user(headers: &HeaderMap) -> AppResult<&str> {
 }
 
 fn required_permission(method: &Method, path: &str) -> Option<String> {
-    let base = if path.starts_with("/api/v1/cmdb/discovery/notification-") {
+    let normalized = normalize_rbac_path(path);
+
+    if normalized.starts_with("/iam/users")
+        || normalized.starts_with("/iam/roles")
+        || normalized.starts_with("/users")
+        || normalized.starts_with("/roles")
+    {
+        return Some("system.admin".to_string());
+    }
+
+    let base = if normalized.starts_with("/cmdb/discovery/notification-")
+        || normalized.starts_with("/discovery/notification-")
+    {
         "cmdb.notifications"
-    } else if path.starts_with("/api/v1/cmdb/discovery") {
+    } else if normalized.starts_with("/cmdb/discovery") || normalized.starts_with("/discovery") {
         "cmdb.discovery"
-    } else if path.starts_with("/api/v1/cmdb/field-definitions") {
+    } else if normalized.starts_with("/cmdb/field-definitions")
+        || normalized.starts_with("/field-definitions")
+    {
         "cmdb.field_definitions"
-    } else if path.starts_with("/api/v1/cmdb/relations") {
+    } else if normalized.starts_with("/cmdb/relations") || normalized.starts_with("/relations") {
         "cmdb.relations"
-    } else if path.starts_with("/api/v1/cmdb/assets") {
+    } else if normalized.starts_with("/cmdb/assets") || normalized.starts_with("/assets") {
         "cmdb.assets"
     } else {
         return None;
@@ -103,6 +119,18 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
     };
 
     Some(format!("{base}.{action}"))
+}
+
+fn normalize_rbac_path(path: &str) -> String {
+    if let Some(stripped) = path.strip_prefix("/api/v1") {
+        if stripped.is_empty() {
+            "/".to_string()
+        } else {
+            stripped.to_string()
+        }
+    } else {
+        path.to_string()
+    }
 }
 
 fn is_read_method(method: &Method) -> bool {
@@ -166,8 +194,11 @@ mod tests {
     #[test]
     fn maps_notification_permissions() {
         assert_eq!(
-            required_permission(&Method::GET, "/api/v1/cmdb/discovery/notification-subscriptions")
-                .as_deref(),
+            required_permission(
+                &Method::GET,
+                "/api/v1/cmdb/discovery/notification-subscriptions"
+            )
+            .as_deref(),
             Some("cmdb.notifications.read")
         );
     }
@@ -177,6 +208,30 @@ mod tests {
         assert_eq!(
             required_permission(&Method::POST, "/api/v1/cmdb/discovery/jobs/1/run").as_deref(),
             Some("cmdb.discovery.write")
+        );
+    }
+
+    #[test]
+    fn maps_iam_permission() {
+        assert_eq!(
+            required_permission(&Method::GET, "/api/v1/iam/users").as_deref(),
+            Some("system.admin")
+        );
+    }
+
+    #[test]
+    fn maps_relative_assets_permission() {
+        assert_eq!(
+            required_permission(&Method::GET, "/assets").as_deref(),
+            Some("cmdb.assets.read")
+        );
+    }
+
+    #[test]
+    fn maps_relative_iam_permission() {
+        assert_eq!(
+            required_permission(&Method::GET, "/users").as_deref(),
+            Some("system.admin")
         );
     }
 
