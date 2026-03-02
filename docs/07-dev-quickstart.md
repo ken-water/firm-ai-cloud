@@ -80,6 +80,29 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets \
 curl http://127.0.0.1:8080/api/v1/cmdb/assets/by-code/QR-100001?mode=auto
 ```
 
+CMDB relation APIs:
+
+```bash
+# create a relation: source asset depends on target asset
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/relations \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "src_asset_id": 1,
+    "dst_asset_id": 2,
+    "relation_type": "depends_on",
+    "source": "manual"
+  }'
+
+# list all relations that involve asset 1
+curl "http://127.0.0.1:8080/api/v1/cmdb/relations?asset_id=1"
+
+# get one-hop relation graph for asset 1
+curl "http://127.0.0.1:8080/api/v1/cmdb/assets/1/graph"
+
+# delete relation
+curl -X DELETE http://127.0.0.1:8080/api/v1/cmdb/relations/1
+```
+
 CMDB discovery APIs:
 
 ```bash
@@ -211,3 +234,29 @@ This command:
 ```bash
 bash scripts/dev-down.sh
 ```
+
+## 7. Troubleshooting
+
+### 7.1 Discovery job run fails
+
+- Check `source_type` and `scope` format first.
+- For `zabbix_hosts`, confirm:
+  - endpoint URL is reachable
+  - token/auth is valid
+  - response includes `result` array
+- Query recent events:
+  - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/events?limit=20"`
+
+### 7.2 Candidate approve fails
+
+- Common reason: candidate already reviewed (not `pending`).
+- Verify candidate state:
+  - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates?limit=50"`
+- If merge/create conflicts happen, retry after checking duplicated assets (`hostname + ip`).
+
+### 7.3 Notification not delivered
+
+- Verify channel/template/subscription all enabled.
+- Check delivery logs:
+  - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-deliveries?limit=50"`
+- For webhook channels, inspect `status`, `attempts`, `response_code`, and `last_error`.
