@@ -8,6 +8,20 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
+- None
+
+### Changed
+
+- None
+
+### Fixed
+
+- None
+
+## [0.0.3] - 2026-03-02
+
+### Added
+
 - OIDC baseline authentication APIs:
   - `GET /api/v1/auth/oidc/start`
   - `GET /api/v1/auth/oidc/callback`
