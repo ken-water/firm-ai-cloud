@@ -87,3 +87,27 @@ Workflow APIs are not implemented yet, but RBAC mapping is already reserved:
 - Integration matrix script:
   - `scripts/test-rbac-policy.sh`
   - verifies no-header deny, operator/viewer allow/deny matrix, and English forbidden response text.
+- OIDC + bearer regression script:
+  - `scripts/test-oidc-dev.sh`
+  - verifies invalid bearer deny, role-scoped access, and token revocation behavior.
+
+## 6. CI Verification
+
+GitHub Actions workflow:
+
+- `.github/workflows/ci.yml`
+
+Default CI includes:
+
+- Rust format check, compile check, and API unit tests.
+- Web console build verification.
+- Auth/RBAC integration suite against a live API + PostgreSQL service:
+  - `bash scripts/test-rbac-policy.sh`
+  - `bash scripts/test-oidc-dev.sh`
+
+Run the auth suite locally (API must be running on `127.0.0.1:8080`):
+
+```bash
+bash scripts/test-rbac-policy.sh
+bash scripts/test-oidc-dev.sh
+```

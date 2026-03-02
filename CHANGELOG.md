@@ -18,11 +18,14 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - `auth_oidc_login_states`
   - `auth_sessions`
 - Developer OIDC smoke test script: `scripts/test-oidc-dev.sh`.
+- GitHub Actions CI workflow: `.github/workflows/ci.yml`.
 
 ### Changed
 
 - RBAC principal resolution now supports either `x-auth-user` header or `Authorization: Bearer <session_token>`.
 - Developer quickstart now documents OIDC env settings, bearer-token flow, and OIDC smoke validation.
+- OIDC dev smoke script now verifies invalid-token deny and session revocation behavior.
+- RBAC coverage doc now includes CI verification and auth suite runbook.
 
 ### Fixed
 

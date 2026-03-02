@@ -88,6 +88,14 @@ fi
 
 AUTHZ="Authorization: Bearer ${ACCESS_TOKEN}"
 
+log "Invalid bearer token should be denied"
+STATUS_INVALID="$(request_code GET "${API_BASE_URL}/api/v1/auth/me" "" "Authorization: Bearer invalid-token")"
+if [[ "$STATUS_INVALID" != "403" ]]; then
+  echo "ERROR: expected 403 for invalid bearer token, got ${STATUS_INVALID}" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
+
 log "Bearer token should access protected read APIs"
 STATUS_READ="$(request_code GET "${API_BASE_URL}/api/v1/cmdb/assets" "" "$AUTHZ")"
 if [[ "$STATUS_READ" != "200" ]]; then
@@ -104,4 +112,25 @@ if [[ "$STATUS_WRITE" != "403" ]]; then
   exit 1
 fi
 
-log "OIDC dev-mode flow and bearer RBAC checks passed"
+log "Logout should revoke current session token"
+STATUS_LOGOUT="$(request_code POST "${API_BASE_URL}/api/v1/auth/logout" "" "$AUTHZ")"
+if [[ "$STATUS_LOGOUT" != "200" ]]; then
+  echo "ERROR: expected 200 on logout, got ${STATUS_LOGOUT}" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
+grep -q '"revoked"[[:space:]]*:[[:space:]]*true' "$LAST_BODY_FILE" || {
+  echo "ERROR: logout response does not confirm revoked session" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+}
+
+log "Revoked token should no longer authenticate"
+STATUS_REVOKED="$(request_code GET "${API_BASE_URL}/api/v1/auth/me" "" "$AUTHZ")"
+if [[ "$STATUS_REVOKED" != "403" ]]; then
+  echo "ERROR: expected 403 for revoked bearer token, got ${STATUS_REVOKED}" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
+
+log "OIDC dev-mode flow, bearer RBAC checks, and revocation checks passed"
