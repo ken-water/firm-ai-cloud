@@ -69,3 +69,19 @@ Details: [docs/06-offline-installation.md](docs/06-offline-installation.md)
 - [Technical blueprint](docs/03-technical-blueprint.md)
 - [ADR-0001 data stack decision](docs/04-adr-data-and-search-stack.md)
 - [Developer quickstart](docs/07-dev-quickstart.md)
+- [Release governance](docs/08-release-governance.md)
+- [Changelog](CHANGELOG.md)
+
+## Release Standards
+
+Every version release must include detailed English release notes.
+
+Use:
+
+```bash
+bash scripts/validate-release-note.sh release-notes/vX.Y.Z.md
+```
+
+Template:
+
+- [`release-notes/TEMPLATE.md`](release-notes/TEMPLATE.md)
