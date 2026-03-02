@@ -1,11 +1,12 @@
 {
   "app": {
     "title": "CloudOps One",
-    "subtitle": "CMDB asset list (first implementation slice)."
+    "subtitle": "Integrated CMDB, monitoring, and workflow platform."
   },
   "cmdb": {
     "actions": {
-      "refresh": "Refresh",
+      "refreshAssets": "Refresh Assets",
+      "refreshFields": "Refresh Field Definitions",
       "loading": "Loading...",
       "createSample": "Create Sample Asset",
       "creating": "Creating..."
@@ -13,6 +14,44 @@
     "messages": {
       "empty": "No assets found. Create one sample asset to get started.",
       "error": "Request failed"
+    },
+    "scan": {
+      "title": "Scan Lookup",
+      "placeholder": "Input QR or barcode value",
+      "find": "Find Asset",
+      "hit": "Matched Asset",
+      "codeRequired": "Code is required",
+      "modes": {
+        "auto": "Auto",
+        "qr": "QR Only",
+        "barcode": "Barcode Only"
+      }
+    },
+    "fields": {
+      "title": "Custom Field Definitions",
+      "empty": "No custom fields defined yet.",
+      "form": {
+        "fieldKey": "field_key (e.g. serial_no)",
+        "name": "Display Name",
+        "maxLength": "Max Length",
+        "enumOptions": "Enum options, comma separated",
+        "required": "Required",
+        "scannerEnabled": "Scanner Enabled",
+        "create": "Create Field"
+      },
+      "table": {
+        "key": "Key",
+        "name": "Name",
+        "type": "Type",
+        "maxLength": "Max Length",
+        "required": "Required",
+        "options": "Options",
+        "scannerEnabled": "Scanner",
+        "enabled": "Enabled"
+      }
+    },
+    "assets": {
+      "title": "CMDB Assets"
     },
     "table": {
       "id": "ID",
@@ -24,6 +63,9 @@
       "site": "Site",
       "department": "Department",
       "owner": "Owner",
+      "qrCode": "QR Code",
+      "barcode": "Barcode",
+      "customFields": "Custom Fields",
       "updatedAt": "Updated At"
     }
   }

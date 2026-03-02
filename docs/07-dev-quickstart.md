@@ -32,6 +32,25 @@ curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/api/v1/ping
 ```
 
+CMDB field definition APIs:
+
+```bash
+# list custom field definitions
+curl http://127.0.0.1:8080/api/v1/cmdb/field-definitions
+
+# create a custom field definition
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/field-definitions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "field_key": "serial_no",
+    "name": "Serial Number",
+    "field_type": "text",
+    "max_length": 64,
+    "required": true,
+    "scanner_enabled": true
+  }'
+```
+
 CMDB asset APIs:
 
 ```bash
@@ -49,8 +68,16 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets \
     "status": "active",
     "site": "dc-a",
     "department": "platform",
-    "owner": "ops"
+    "owner": "ops",
+    "qr_code": "QR-100001",
+    "barcode": "BC-100001",
+    "custom_fields": {
+      "serial_no": "SN-2026-001"
+    }
   }'
+
+# scan lookup by qr or barcode
+curl http://127.0.0.1:8080/api/v1/cmdb/assets/by-code/QR-100001?mode=auto
 ```
 
 ## 4. Run Frontend
