@@ -78,6 +78,8 @@ Details: [docs/06-offline-installation.md](docs/06-offline-installation.md)
 
 Every version release must include detailed English release notes.
 
+GitHub Actions CI is manual-by-default to control resource usage (`workflow_dispatch` only).
+
 Use:
 
 ```bash

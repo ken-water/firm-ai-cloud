@@ -97,13 +97,18 @@ GitHub Actions workflow:
 
 - `.github/workflows/ci.yml`
 
-Default CI includes:
+Manual CI (workflow_dispatch) includes:
 
 - Rust format check, compile check, and API unit tests.
 - Web console build verification.
 - Auth/RBAC integration suite against a live API + PostgreSQL service:
   - `bash scripts/test-rbac-policy.sh`
   - `bash scripts/test-oidc-dev.sh`
+
+Trigger CI when needed:
+
+- GitHub UI: `Actions` -> `CI` -> `Run workflow`
+- GitHub CLI: `gh workflow run ci.yml`
 
 Run the auth suite locally (API must be running on `127.0.0.1:8080`):
 

@@ -152,7 +152,7 @@ For production rollout:
 
 - Use TLS for API endpoints and IdP callbacks.
 - Rotate `AUTH_OIDC_CLIENT_SECRET` and database credentials regularly.
-- Monitor CI pipeline security checks (`.github/workflows/ci.yml`).
+- Trigger CI pipeline security checks manually when required (`.github/workflows/ci.yml`, `workflow_dispatch`).
 - Validate release notes include security-impact changes.
 
 ### 4.2 Offline/Air-Gapped Environments

@@ -112,3 +112,19 @@ If a release includes security-sensitive changes (authentication, RBAC, audit, s
 Reference:
 
 - `docs/11-security-operations-v0.0.3.md`
+
+## 10. GitHub Actions Trigger Policy
+
+To control CI resource consumption, repository CI workflows must not run automatically on every push or pull request by default.
+
+Policy:
+
+- CI is triggered manually via `workflow_dispatch` only.
+- Release owner or maintainer triggers CI when verification is required.
+- Local validation remains mandatory before merge/release.
+
+Manual trigger options:
+
+1. GitHub UI: `Actions` -> `CI` -> `Run workflow`.
+2. GitHub CLI:
+   - `gh workflow run ci.yml`

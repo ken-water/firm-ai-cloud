@@ -12,7 +12,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Changed
 
-- None
+- CI trigger policy updated: GitHub Actions CI now runs by manual dispatch only (`workflow_dispatch`) to avoid automatic resource consumption.
 
 ### Fixed
 
