@@ -80,6 +80,54 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets \
 curl http://127.0.0.1:8080/api/v1/cmdb/assets/by-code/QR-100001?mode=auto
 ```
 
+CMDB discovery APIs:
+
+```bash
+# create a zabbix host discovery job (MVP supports mock_hosts in scope for local testing)
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "zabbix-host-discovery",
+    "source_type": "zabbix_hosts",
+    "scope": {
+      "mock_hosts": [
+        { "name": "srv-a", "hostname": "srv-a.local", "ip": "10.0.1.11", "asset_class": "server" },
+        { "name": "sw-a", "hostname": "sw-a.local", "ip": "10.0.1.21", "asset_class": "network_device" }
+      ]
+    }
+  }'
+
+# trigger a discovery run
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs/1/run
+
+# list pending discovery candidates
+curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates?review_status=pending"
+```
+
+Container CMDB discovery (k8s seed example):
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "k8s-container-discovery",
+    "source_type": "k8s_seed",
+    "scope": {
+      "seed_containers": [
+        {
+          "cluster": "prod-cluster-a",
+          "namespace": "payments",
+          "pod": "payment-api-7f8d9c",
+          "container": "payment-api",
+          "image": "registry.local/payment-api:v1.2.0",
+          "node": "k8s-node-01",
+          "pod_ip": "10.42.0.18"
+        }
+      ]
+    }
+  }'
+```
+
 ## 4. Run Frontend
 
 ```bash
