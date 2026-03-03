@@ -52,6 +52,7 @@ What this command does:
 2. Loads all bundled images from `images/cloudops-images.tar`.
 3. Prepares `deploy/.env` from `deploy/.env.offline`.
 4. Starts stack without pulling from external registries, including bundled Zabbix server/proxy/local-agent containers.
+5. Bootstraps Zabbix defaults (proxy + local agent host) automatically.
 
 ## 5. Optional: Host Without Docker
 
@@ -102,3 +103,4 @@ Bundled monitoring access defaults:
 
 - Zabbix Web: `http://127.0.0.1:8082` (`Admin / zabbix`)
 - Zabbix Proxy listener for agents: `<host-ip>:10061`
+- Auto-provisioned local host: `cloudops-local-agent`

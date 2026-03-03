@@ -17,6 +17,10 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - `zabbix-db`, `zabbix-server`, `zabbix-web`, `zabbix-proxy`, `zabbix-agent-local`
   - configurable server/proxy ports for external agent access
 - Offline bundle now includes Zabbix images in `cloudops-images.tar`.
+- Zabbix bootstrap automation script:
+  - `scripts/bootstrap-zabbix.sh`
+  - auto-registers proxy `cloudops-proxy` and local host `cloudops-local-agent` after install/upgrade
+  - waits for local agent availability through proxy path
 
 ### Changed
 
@@ -24,11 +28,14 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - RBAC integration script now validates monitoring source read/write permissions for operator and viewer roles.
 - RBAC coverage documentation now includes monitoring permission matrix and endpoint mapping.
 - Install/upgrade health checks now wait for bundled Zabbix services.
+- Install/upgrade flows now invoke Zabbix bootstrap automatically after health checks.
 - Installation guides now document default Zabbix access and remote agent onboarding parameters.
 
 ### Fixed
 
-- None
+- Zabbix server first-start database bootstrap on MySQL:
+  - enabled `--log-bin-trust-function-creators=1` for `zabbix-db`
+  - prevents schema import failure caused by trigger creation privileges when binary logging is enabled
 
 ## [0.0.4] - 2026-03-03
 

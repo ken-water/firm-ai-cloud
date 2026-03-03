@@ -13,6 +13,7 @@ COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.yml"
 ENV_EXAMPLE_FILE="${DEPLOY_DIR}/.env.example"
 ENV_CN_EXAMPLE_FILE="${DEPLOY_DIR}/.env.cn.example"
 ENV_FILE="${DEPLOY_DIR}/.env"
+ZABBIX_BOOTSTRAP_SCRIPT="${ROOT_DIR}/scripts/bootstrap-zabbix.sh"
 
 COMPOSE_CMD=()
 
@@ -325,6 +326,19 @@ start_stack() {
   wait_for_service zabbix-agent-local 180
 }
 
+run_zabbix_bootstrap() {
+  if [[ ! -f "${ZABBIX_BOOTSTRAP_SCRIPT}" ]]; then
+    warn "Zabbix bootstrap script is missing: ${ZABBIX_BOOTSTRAP_SCRIPT}"
+    return
+  fi
+
+  log "Bootstrapping Zabbix proxy and local agent host..."
+  if ! bash "${ZABBIX_BOOTSTRAP_SCRIPT}" --env-file "${ENV_FILE}" --timeout 180; then
+    warn "Zabbix bootstrap failed. You can rerun it manually:"
+    warn "  bash scripts/bootstrap-zabbix.sh --env-file deploy/.env"
+  fi
+}
+
 print_summary() {
   cat <<'EOF'
 
@@ -339,6 +353,7 @@ Endpoints:
   Zabbix Web:       http://127.0.0.1:8082
   Zabbix Server:    0.0.0.0:10051
   Zabbix Proxy:     0.0.0.0:10061
+  Zabbix Local Host: cloudops-local-agent (via cloudops-proxy)
 
 Useful commands:
   docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
@@ -410,6 +425,7 @@ main() {
   bootstrap_env_file
   apply_mirror_profile
   start_stack
+  run_zabbix_bootstrap
   print_summary
 }
 

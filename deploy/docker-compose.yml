@@ -85,6 +85,7 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_bin
       - --default-authentication-plugin=mysql_native_password
+      - --log-bin-trust-function-creators=1
     environment:
       MYSQL_DATABASE: ${ZABBIX_DB_NAME:-zabbix}
       MYSQL_USER: ${ZABBIX_DB_USER:-zabbix}

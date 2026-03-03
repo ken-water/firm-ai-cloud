@@ -10,6 +10,7 @@ DEPLOY_DIR="${ROOT_DIR}/deploy"
 COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.yml"
 ENV_EXAMPLE_FILE="${DEPLOY_DIR}/.env.example"
 ENV_FILE="${DEPLOY_DIR}/.env"
+ZABBIX_BOOTSTRAP_SCRIPT="${ROOT_DIR}/scripts/bootstrap-zabbix.sh"
 
 COMPOSE_CMD=()
 
@@ -164,6 +165,19 @@ run_health_checks() {
   wait_for_service zabbix-agent-local 180
 }
 
+run_zabbix_bootstrap() {
+  if [[ ! -f "${ZABBIX_BOOTSTRAP_SCRIPT}" ]]; then
+    warn "Zabbix bootstrap script is missing: ${ZABBIX_BOOTSTRAP_SCRIPT}"
+    return
+  fi
+
+  log "Bootstrapping Zabbix proxy and local agent host..."
+  if ! bash "${ZABBIX_BOOTSTRAP_SCRIPT}" --env-file "${ENV_FILE}" --timeout 180; then
+    warn "Zabbix bootstrap failed. You can rerun it manually:"
+    warn "  bash scripts/bootstrap-zabbix.sh --env-file deploy/.env"
+  fi
+}
+
 print_summary() {
   cat <<'EOF'
 
@@ -209,6 +223,7 @@ main() {
   bootstrap_env_file
   run_upgrade
   run_health_checks
+  run_zabbix_bootstrap
   print_summary
 }
 

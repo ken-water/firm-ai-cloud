@@ -160,6 +160,7 @@ copy_bundle_files() {
   cp "${ROOT_DIR}/deploy/.env.example" "${BUNDLE_DIR}/deploy/.env.example"
   cp "${ROOT_DIR}/deploy/.env.cn.example" "${BUNDLE_DIR}/deploy/.env.cn.example"
   cp "${ROOT_DIR}/scripts/install.sh" "${BUNDLE_DIR}/scripts/install.sh"
+  cp "${ROOT_DIR}/scripts/bootstrap-zabbix.sh" "${BUNDLE_DIR}/scripts/bootstrap-zabbix.sh"
   cp "${ROOT_DIR}/scripts/install-offline.sh" "${BUNDLE_DIR}/scripts/install-offline.sh"
   cp "${ROOT_DIR}/scripts/upgrade.sh" "${BUNDLE_DIR}/scripts/upgrade.sh"
   cp "${ROOT_DIR}/scripts/uninstall.sh" "${BUNDLE_DIR}/scripts/uninstall.sh"

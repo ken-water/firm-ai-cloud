@@ -21,6 +21,7 @@ What it does:
 1. Detects Docker.
 2. Installs Docker automatically if missing (Linux/macOS).
 3. Starts PostgreSQL, Redis, OpenSearch, MinIO, and bundled Zabbix stack (server/web/proxy/local agent) via Compose.
+4. Bootstraps Zabbix defaults: creates proxy `cloudops-proxy` and local host `cloudops-local-agent`.
 
 More details: [docs/05-installation.md](docs/05-installation.md)
 
@@ -74,6 +75,13 @@ Default bundled Zabbix access:
 - Default login: `Admin / zabbix`
 - Server trapper port: `10051` (for proxy uplink)
 - Proxy port: `10061` (for local/remote agents)
+- Auto-provisioned local host: `cloudops-local-agent` (via proxy `cloudops-proxy`)
+
+Manual rerun (if needed):
+
+```bash
+bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
+```
 
 ## Product Planning Docs
 

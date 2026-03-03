@@ -53,6 +53,7 @@ The installer will:
 3. Generate `deploy/.env` from `deploy/.env.example` if absent.
 4. Pull images.
 5. Start all services and wait for health checks.
+6. Bootstrap Zabbix defaults (proxy + local agent host) via API.
 
 ## 4. Useful Options
 
@@ -85,6 +86,11 @@ Default Zabbix login:
 - Username: `Admin`
 - Password: `zabbix`
 
+Default auto-provisioned monitoring objects:
+
+- Proxy: `cloudops-proxy`
+- Local host: `cloudops-local-agent` (through proxy, interface DNS `zabbix-agent-local`)
+
 ## 6. Stop / Restart
 
 ```bash
@@ -109,6 +115,12 @@ bash scripts/upgrade.sh --no-pull
 
 # Skip waiting for health checks
 bash scripts/upgrade.sh --skip-healthcheck
+```
+
+Manual Zabbix bootstrap rerun:
+
+```bash
+bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 ```
 
 ## 8. Uninstall

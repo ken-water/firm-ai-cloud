@@ -25,12 +25,19 @@ Bundled Zabbix stack defaults after install:
 - Login: `Admin / zabbix`
 - Server trapper: `10051`
 - Proxy listener for agents: `10061`
+- Auto-provisioned proxy/host: `cloudops-proxy` + `cloudops-local-agent`
 
 For remote devices, install `zabbix-agent` or `zabbix-agent2` and set:
 
 - `Server=<cloudops-host-ip>:10061`
 - `ServerActive=<cloudops-host-ip>:10061`
 - `Hostname=<your-device-unique-name>`
+
+If you need to rerun Zabbix bootstrap:
+
+```bash
+bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
+```
 
 ## 3. Run Backend API
 
