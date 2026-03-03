@@ -11,6 +11,7 @@ version = "0.0.1"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+async-stream = "0.3"
 anyhow = "1.0"
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
@@ -20,6 +21,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "migrate", "derive", "macros"] }
 thiserror = "2.0"
 tokio = { version = "1.48", features = ["rt-multi-thread", "macros", "signal"] }
+tokio-stream = "0.1"
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

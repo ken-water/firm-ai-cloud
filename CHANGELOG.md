@@ -43,6 +43,11 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - source list with probe status/health visibility
   - source create form (validation + role-aware write controls)
   - probe action with immediate success/failure feedback
+- SSE real-time stream baseline:
+  - endpoint: `GET /api/v1/streams/sse`
+  - stream envelope fields: `event_type`, `scope`, `timestamp`, `payload`
+  - filter params: `site`, `department`, `severity`
+  - baseline event types: `stream.connected`, `stream.heartbeat`, `stream.stale`, `stream.recovered`, `alert.test`, `alert.monitoring_sync`
 
 ### Changed
 
@@ -73,6 +78,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Dev quickstart now includes explicit unbind example and readiness-panel monitoring-binding inspection command.
 - RBAC monitoring-read mapping now also covers `/api/v1/monitoring/overview` and `/api/v1/monitoring/layers/*`.
 - Monitoring bootstrap plan now includes completed I3 notes for web-console monitoring source UX.
+- RBAC monitoring-read mapping now also covers `/api/v1/streams/sse` for authenticated stream subscriptions.
 
 ### Fixed
 

@@ -231,6 +231,44 @@ Monitoring overview/layer API conventions:
   - `critical` <- `failed`/`dead_letter`
   - `unknown` <- missing binding, `skipped`, or unsupported status
 
+SSE stream baseline API:
+
+```bash
+# subscribe to SSE stream baseline (operator/viewer/admin must be authenticated)
+curl -N -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/streams/sse?site=dc-a&department=platform&severity=all"
+
+# restricted-scope example using explicit auth-scope headers
+curl -N \
+  -H "$AUTH_HEADER" \
+  -H "x-auth-site: dc-a" \
+  -H "x-auth-department: platform" \
+  "http://127.0.0.1:8080/api/v1/streams/sse?site=dc-a&department=platform&severity=critical"
+```
+
+SSE envelope contract:
+
+- Every event is JSON with:
+  - `event_type`
+  - `scope` (`site`, `department`, `severity`)
+  - `timestamp` (RFC3339 UTC)
+  - `payload` (event-specific object)
+- Event categories include:
+  - `stream.connected`
+  - `stream.heartbeat`
+  - `stream.stale`
+  - `stream.recovered`
+  - `alert.test`
+  - `alert.monitoring_sync`
+
+Reconnect and stale-state semantics:
+
+- Server guidance in `stream.connected.payload`:
+  - `reconnect_after_ms` (client reconnect backoff baseline)
+  - `heartbeat_interval_seconds`
+  - `stale_after_seconds`
+- `stream.stale` means no matching alert events arrived within stale window.
+- `stream.recovered` means fresh alert events resumed after stale state.
+
 Web-console monitoring source UX baseline:
 
 - Open section: `Monitoring Sources` in the left navigation.
