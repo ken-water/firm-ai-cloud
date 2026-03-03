@@ -197,6 +197,7 @@
     },
     "relations": {
       "title": "Asset Relations",
+      "selectedAsset": "Selected: #{{id}} {{name}}",
       "summary": "Upstream: {{upstream}} | Downstream: {{downstream}}",
       "form": {
         "sourceAsset": "Source Asset",
@@ -213,7 +214,14 @@
         "empty": "No relations found for selected asset.",
         "noAssets": "No assets available. Create assets first.",
         "selectSource": "Please select a source asset.",
-        "selectTarget": "Please select a target asset."
+        "selectTarget": "Please select a target asset.",
+        "sameAsset": "Source and target assets cannot be the same.",
+        "loading": "Loading relations...",
+        "created": "Relation created successfully.",
+        "deleted": "Relation deleted successfully.",
+        "deleteConfirm": "Delete relation #{{id}}? This action cannot be undone.",
+        "sourceDetails": "Source details: class={{class}}, status={{status}}, ip={{ip}}.",
+        "readOnlyHint": "Read-only mode: relation changes require operator or admin permission."
       },
       "table": {
         "id": "ID",
@@ -226,7 +234,32 @@
       }
     },
     "assets": {
-      "title": "CMDB Assets"
+      "title": "CMDB Assets",
+      "summary": "Showing {{shown}} of {{total}} assets.",
+      "actions": {
+        "resetFilters": "Reset Filters",
+        "clearAndShowAll": "Clear Filters and Show All"
+      },
+      "messages": {
+        "loading": "Loading assets...",
+        "noFilterResult": "No assets match the current filter conditions."
+      },
+      "filters": {
+        "searchLabel": "Search",
+        "searchPlaceholder": "Search by name, host, IP, owner, site or ID",
+        "statusLabel": "Status",
+        "allStatuses": "All Statuses",
+        "classLabel": "Class",
+        "allClasses": "All Classes",
+        "siteLabel": "Site",
+        "allSites": "All Sites",
+        "sortLabel": "Sort",
+        "sort": {
+          "updatedDesc": "Updated Time (Newest)",
+          "nameAsc": "Name (A-Z)",
+          "idAsc": "ID (Ascending)"
+        }
+      }
     },
     "table": {
       "id": "ID",

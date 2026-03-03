@@ -147,6 +147,8 @@ type NewNotificationSubscriptionForm = {
   department: string;
 };
 
+type AssetSortMode = "updated_desc" | "name_asc" | "id_asc";
+
 const DEFAULT_API_BASE_URL =
   typeof window !== "undefined"
     ? `${window.location.protocol}//${window.location.hostname}:8080`
@@ -243,6 +245,12 @@ export function App() {
   const [relations, setRelations] = useState<AssetRelation[]>([]);
   const [loadingRelations, setLoadingRelations] = useState(false);
   const [selectedAssetId, setSelectedAssetId] = useState<string>("");
+  const [assetSearch, setAssetSearch] = useState("");
+  const [assetStatusFilter, setAssetStatusFilter] = useState("");
+  const [assetClassFilter, setAssetClassFilter] = useState("");
+  const [assetSiteFilter, setAssetSiteFilter] = useState("");
+  const [assetSortMode, setAssetSortMode] = useState<AssetSortMode>("updated_desc");
+  const [relationNotice, setRelationNotice] = useState<string | null>(null);
   const [creatingRelation, setCreatingRelation] = useState(false);
   const [deletingRelationId, setDeletingRelationId] = useState<number | null>(null);
   const [newRelation, setNewRelation] = useState<NewRelationForm>(defaultRelationForm);
@@ -640,8 +648,13 @@ export function App() {
       setError(t("cmdb.relations.messages.selectTarget"));
       return;
     }
+    if (srcAssetId === dstAssetId) {
+      setError(t("cmdb.relations.messages.sameAsset"));
+      return;
+    }
 
     setCreatingRelation(true);
+    setRelationNotice(null);
     setError(null);
     try {
       const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/relations`, {
@@ -662,6 +675,7 @@ export function App() {
 
       setNewRelation((prev) => ({ ...prev, dst_asset_id: "" }));
       await loadRelations(srcAssetId);
+      setRelationNotice(t("cmdb.relations.messages.created"));
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
@@ -681,7 +695,15 @@ export function App() {
         return;
       }
 
+      if (typeof window !== "undefined") {
+        const shouldDelete = window.confirm(t("cmdb.relations.messages.deleteConfirm", { id: relationId }));
+        if (!shouldDelete) {
+          return;
+        }
+      }
+
       setDeletingRelationId(relationId);
+      setRelationNotice(null);
       setError(null);
       try {
         const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/relations/${relationId}`, {
@@ -691,6 +713,7 @@ export function App() {
           throw new Error(await readErrorMessage(response));
         }
         await loadRelations(srcAssetId);
+        setRelationNotice(t("cmdb.relations.messages.deleted"));
       } catch (err) {
         setError(err instanceof Error ? err.message : "unknown error");
       } finally {
@@ -964,6 +987,10 @@ export function App() {
   }, [assets, selectedAssetId]);
 
   useEffect(() => {
+    setRelationNotice(null);
+  }, [selectedAssetId]);
+
+  useEffect(() => {
     const assetId = Number.parseInt(selectedAssetId, 10);
     if (!Number.isFinite(assetId) || assetId <= 0) {
       setRelations([]);
@@ -995,6 +1022,10 @@ export function App() {
     return map;
   }, [notificationChannels]);
   const selectedAssetNumericId = useMemo(() => Number.parseInt(selectedAssetId, 10), [selectedAssetId]);
+  const selectedAsset = useMemo(
+    () => assets.find((item) => item.id === selectedAssetNumericId) ?? null,
+    [assets, selectedAssetNumericId]
+  );
   const relationSummary = useMemo(() => {
     if (!Number.isFinite(selectedAssetNumericId) || selectedAssetNumericId <= 0) {
       return { upstream: 0, downstream: 0 };
@@ -1003,6 +1034,77 @@ export function App() {
     const downstream = relations.filter((item) => item.src_asset_id === selectedAssetNumericId).length;
     return { upstream, downstream };
   }, [relations, selectedAssetNumericId]);
+  const assetStatusOptions = useMemo(
+    () => Array.from(new Set(assets.map((item) => item.status).filter((item) => item.trim().length > 0))).sort(),
+    [assets]
+  );
+  const assetClassOptions = useMemo(
+    () => Array.from(new Set(assets.map((item) => item.asset_class).filter((item) => item.trim().length > 0))).sort(),
+    [assets]
+  );
+  const assetSiteOptions = useMemo(
+    () => Array.from(new Set(assets.map((item) => item.site ?? "").filter((item) => item.trim().length > 0))).sort(),
+    [assets]
+  );
+  const filteredAssets = useMemo(() => {
+    const normalizedQuery = assetSearch.trim().toLowerCase();
+    const filtered = assets.filter((asset) => {
+      if (assetStatusFilter && asset.status !== assetStatusFilter) {
+        return false;
+      }
+      if (assetClassFilter && asset.asset_class !== assetClassFilter) {
+        return false;
+      }
+      if (assetSiteFilter && (asset.site ?? "") !== assetSiteFilter) {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+
+      const haystack = [
+        asset.name,
+        asset.hostname ?? "",
+        asset.ip ?? "",
+        asset.owner ?? "",
+        asset.site ?? "",
+        asset.department ?? "",
+        asset.asset_class,
+        String(asset.id)
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
+
+    filtered.sort((left, right) => {
+      if (assetSortMode === "name_asc") {
+        return left.name.localeCompare(right.name);
+      }
+      if (assetSortMode === "id_asc") {
+        return left.id - right.id;
+      }
+      return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
+    });
+
+    return filtered;
+  }, [assetClassFilter, assetSearch, assetSiteFilter, assetSortMode, assetStatusFilter, assets]);
+  const hasAssetFilter = useMemo(
+    () =>
+      assetSearch.trim().length > 0
+      || assetStatusFilter.length > 0
+      || assetClassFilter.length > 0
+      || assetSiteFilter.length > 0
+      || assetSortMode !== "updated_desc",
+    [assetClassFilter, assetSearch, assetSiteFilter, assetSortMode, assetStatusFilter]
+  );
+  const resetAssetFilters = useCallback(() => {
+    setAssetSearch("");
+    setAssetStatusFilter("");
+    setAssetClassFilter("");
+    setAssetSiteFilter("");
+    setAssetSortMode("updated_desc");
+  }, []);
   const navigationItems = useMemo(
     () => [
       { href: "#section-scan", label: t("auth.navigation.scan") },
@@ -1608,12 +1710,26 @@ export function App() {
         )}
       </SectionCard>
 
-      <SectionCard id="section-relations" title={t("cmdb.relations.title")}>
+      <SectionCard
+        id="section-relations"
+        title={t("cmdb.relations.title")}
+        actions={
+          selectedAsset
+            ? (
+              <span className="section-meta">
+                {t("cmdb.relations.selectedAsset", { id: selectedAsset.id, name: selectedAsset.name })}
+              </span>
+            )
+            : undefined
+        }
+      >
         {emptyState ? (
           <p>{t("cmdb.relations.messages.noAssets")}</p>
         ) : (
           <>
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.5rem" }}>
+            {relationNotice && <p className="banner banner-success">{relationNotice}</p>}
+
+            <div className="toolbar-row">
               <span>{t("cmdb.relations.form.sourceAsset")}</span>
               <select value={selectedAssetId} onChange={(event) => setSelectedAssetId(event.target.value)}>
                 {assets.map((asset) => (
@@ -1635,17 +1751,25 @@ export function App() {
               </button>
             </div>
 
-            <p style={{ marginTop: 0, marginBottom: "0.75rem" }}>
+            <p className="section-note">
               {t("cmdb.relations.summary", {
                 upstream: relationSummary.upstream,
                 downstream: relationSummary.downstream
               })}
             </p>
 
+            {selectedAsset && (
+              <p className="section-note">
+                {t("cmdb.relations.messages.sourceDetails", {
+                  class: selectedAsset.asset_class,
+                  status: selectedAsset.status,
+                  ip: selectedAsset.ip ?? "-"
+                })}
+              </p>
+            )}
+
             {canWriteCmdb ? (
-              <div
-                style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem", alignItems: "center" }}
-              >
+              <div className="toolbar-row">
                 <span>{t("cmdb.relations.form.targetAsset")}</span>
                 <select
                   value={newRelation.dst_asset_id}
@@ -1679,10 +1803,12 @@ export function App() {
                 </button>
               </div>
             ) : (
-              <p>{t("auth.labels.readOnly")}</p>
+              <p className="inline-note">{t("cmdb.relations.messages.readOnlyHint")}</p>
             )}
 
-            {relations.length === 0 ? (
+            {loadingRelations && relations.length === 0 ? (
+              <p>{t("cmdb.relations.messages.loading")}</p>
+            ) : relations.length === 0 ? (
               <p>{t("cmdb.relations.messages.empty")}</p>
             ) : (
               <div style={{ overflowX: "auto" }}>
@@ -1735,9 +1861,80 @@ export function App() {
         )}
       </SectionCard>
 
-      <SectionCard id="section-assets" title={t("cmdb.assets.title")}>
-        {emptyState ? (
+      <SectionCard
+        id="section-assets"
+        title={t("cmdb.assets.title")}
+        actions={(
+          <button onClick={resetAssetFilters} disabled={!hasAssetFilter}>
+            {t("cmdb.assets.actions.resetFilters")}
+          </button>
+        )}
+      >
+        <div className="filter-grid">
+          <label className="control-field">
+            <span>{t("cmdb.assets.filters.searchLabel")}</span>
+            <input
+              value={assetSearch}
+              onChange={(event) => setAssetSearch(event.target.value)}
+              placeholder={t("cmdb.assets.filters.searchPlaceholder")}
+            />
+          </label>
+          <label className="control-field">
+            <span>{t("cmdb.assets.filters.statusLabel")}</span>
+            <select value={assetStatusFilter} onChange={(event) => setAssetStatusFilter(event.target.value)}>
+              <option value="">{t("cmdb.assets.filters.allStatuses")}</option>
+              {assetStatusOptions.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="control-field">
+            <span>{t("cmdb.assets.filters.classLabel")}</span>
+            <select value={assetClassFilter} onChange={(event) => setAssetClassFilter(event.target.value)}>
+              <option value="">{t("cmdb.assets.filters.allClasses")}</option>
+              {assetClassOptions.map((assetClass) => (
+                <option key={assetClass} value={assetClass}>
+                  {assetClass}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="control-field">
+            <span>{t("cmdb.assets.filters.siteLabel")}</span>
+            <select value={assetSiteFilter} onChange={(event) => setAssetSiteFilter(event.target.value)}>
+              <option value="">{t("cmdb.assets.filters.allSites")}</option>
+              {assetSiteOptions.map((site) => (
+                <option key={site} value={site}>
+                  {site}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="control-field">
+            <span>{t("cmdb.assets.filters.sortLabel")}</span>
+            <select value={assetSortMode} onChange={(event) => setAssetSortMode(event.target.value as AssetSortMode)}>
+              <option value="updated_desc">{t("cmdb.assets.filters.sort.updatedDesc")}</option>
+              <option value="name_asc">{t("cmdb.assets.filters.sort.nameAsc")}</option>
+              <option value="id_asc">{t("cmdb.assets.filters.sort.idAsc")}</option>
+            </select>
+          </label>
+        </div>
+
+        <p className="section-note">
+          {t("cmdb.assets.summary", { shown: filteredAssets.length, total: assets.length })}
+        </p>
+
+        {loadingAssets && assets.length === 0 ? (
+          <p>{t("cmdb.assets.messages.loading")}</p>
+        ) : emptyState ? (
           <p>{t("cmdb.messages.empty")}</p>
+        ) : filteredAssets.length === 0 ? (
+          <div className="empty-state">
+            <p>{t("cmdb.assets.messages.noFilterResult")}</p>
+            <button onClick={resetAssetFilters}>{t("cmdb.assets.actions.clearAndShowAll")}</button>
+          </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse", minWidth: "1200px", width: "100%" }}>
@@ -1759,7 +1956,7 @@ export function App() {
                 </tr>
               </thead>
               <tbody>
-                {assets.map((asset) => (
+                {filteredAssets.map((asset) => (
                   <tr key={asset.id}>
                     <td style={cellStyle}>{asset.id}</td>
                     <td style={cellStyle}>{asset.asset_class}</td>
