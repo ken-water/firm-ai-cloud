@@ -61,6 +61,13 @@ echo "$REL_LIST" | grep -q '"relation_type":"depends_on"' || {
   exit 1
 }
 
+log "Verify CMDB auto monitoring-sync queue exists for created asset"
+SYNC_JOBS_JSON="$(api_curl "${API_BASE_URL}/api/v1/cmdb/monitoring-sync/jobs?asset_id=${ASSET_A_ID}&limit=20")"
+echo "$SYNC_JOBS_JSON" | grep -q "\"asset_id\":${ASSET_A_ID}" || {
+  echo "ERROR: monitoring sync jobs do not contain expected asset id ${ASSET_A_ID}" >&2
+  exit 1
+}
+
 log "Create discovery job for approve:create path"
 JOB_CREATE_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/jobs" \
   -H 'Content-Type: application/json' \

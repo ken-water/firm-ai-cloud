@@ -13,19 +13,20 @@ use sqlx::{Postgres, QueryBuilder};
 
 use crate::state::AppState;
 use crate::{
-    audit::write_from_headers_best_effort,
+    audit::{actor_from_headers, write_from_headers_best_effort},
     error::{AppError, AppResult},
 };
 
 use super::field_definitions::{
     FieldDefinitionRecord, fetch_enabled_definitions, validate_custom_field_value,
 };
+use super::monitoring_sync::enqueue_monitoring_sync_job;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/assets", get(list_assets).post(create_asset))
         .route("/assets/by-code/{code}", get(get_asset_by_code))
-        .route("/assets/{asset_id}", get(get_asset))
+        .route("/assets/{asset_id}", get(get_asset).patch(update_asset))
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -81,6 +82,21 @@ struct ListAssetsResponse {
 struct CreateAssetRequest {
     asset_class: String,
     name: String,
+    hostname: Option<String>,
+    ip: Option<String>,
+    status: Option<String>,
+    site: Option<String>,
+    department: Option<String>,
+    owner: Option<String>,
+    qr_code: Option<String>,
+    barcode: Option<String>,
+    custom_fields: Option<Value>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct UpdateAssetRequest {
+    asset_class: Option<String>,
+    name: Option<String>,
     hostname: Option<String>,
     ip: Option<String>,
     status: Option<String>,
@@ -191,6 +207,52 @@ async fn create_asset(
     )
     .await;
 
+    let actor = actor_from_headers(&headers);
+    match enqueue_monitoring_sync_job(
+        &state.db,
+        asset.id,
+        "asset_create",
+        actor.as_deref(),
+        serde_json::json!({
+            "asset_class": &asset.asset_class
+        }),
+    )
+    .await
+    {
+        Ok(Some(job_id)) => {
+            write_from_headers_best_effort(
+                &state.db,
+                &headers,
+                "cmdb.monitoring_sync.enqueue",
+                "asset",
+                Some(asset.id.to_string()),
+                "success",
+                None,
+                serde_json::json!({
+                    "job_id": job_id,
+                    "trigger_source": "asset_create"
+                }),
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(err) => {
+            write_from_headers_best_effort(
+                &state.db,
+                &headers,
+                "cmdb.monitoring_sync.enqueue",
+                "asset",
+                Some(asset.id.to_string()),
+                "failed",
+                Some(err.to_string()),
+                serde_json::json!({
+                    "trigger_source": "asset_create"
+                }),
+            )
+            .await;
+        }
+    }
+
     Ok(Json(asset))
 }
 
@@ -208,6 +270,155 @@ async fn get_asset(
     .await?;
 
     let asset = asset.ok_or_else(|| AppError::NotFound(format!("asset {asset_id} not found")))?;
+    Ok(Json(asset))
+}
+
+async fn update_asset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(asset_id): Path<i64>,
+    Json(payload): Json<UpdateAssetRequest>,
+) -> AppResult<Json<Asset>> {
+    let existing: Asset = sqlx::query_as(
+        "SELECT id, asset_class, name, hostname, ip, status, site, department, owner, qr_code, barcode, custom_fields, created_at, updated_at
+         FROM assets
+         WHERE id = $1",
+    )
+    .bind(asset_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("asset {asset_id} not found")))?;
+
+    let asset_class =
+        merge_required_field("asset_class", payload.asset_class, &existing.asset_class)?;
+    let name = merge_required_field("name", payload.name, &existing.name)?;
+    let hostname = merge_optional_field(payload.hostname, existing.hostname.clone());
+    let ip = merge_optional_field(payload.ip, existing.ip.clone());
+    let status = normalize_update_status(payload.status, &existing.status)?;
+    let site = merge_optional_field(payload.site, existing.site.clone());
+    let department = merge_optional_field(payload.department, existing.department.clone());
+    let owner = merge_optional_field(payload.owner, existing.owner.clone());
+    let qr_code = merge_optional_field(payload.qr_code, existing.qr_code.clone());
+    let barcode = merge_optional_field(payload.barcode, existing.barcode.clone());
+
+    if qr_code != existing.qr_code {
+        if let Some(code) = qr_code.as_deref() {
+            ensure_unique_code_excluding(&state, "qr_code", code, asset_id).await?;
+        }
+    }
+    if barcode != existing.barcode {
+        if let Some(code) = barcode.as_deref() {
+            ensure_unique_code_excluding(&state, "barcode", code, asset_id).await?;
+        }
+    }
+
+    let custom_fields = if let Some(custom_fields) = payload.custom_fields {
+        let custom_fields = normalize_custom_fields(Some(custom_fields))?;
+        let definitions = fetch_enabled_definitions(&state.db).await?;
+        validate_custom_fields(&definitions, &custom_fields)?;
+        custom_fields
+    } else {
+        existing
+            .custom_fields
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    let asset: Asset = sqlx::query_as(
+        "UPDATE assets
+         SET asset_class = $2,
+             name = $3,
+             hostname = $4,
+             ip = $5,
+             status = $6,
+             site = $7,
+             department = $8,
+             owner = $9,
+             qr_code = $10,
+             barcode = $11,
+             custom_fields = $12,
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, asset_class, name, hostname, ip, status, site, department, owner, qr_code, barcode, custom_fields, created_at, updated_at",
+    )
+    .bind(asset_id)
+    .bind(asset_class)
+    .bind(name)
+    .bind(hostname)
+    .bind(ip)
+    .bind(status)
+    .bind(site)
+    .bind(department)
+    .bind(owner)
+    .bind(qr_code)
+    .bind(barcode)
+    .bind(Value::Object(custom_fields))
+    .fetch_one(&state.db)
+    .await
+    .map_err(map_asset_conflict)?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "cmdb.asset.update",
+        "asset",
+        Some(asset.id.to_string()),
+        "success",
+        None,
+        serde_json::json!({
+            "asset_class": &asset.asset_class,
+            "name": &asset.name
+        }),
+    )
+    .await;
+
+    let actor = actor_from_headers(&headers);
+    match enqueue_monitoring_sync_job(
+        &state.db,
+        asset.id,
+        "asset_update",
+        actor.as_deref(),
+        serde_json::json!({
+            "asset_class": &asset.asset_class
+        }),
+    )
+    .await
+    {
+        Ok(Some(job_id)) => {
+            write_from_headers_best_effort(
+                &state.db,
+                &headers,
+                "cmdb.monitoring_sync.enqueue",
+                "asset",
+                Some(asset.id.to_string()),
+                "success",
+                None,
+                serde_json::json!({
+                    "job_id": job_id,
+                    "trigger_source": "asset_update"
+                }),
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(err) => {
+            write_from_headers_best_effort(
+                &state.db,
+                &headers,
+                "cmdb.monitoring_sync.enqueue",
+                "asset",
+                Some(asset.id.to_string()),
+                "failed",
+                Some(err.to_string()),
+                serde_json::json!({
+                    "trigger_source": "asset_update"
+                }),
+            )
+            .await;
+        }
+    }
+
     Ok(Json(asset))
 }
 
@@ -381,6 +592,24 @@ async fn ensure_unique_code(state: &AppState, column: &str, code: &str) -> AppRe
     Ok(())
 }
 
+async fn ensure_unique_code_excluding(
+    state: &AppState,
+    column: &str,
+    code: &str,
+    asset_id: i64,
+) -> AppResult<()> {
+    let sql = format!("SELECT EXISTS(SELECT 1 FROM assets WHERE {column} = $1 AND id <> $2)");
+    let exists: bool = sqlx::query_scalar(&sql)
+        .bind(code)
+        .bind(asset_id)
+        .fetch_one(&state.db)
+        .await?;
+    if exists {
+        return Err(AppError::Validation(format!("{column} already exists")));
+    }
+    Ok(())
+}
+
 fn required_field(field: &str, value: String) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -400,6 +629,33 @@ fn trim_optional(value: Option<String>) -> Option<String> {
     })
 }
 
+fn merge_required_field(field: &str, incoming: Option<String>, current: &str) -> AppResult<String> {
+    match incoming {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(AppError::Validation(format!("{field} is required")));
+            }
+            Ok(trimmed.to_string())
+        }
+        None => Ok(current.to_string()),
+    }
+}
+
+fn merge_optional_field(incoming: Option<String>, current: Option<String>) -> Option<String> {
+    match incoming {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        None => current,
+    }
+}
+
 fn normalize_create_status(value: Option<String>) -> AppResult<String> {
     let status = trim_optional(value)
         .unwrap_or_else(|| "idle".to_string())
@@ -410,6 +666,25 @@ fn normalize_create_status(value: Option<String>) -> AppResult<String> {
         "idle" | "onboarding" | "maintenance" | "retired" => Ok(status),
         "operational" => Err(AppError::Validation(
             "cannot create asset directly with operational status".to_string(),
+        )),
+        _ => Err(AppError::Validation(
+            "status must be one of: idle, onboarding, operational, maintenance, retired"
+                .to_string(),
+        )),
+    }
+}
+
+fn normalize_update_status(value: Option<String>, current: &str) -> AppResult<String> {
+    let Some(value) = value else {
+        return Ok(current.to_string());
+    };
+
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "active" => Ok("idle".to_string()),
+        "idle" | "onboarding" | "maintenance" | "retired" => Ok(normalized),
+        "operational" => Err(AppError::Validation(
+            "cannot set status to operational via asset update; use lifecycle API".to_string(),
         )),
         _ => Err(AppError::Validation(
             "status must be one of: idle, onboarding, operational, maintenance, retired"

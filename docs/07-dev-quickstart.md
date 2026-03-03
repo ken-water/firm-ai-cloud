@@ -175,6 +175,56 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets \
 curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/assets/by-code/QR-100001?mode=auto
 ```
 
+Monitoring source and CMDB -> Zabbix auto-provisioning:
+
+```bash
+# create one Zabbix monitoring source (for local bundled Zabbix web endpoint)
+curl -X POST http://127.0.0.1:8080/api/v1/monitoring/sources \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "local-zabbix",
+    "source_type": "zabbix",
+    "endpoint": "http://127.0.0.1:8082/api_jsonrpc.php",
+    "auth_type": "basic",
+    "username": "Admin",
+    "secret_ref": "plain:zabbix",
+    "site": "dc-a",
+    "department": "platform",
+    "is_enabled": true
+  }'
+
+# optional connectivity probe
+curl -X POST http://127.0.0.1:8080/api/v1/monitoring/sources/1/probe \
+  -H "$AUTH_HEADER"
+
+# create/update eligible assets (server/vm/network_device/container/database)
+# will enqueue async monitoring sync automatically
+
+# inspect latest binding and sync status for one asset
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/assets/1/monitoring-binding
+
+# list sync jobs (retry/dead-letter visibility)
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/monitoring-sync/jobs?asset_id=1&limit=20"
+
+# manual retry trigger for one asset
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets/1/monitoring-sync \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{ "reason": "manual retry after source fix" }'
+```
+
+Troubleshooting notes:
+
+- If source auth fails, use `secret_ref: "env:YOUR_SECRET_ENV"` and export secret locally before API start.
+- If `candidate`/`asset` sync jobs keep retrying, check latest error in:
+  - `GET /api/v1/cmdb/monitoring-sync/jobs`
+  - `GET /api/v1/audit/logs?action=cmdb.monitoring_sync.provision`
+- If default proxy/template mapping does not match your Zabbix setup, set asset custom fields:
+  - `monitoring_proxy`
+  - `monitoring_host_group`
+  - `monitoring_template` or `monitoring_templates`
+
 CMDB binding and lifecycle APIs:
 
 ```bash

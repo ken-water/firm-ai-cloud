@@ -266,6 +266,10 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         || matches_scope(&normalized, "/relations")
     {
         "cmdb.relations"
+    } else if matches_scope(&normalized, "/cmdb/monitoring-sync")
+        || matches_scope(&normalized, "/monitoring-sync")
+    {
+        "cmdb.assets"
     } else if matches_scope(&normalized, "/cmdb/assets") || matches_scope(&normalized, "/assets") {
         "cmdb.assets"
     } else if matches_scope(&normalized, "/workflow/requests")
@@ -466,9 +470,25 @@ mod tests {
                 "cmdb.assets.read",
             ),
             (Method::POST, "/api/v1/cmdb/assets", "cmdb.assets.write"),
+            (Method::PATCH, "/api/v1/cmdb/assets/1", "cmdb.assets.write"),
             (
                 Method::GET,
                 "/api/v1/cmdb/assets/1/graph",
+                "cmdb.assets.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/cmdb/assets/1/monitoring-binding",
+                "cmdb.assets.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/cmdb/assets/1/monitoring-sync",
+                "cmdb.assets.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/cmdb/monitoring-sync/jobs",
                 "cmdb.assets.read",
             ),
             (

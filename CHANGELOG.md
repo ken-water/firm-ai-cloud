@@ -16,6 +16,14 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - `candidate.approved_create`
   - `candidate.approved_merge`
   - `candidate.rejected`
+- CMDB monitoring sync baseline:
+  - migration: `202603030004_create_cmdb_monitoring_sync.sql`
+  - async sync queue table: `cmdb_monitoring_sync_jobs`
+  - monitoring binding table: `cmdb_monitoring_bindings`
+  - API endpoints:
+    - `GET /api/v1/cmdb/assets/{id}/monitoring-binding`
+    - `POST /api/v1/cmdb/assets/{id}/monitoring-sync`
+    - `GET /api/v1/cmdb/monitoring-sync/jobs`
 
 ### Changed
 
@@ -36,6 +44,9 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - discover -> `approve:create`
   - discover -> `approve:merge`
 - Developer quickstart discovery examples now document explicit review strategy and reason fields.
+- CMDB asset API now supports `PATCH /api/v1/cmdb/assets/{id}` and enqueues monitoring sync on eligible asset create/update.
+- API service now starts a built-in monitoring sync worker for queued CMDB -> Zabbix provisioning jobs.
+- RBAC mapping now covers `/api/v1/cmdb/monitoring-sync/*` under `cmdb.assets.read/write`.
 
 ### Fixed
 

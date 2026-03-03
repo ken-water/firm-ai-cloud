@@ -5,6 +5,7 @@ mod cmdb;
 mod error;
 mod iam;
 mod monitoring;
+mod monitoring_sync_worker;
 mod state;
 
 use std::net::SocketAddr;
@@ -54,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
             dev_mode_enabled: config.oidc_dev_mode_enabled,
         },
     };
+    monitoring_sync_worker::start(state.clone());
     let app = build_router(state);
 
     info!(%addr, "api service starting");
