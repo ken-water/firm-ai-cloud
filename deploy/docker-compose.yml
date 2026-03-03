@@ -77,8 +77,98 @@ services:
       timeout: 5s
       retries: 10
 
+  zabbix-db:
+    image: ${ZABBIX_DB_IMAGE:-mysql:8.0}
+    restart: unless-stopped
+    command:
+      - mysqld
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_bin
+      - --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_DATABASE: ${ZABBIX_DB_NAME:-zabbix}
+      MYSQL_USER: ${ZABBIX_DB_USER:-zabbix}
+      MYSQL_PASSWORD: ${ZABBIX_DB_PASSWORD:-zabbix_change_me}
+      MYSQL_ROOT_PASSWORD: ${ZABBIX_DB_ROOT_PASSWORD:-zabbix_root_change_me}
+    volumes:
+      - zabbix-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p${ZABBIX_DB_ROOT_PASSWORD:-zabbix_root_change_me} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  zabbix-server:
+    image: ${ZABBIX_SERVER_IMAGE:-zabbix/zabbix-server-mysql:alpine-7.0-latest}
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      MYSQL_DATABASE: ${ZABBIX_DB_NAME:-zabbix}
+      MYSQL_USER: ${ZABBIX_DB_USER:-zabbix}
+      MYSQL_PASSWORD: ${ZABBIX_DB_PASSWORD:-zabbix_change_me}
+      ZBX_STARTPOLLERS: ${ZABBIX_STARTPOLLERS:-15}
+      ZBX_CACHESIZE: ${ZABBIX_CACHE_SIZE:-128M}
+    depends_on:
+      zabbix-db:
+        condition: service_healthy
+    ports:
+      - "${ZABBIX_SERVER_BIND_HOST:-0.0.0.0}:${ZABBIX_SERVER_PORT:-10051}:10051"
+
+  zabbix-web:
+    image: ${ZABBIX_WEB_IMAGE:-zabbix/zabbix-web-nginx-mysql:alpine-7.0-latest}
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      MYSQL_DATABASE: ${ZABBIX_DB_NAME:-zabbix}
+      MYSQL_USER: ${ZABBIX_DB_USER:-zabbix}
+      MYSQL_PASSWORD: ${ZABBIX_DB_PASSWORD:-zabbix_change_me}
+      ZBX_SERVER_HOST: zabbix-server
+      PHP_TZ: ${ZABBIX_PHP_TZ:-Asia/Shanghai}
+    depends_on:
+      zabbix-db:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${ZABBIX_WEB_PORT:-8082}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  zabbix-proxy:
+    image: ${ZABBIX_PROXY_IMAGE:-zabbix/zabbix-proxy-sqlite3:alpine-7.0-latest}
+    restart: unless-stopped
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_SERVER_PORT: 10051
+      ZBX_HOSTNAME: ${ZABBIX_PROXY_HOSTNAME:-cloudops-proxy}
+      ZBX_PROXYMODE: 0
+    depends_on:
+      zabbix-server:
+        condition: service_started
+    ports:
+      - "${ZABBIX_PROXY_BIND_HOST:-0.0.0.0}:${ZABBIX_PROXY_PORT:-10061}:10051"
+    volumes:
+      - zabbix-proxy-data:/var/lib/zabbix/db_data
+
+  zabbix-agent-local:
+    image: ${ZABBIX_AGENT_IMAGE:-zabbix/zabbix-agent:alpine-7.0-latest}
+    restart: unless-stopped
+    environment:
+      ZBX_HOSTNAME: ${ZABBIX_LOCAL_AGENT_HOSTNAME:-cloudops-local-agent}
+      ZBX_SERVER_HOST: zabbix-proxy
+      ZBX_SERVER_PORT: 10051
+      ZBX_SERVER_ACTIVE: zabbix-proxy
+    depends_on:
+      zabbix-proxy:
+        condition: service_started
+
 volumes:
   postgres-data:
   redis-data:
   opensearch-data:
   minio-data:
+  zabbix-db-data:
+  zabbix-proxy-data:

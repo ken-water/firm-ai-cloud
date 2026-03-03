@@ -1,7 +1,7 @@
 # CloudOps One Installation Guide (One-Click)
 
-Version: v1.0  
-Date: 2026-03-02
+Version: v1.1  
+Date: 2026-03-03
 
 ## 1. Goal
 
@@ -18,6 +18,11 @@ The current installer starts core dependencies for MVP development:
 - Redis
 - OpenSearch
 - MinIO
+- Zabbix MySQL
+- Zabbix Server
+- Zabbix Web
+- Zabbix Proxy
+- Local Zabbix Agent (containerized)
 
 Compose files and env templates are located under:
 
@@ -71,6 +76,14 @@ After installation, default local endpoints are:
 - OpenSearch: `http://127.0.0.1:9200`
 - MinIO API: `http://127.0.0.1:9000`
 - MinIO Console: `http://127.0.0.1:9001`
+- Zabbix Web: `http://127.0.0.1:8082`
+- Zabbix Server trapper: `0.0.0.0:10051`
+- Zabbix Proxy for agents: `0.0.0.0:10061`
+
+Default Zabbix login:
+
+- Username: `Admin`
+- Password: `zabbix`
 
 ## 6. Stop / Restart
 

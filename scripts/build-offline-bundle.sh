@@ -101,16 +101,36 @@ resolve_settings() {
       REDIS_IMAGE="redis:7-alpine"
       OPENSEARCH_IMAGE="opensearchproject/opensearch:2.15.0"
       MINIO_IMAGE="minio/minio:RELEASE.2025-01-20T14-49-07Z"
+      ZABBIX_DB_IMAGE="mysql:8.0"
+      ZABBIX_SERVER_IMAGE="zabbix/zabbix-server-mysql:alpine-7.0-latest"
+      ZABBIX_WEB_IMAGE="zabbix/zabbix-web-nginx-mysql:alpine-7.0-latest"
+      ZABBIX_PROXY_IMAGE="zabbix/zabbix-proxy-sqlite3:alpine-7.0-latest"
+      ZABBIX_AGENT_IMAGE="zabbix/zabbix-agent:alpine-7.0-latest"
       ;;
     cn)
       POSTGRES_IMAGE="docker.1ms.run/library/postgres:16-alpine"
       REDIS_IMAGE="docker.1ms.run/library/redis:7-alpine"
       OPENSEARCH_IMAGE="docker.1ms.run/opensearchproject/opensearch:2.15.0"
       MINIO_IMAGE="docker.1ms.run/minio/minio:RELEASE.2025-01-20T14-49-07Z"
+      ZABBIX_DB_IMAGE="docker.1ms.run/library/mysql:8.0"
+      ZABBIX_SERVER_IMAGE="docker.1ms.run/zabbix/zabbix-server-mysql:alpine-7.0-latest"
+      ZABBIX_WEB_IMAGE="docker.1ms.run/zabbix/zabbix-web-nginx-mysql:alpine-7.0-latest"
+      ZABBIX_PROXY_IMAGE="docker.1ms.run/zabbix/zabbix-proxy-sqlite3:alpine-7.0-latest"
+      ZABBIX_AGENT_IMAGE="docker.1ms.run/zabbix/zabbix-agent:alpine-7.0-latest"
       ;;
   esac
 
-  IMAGES=("${POSTGRES_IMAGE}" "${REDIS_IMAGE}" "${OPENSEARCH_IMAGE}" "${MINIO_IMAGE}")
+  IMAGES=(
+    "${POSTGRES_IMAGE}"
+    "${REDIS_IMAGE}"
+    "${OPENSEARCH_IMAGE}"
+    "${MINIO_IMAGE}"
+    "${ZABBIX_DB_IMAGE}"
+    "${ZABBIX_SERVER_IMAGE}"
+    "${ZABBIX_WEB_IMAGE}"
+    "${ZABBIX_PROXY_IMAGE}"
+    "${ZABBIX_AGENT_IMAGE}"
+  )
   BUNDLE_DIR="${OUTPUT_DIR}/${BUNDLE_NAME}"
   ARCHIVE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}.tar.gz"
 }
@@ -189,6 +209,11 @@ postgres_image=${POSTGRES_IMAGE}
 redis_image=${REDIS_IMAGE}
 opensearch_image=${OPENSEARCH_IMAGE}
 minio_image=${MINIO_IMAGE}
+zabbix_db_image=${ZABBIX_DB_IMAGE}
+zabbix_server_image=${ZABBIX_SERVER_IMAGE}
+zabbix_web_image=${ZABBIX_WEB_IMAGE}
+zabbix_proxy_image=${ZABBIX_PROXY_IMAGE}
+zabbix_agent_image=${ZABBIX_AGENT_IMAGE}
 install_command=bash scripts/install-offline.sh
 EOF
 }

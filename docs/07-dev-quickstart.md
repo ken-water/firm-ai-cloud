@@ -1,7 +1,7 @@
 # CloudOps One Developer Quickstart
 
-Version: v1.0  
-Date: 2026-03-02
+Version: v1.1  
+Date: 2026-03-03
 
 ## 1. Repository Layout
 
@@ -18,6 +18,19 @@ If Docker is already installed:
 ```bash
 bash scripts/install.sh --skip-docker-install --mirror cn
 ```
+
+Bundled Zabbix stack defaults after install:
+
+- Web UI: `http://127.0.0.1:8082`
+- Login: `Admin / zabbix`
+- Server trapper: `10051`
+- Proxy listener for agents: `10061`
+
+For remote devices, install `zabbix-agent` or `zabbix-agent2` and set:
+
+- `Server=<cloudops-host-ip>:10061`
+- `ServerActive=<cloudops-host-ip>:10061`
+- `Hostname=<your-device-unique-name>`
 
 ## 3. Run Backend API
 

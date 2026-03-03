@@ -157,6 +157,11 @@ run_health_checks() {
   wait_for_service redis 120
   wait_for_service opensearch 300
   wait_for_service minio 180
+  wait_for_service zabbix-db 240
+  wait_for_service zabbix-server 240
+  wait_for_service zabbix-web 240
+  wait_for_service zabbix-proxy 240
+  wait_for_service zabbix-agent-local 180
 }
 
 print_summary() {

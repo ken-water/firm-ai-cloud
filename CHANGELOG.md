@@ -13,12 +13,18 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - APIs: `GET /api/v1/monitoring/sources`, `POST /api/v1/monitoring/sources`, `POST /api/v1/monitoring/sources/{id}/probe`
   - new RBAC permission keys: `monitoring.sources.read`, `monitoring.sources.write`
 - v0.0.5 issue-first monitoring plan document: `docs/14-v0.0.5-monitoring-bootstrap-plan.md`.
+- Bundled Zabbix deployment stack in one-click install:
+  - `zabbix-db`, `zabbix-server`, `zabbix-web`, `zabbix-proxy`, `zabbix-agent-local`
+  - configurable server/proxy ports for external agent access
+- Offline bundle now includes Zabbix images in `cloudops-images.tar`.
 
 ### Changed
 
 - RBAC route mapping and auth tests now cover monitoring source endpoints.
 - RBAC integration script now validates monitoring source read/write permissions for operator and viewer roles.
 - RBAC coverage documentation now includes monitoring permission matrix and endpoint mapping.
+- Install/upgrade health checks now wait for bundled Zabbix services.
+- Installation guides now document default Zabbix access and remote agent onboarding parameters.
 
 ### Fixed
 

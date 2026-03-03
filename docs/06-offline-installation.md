@@ -1,7 +1,7 @@
 # CloudOps One Fully Offline Installation
 
-Version: v1.0  
-Date: 2026-03-02
+Version: v1.1  
+Date: 2026-03-03
 
 ## 1. Goal
 
@@ -51,7 +51,7 @@ What this command does:
 1. Optionally runs bundled offline Docker installer if Docker is missing.
 2. Loads all bundled images from `images/cloudops-images.tar`.
 3. Prepares `deploy/.env` from `deploy/.env.offline`.
-4. Starts stack without pulling from external registries.
+4. Starts stack without pulling from external registries, including bundled Zabbix server/proxy/local-agent containers.
 
 ## 5. Optional: Host Without Docker
 
@@ -92,3 +92,13 @@ Expected healthy containers:
 - `deploy_redis_1`
 - `deploy_opensearch_1`
 - `deploy_minio_1`
+- `deploy_zabbix-db_1`
+- `deploy_zabbix-server_1`
+- `deploy_zabbix-web_1`
+- `deploy_zabbix-proxy_1`
+- `deploy_zabbix-agent-local_1`
+
+Bundled monitoring access defaults:
+
+- Zabbix Web: `http://127.0.0.1:8082` (`Admin / zabbix`)
+- Zabbix Proxy listener for agents: `<host-ip>:10061`

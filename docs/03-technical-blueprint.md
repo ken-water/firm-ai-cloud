@@ -250,6 +250,6 @@ Decision status: Data stack locked as PostgreSQL + Redis + OpenSearch + MinIO (s
 - Primary path: containerized install via `scripts/install.sh`.
 - If Docker is missing, installer auto-bootstraps Docker (Linux/macOS).
 - Dependencies start from `deploy/docker-compose.yml` with health checks.
-- Installer guarantees MVP stack bootstrap: PostgreSQL, Redis, OpenSearch, MinIO.
+- Installer guarantees MVP stack bootstrap: PostgreSQL, Redis, OpenSearch, MinIO, Zabbix server/proxy/web, and a local Zabbix agent container.
 - Offline path: `scripts/build-offline-bundle.sh` creates a full air-gapped package with bundled images.
 - Customer-side offline install uses a single command: `bash scripts/install-offline.sh`.

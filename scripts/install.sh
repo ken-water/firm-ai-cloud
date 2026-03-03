@@ -250,6 +250,11 @@ apply_mirror_profile() {
       set_env_key "REDIS_IMAGE" "redis:7-alpine"
       set_env_key "OPENSEARCH_IMAGE" "opensearchproject/opensearch:2.15.0"
       set_env_key "MINIO_IMAGE" "minio/minio:RELEASE.2025-01-20T14-49-07Z"
+      set_env_key "ZABBIX_DB_IMAGE" "mysql:8.0"
+      set_env_key "ZABBIX_SERVER_IMAGE" "zabbix/zabbix-server-mysql:alpine-7.0-latest"
+      set_env_key "ZABBIX_WEB_IMAGE" "zabbix/zabbix-web-nginx-mysql:alpine-7.0-latest"
+      set_env_key "ZABBIX_PROXY_IMAGE" "zabbix/zabbix-proxy-sqlite3:alpine-7.0-latest"
+      set_env_key "ZABBIX_AGENT_IMAGE" "zabbix/zabbix-agent:alpine-7.0-latest"
       log "Applied default image mirror profile."
       ;;
     cn)
@@ -257,6 +262,11 @@ apply_mirror_profile() {
       set_env_key "REDIS_IMAGE" "docker.1ms.run/library/redis:7-alpine"
       set_env_key "OPENSEARCH_IMAGE" "docker.1ms.run/opensearchproject/opensearch:2.15.0"
       set_env_key "MINIO_IMAGE" "docker.1ms.run/minio/minio:RELEASE.2025-01-20T14-49-07Z"
+      set_env_key "ZABBIX_DB_IMAGE" "docker.1ms.run/library/mysql:8.0"
+      set_env_key "ZABBIX_SERVER_IMAGE" "docker.1ms.run/zabbix/zabbix-server-mysql:alpine-7.0-latest"
+      set_env_key "ZABBIX_WEB_IMAGE" "docker.1ms.run/zabbix/zabbix-web-nginx-mysql:alpine-7.0-latest"
+      set_env_key "ZABBIX_PROXY_IMAGE" "docker.1ms.run/zabbix/zabbix-proxy-sqlite3:alpine-7.0-latest"
+      set_env_key "ZABBIX_AGENT_IMAGE" "docker.1ms.run/zabbix/zabbix-agent:alpine-7.0-latest"
       log "Applied China image mirror profile (docker.1ms.run)."
       ;;
   esac
@@ -308,6 +318,11 @@ start_stack() {
   wait_for_service redis 120
   wait_for_service opensearch 300
   wait_for_service minio 180
+  wait_for_service zabbix-db 240
+  wait_for_service zabbix-server 240
+  wait_for_service zabbix-web 240
+  wait_for_service zabbix-proxy 240
+  wait_for_service zabbix-agent-local 180
 }
 
 print_summary() {
@@ -321,6 +336,9 @@ Endpoints:
   OpenSearch API:   http://127.0.0.1:9200
   MinIO API:        http://127.0.0.1:9000
   MinIO Console:    http://127.0.0.1:9001
+  Zabbix Web:       http://127.0.0.1:8082
+  Zabbix Server:    0.0.0.0:10051
+  Zabbix Proxy:     0.0.0.0:10061
 
 Useful commands:
   docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps

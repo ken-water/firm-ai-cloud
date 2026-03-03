@@ -20,7 +20,7 @@ What it does:
 
 1. Detects Docker.
 2. Installs Docker automatically if missing (Linux/macOS).
-3. Starts PostgreSQL, Redis, OpenSearch, and MinIO via Compose.
+3. Starts PostgreSQL, Redis, OpenSearch, MinIO, and bundled Zabbix stack (server/web/proxy/local agent) via Compose.
 
 More details: [docs/05-installation.md](docs/05-installation.md)
 
@@ -68,6 +68,13 @@ bash scripts/install-offline.sh
 
 Details: [docs/06-offline-installation.md](docs/06-offline-installation.md)
 
+Default bundled Zabbix access:
+
+- Zabbix Web UI: `http://127.0.0.1:8082`
+- Default login: `Admin / zabbix`
+- Server trapper port: `10051` (for proxy uplink)
+- Proxy port: `10061` (for local/remote agents)
+
 ## Product Planning Docs
 
 - [MVP backlog](docs/01-mvp-backlog.md)
@@ -78,6 +85,7 @@ Details: [docs/06-offline-installation.md](docs/06-offline-installation.md)
 - [v0.0.2 sprint backlog](docs/09-v0.0.2-sprint-backlog.md)
 - [Security operations guide (v0.0.3)](docs/11-security-operations-v0.0.3.md)
 - [v0.0.4 UI iteration plan](docs/12-v0.0.4-ui-iteration-plan.md)
+- [v0.0.5 monitoring bootstrap plan](docs/14-v0.0.5-monitoring-bootstrap-plan.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
