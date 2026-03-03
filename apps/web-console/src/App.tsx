@@ -558,7 +558,7 @@ export function App() {
         name: `sample-${stamp}`,
         hostname: `sample-${stamp}.local`,
         ip: "10.0.0.10",
-        status: "active",
+        status: "idle",
         site: "dc-a",
         department: "platform",
         owner: "ops",

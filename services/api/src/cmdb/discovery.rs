@@ -497,7 +497,7 @@ async fn approve_discovery_candidate(
 
         let created_asset_id: i64 = sqlx::query_scalar(
             "INSERT INTO assets (asset_class, name, hostname, ip, status, site, department, owner, custom_fields)
-             VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $8)
+             VALUES ($1, $2, $3, $4, 'idle', $5, $6, $7, $8)
              RETURNING id",
         )
         .bind(asset_class)

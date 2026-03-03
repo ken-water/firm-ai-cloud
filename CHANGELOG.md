@@ -21,6 +21,11 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - `scripts/bootstrap-zabbix.sh`
   - auto-registers proxy `cloudops-proxy` and local host `cloudops-local-agent` after install/upgrade
   - waits for local agent availability through proxy path
+- CMDB lifecycle and binding baseline:
+  - migration: `202603030002_create_asset_bindings_and_lifecycle.sql`
+  - APIs: `GET/PUT /api/v1/cmdb/assets/{id}/bindings`, `POST /api/v1/cmdb/assets/{id}/lifecycle`
+  - multi-binding support for departments, business services, and owners (team/user/group/external)
+  - operational transition gate requires complete bindings
 
 ### Changed
 
@@ -30,6 +35,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Install/upgrade health checks now wait for bundled Zabbix services.
 - Install/upgrade flows now invoke Zabbix bootstrap automatically after health checks.
 - Installation guides now document default Zabbix access and remote agent onboarding parameters.
+- CMDB asset create default status changed from `active` to `idle` and direct `operational` creation is blocked.
 
 ### Fixed
 

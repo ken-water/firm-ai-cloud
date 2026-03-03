@@ -160,7 +160,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets \
     "name": "sample-asset",
     "hostname": "sample.local",
     "ip": "10.0.0.10",
-    "status": "active",
+    "status": "idle",
     "site": "dc-a",
     "department": "platform",
     "owner": "ops",
@@ -173,6 +173,33 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets \
 
 # scan lookup by qr or barcode
 curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/assets/by-code/QR-100001?mode=auto
+```
+
+CMDB binding and lifecycle APIs:
+
+```bash
+# upsert multi-bindings for one asset
+curl -X PUT http://127.0.0.1:8080/api/v1/cmdb/assets/1/bindings \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "departments": ["platform", "dba"],
+    "business_services": ["orders", "product-catalog"],
+    "owners": [
+      { "owner_type": "team", "owner_ref": "dba-team" },
+      { "owner_type": "team", "owner_ref": "biz-ops" },
+      { "owner_type": "user", "owner_ref": "alice" }
+    ]
+  }'
+
+# inspect current bindings and operational readiness
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/assets/1/bindings
+
+# transition lifecycle (operational is blocked until required bindings are complete)
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets/1/lifecycle \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{ "status": "operational" }'
 ```
 
 CMDB relation APIs:

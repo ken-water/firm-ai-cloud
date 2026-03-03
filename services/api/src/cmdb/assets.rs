@@ -141,7 +141,7 @@ async fn create_asset(
 ) -> AppResult<Json<Asset>> {
     let asset_class = required_field("asset_class", payload.asset_class)?;
     let name = required_field("name", payload.name)?;
-    let status = optional_or_default(payload.status, "active");
+    let status = normalize_create_status(payload.status)?;
     let qr_code = trim_optional(payload.qr_code);
     let barcode = trim_optional(payload.barcode);
 
@@ -400,8 +400,22 @@ fn trim_optional(value: Option<String>) -> Option<String> {
     })
 }
 
-fn optional_or_default(value: Option<String>, default: &str) -> String {
-    trim_optional(value).unwrap_or_else(|| default.to_string())
+fn normalize_create_status(value: Option<String>) -> AppResult<String> {
+    let status = trim_optional(value)
+        .unwrap_or_else(|| "idle".to_string())
+        .to_ascii_lowercase();
+
+    match status.as_str() {
+        "active" => Ok("idle".to_string()),
+        "idle" | "onboarding" | "maintenance" | "retired" => Ok(status),
+        "operational" => Err(AppError::Validation(
+            "cannot create asset directly with operational status".to_string(),
+        )),
+        _ => Err(AppError::Validation(
+            "status must be one of: idle, onboarding, operational, maintenance, retired"
+                .to_string(),
+        )),
+    }
 }
 
 fn map_asset_conflict(err: sqlx::Error) -> AppError {
