@@ -8,20 +8,58 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- LAN helper scripts:
-  - `scripts/dev-lan-up.sh`
-  - `scripts/dev-lan-down.sh`
-- v0.0.4 UI iteration planning document: `docs/12-v0.0.4-ui-iteration-plan.md`.
+- None
 
 ### Changed
 
-- CI trigger policy updated: GitHub Actions CI now runs by manual dispatch only (`workflow_dispatch`) to avoid automatic resource consumption.
-- Web console default API base now follows current host (`<current-host>:8080`) when `VITE_API_BASE_URL` is not provided, improving LAN access.
-- Web console now uses a UI baseline shell with sidebar/topbar layout and shared design-token stylesheet.
+- None
 
 ### Fixed
 
 - None
+
+## [0.0.4] - 2026-03-03
+
+### Added
+
+- LAN helper scripts for local network access:
+  - `scripts/dev-lan-up.sh`
+  - `scripts/dev-lan-down.sh`
+- Web-console layout primitives:
+  - `AuthGate`
+  - `AppShell`
+  - `SectionCard`
+- CMDB asset usability controls:
+  - search input
+  - status/class/site filters
+  - sort options (updated time, name, id)
+  - filter-empty guidance and quick reset actions
+- Discovery and notification operation UX feedback:
+  - summary indicators
+  - loading-state messages
+  - post-action confirmation banners
+  - status chip display for operation status
+- Frontend quality guardrail tooling:
+  - `apps/web-console/scripts/check-guardrails.mjs`
+  - `npm run check:guardrails`
+  - `npm run check:ui`
+- UI verification and guardrail documentation:
+  - `docs/12-v0.0.4-ui-iteration-plan.md`
+  - `docs/13-web-ui-quality-guardrails.md`
+
+### Changed
+
+- CI trigger policy remains manual-only (`workflow_dispatch`) and web checks now run `npm run check:ui` in CI.
+- Web-console default API base now follows current host (`<current-host>:8080`) when `VITE_API_BASE_URL` is not provided, improving LAN accessibility.
+- Web-console UI now uses a consistent shell-and-card visual baseline for CMDB/discovery/notification operations.
+- Discovery and notification pages now provide clearer read-only guidance for non-writer roles.
+
+### Fixed
+
+- Reduced accidental relation management errors by adding:
+  - self-relation prevention validation
+  - delete confirmation before destructive relation removal
+- Improved operational clarity for role-restricted users by surfacing in-context permission hints instead of ambiguous action absence.
 
 ## [0.0.3] - 2026-03-02
 
