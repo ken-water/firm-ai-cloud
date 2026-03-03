@@ -8,11 +8,14 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- None
+- LAN helper scripts:
+  - `scripts/dev-lan-up.sh`
+  - `scripts/dev-lan-down.sh`
 
 ### Changed
 
 - CI trigger policy updated: GitHub Actions CI now runs by manual dispatch only (`workflow_dispatch`) to avoid automatic resource consumption.
+- Web console default API base now follows current host (`<current-host>:8080`) when `VITE_API_BASE_URL` is not provided, improving LAN access.
 
 ### Fixed
 

@@ -39,6 +39,12 @@ bash scripts/install.sh
 # upgrade dependency images and recreate services
 bash scripts/upgrade.sh
 
+# start api + web for LAN access
+bash scripts/dev-lan-up.sh
+
+# stop LAN-mode api + web
+bash scripts/dev-lan-down.sh
+
 # uninstall containers only (keep data)
 bash scripts/uninstall.sh
 

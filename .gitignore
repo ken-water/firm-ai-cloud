@@ -11,5 +11,8 @@ apps/web-console/tsconfig.tsbuildinfo
 # Env / local overrides
 deploy/.env
 
+# Local runtime files
+.run/
+
 # Build artifacts
 dist/

@@ -146,7 +146,11 @@ type NewNotificationSubscriptionForm = {
   department: string;
 };
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8080";
+const DEFAULT_API_BASE_URL =
+  typeof window !== "undefined"
+    ? `${window.location.protocol}//${window.location.hostname}:8080`
+    : "http://127.0.0.1:8080";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || DEFAULT_API_BASE_URL;
 const API_AUTH_USER = (import.meta.env.VITE_AUTH_USER ?? "admin").trim();
 const API_AUTH_TOKEN = (import.meta.env.VITE_AUTH_TOKEN ?? "").trim();
 const AUTH_SESSION_STORAGE_KEY = "cloudops.auth.session.v1";

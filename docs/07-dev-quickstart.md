@@ -349,13 +349,33 @@ This command:
 1. Ensures dependency stack is up.
 2. Starts `services/api`.
 
-## 6. Stop Dependencies
+## 6. LAN Access (Web + API)
+
+Start API + web console for LAN users:
+
+```bash
+bash scripts/dev-lan-up.sh
+```
+
+Stop LAN-mode services:
+
+```bash
+bash scripts/dev-lan-down.sh
+```
+
+Notes:
+
+- API listens on `0.0.0.0:8080`.
+- Web console listens on `0.0.0.0:5173`.
+- Web console auto-targets API via current host by default (or `VITE_API_BASE_URL` if set).
+
+## 7. Stop Dependencies
 
 ```bash
 bash scripts/dev-down.sh
 ```
 
-## 7. Security Checks
+## 8. Security Checks
 
 RBAC matrix integration check (requires API running):
 
@@ -369,7 +389,7 @@ OIDC dev-flow smoke check (requires API running with `AUTH_OIDC_ENABLED=true` an
 bash scripts/test-oidc-dev.sh
 ```
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### 8.1 Discovery job run fails
 
@@ -395,7 +415,7 @@ bash scripts/test-oidc-dev.sh
   - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-deliveries?limit=50"`
 - For webhook channels, inspect `status`, `attempts`, `response_code`, and `last_error`.
 
-## 9. Integration Smoke Test
+## 10. Integration Smoke Test
 
 Run end-to-end CMDB loop smoke test (relations + discovery + candidate review + notification dispatch):
 
