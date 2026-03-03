@@ -27,6 +27,9 @@ const SOURCE_K8S_SEED: &str = "k8s_seed";
 const EVENT_ASSET_NEW_DETECTED: &str = "asset.new_detected";
 const EVENT_ASSET_OFFBOARDED_SUSPECTED: &str = "asset.offboarded_suspected";
 const EVENT_ASSET_PROFILE_CHANGED: &str = "asset.profile_changed";
+const EVENT_CANDIDATE_APPROVED_CREATE: &str = "candidate.approved_create";
+const EVENT_CANDIDATE_APPROVED_MERGE: &str = "candidate.approved_merge";
+const EVENT_CANDIDATE_REJECTED: &str = "candidate.rejected";
 
 const DELIVERY_STATUS_QUEUED: &str = "queued";
 const DELIVERY_STATUS_DELIVERED: &str = "delivered";
@@ -83,6 +86,9 @@ struct DiscoveryCandidate {
     review_status: String,
     discovered_at: DateTime<Utc>,
     reviewed_by: Option<String>,
+    review_strategy: Option<String>,
+    review_reason: Option<String>,
+    review_asset_id: Option<i64>,
     reviewed_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -180,6 +186,9 @@ struct ListNotificationDeliveriesQuery {
 #[derive(Debug, Deserialize)]
 struct ReviewDiscoveryCandidateRequest {
     reviewed_by: Option<String>,
+    strategy: Option<String>,
+    reason: Option<String>,
+    target_asset_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -243,6 +252,21 @@ struct DiscoveryInputItem {
 struct AssetMatch {
     id: i64,
     name: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct PendingCandidateIdentity {
+    id: i64,
+    fingerprint: String,
+    payload: Value,
+    discovered_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CandidateApprovalStrategy {
+    Auto,
+    Create,
+    Merge,
 }
 
 async fn create_discovery_job(
@@ -386,7 +410,7 @@ async fn list_discovery_candidates(
         .await?;
 
     let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-        "SELECT id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, reviewed_at, created_at, updated_at
+        "SELECT id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, review_strategy, review_reason, review_asset_id, reviewed_at, created_at, updated_at
          FROM discovery_candidates
          WHERE 1=1",
     );
@@ -414,6 +438,8 @@ async fn approve_discovery_candidate(
     Json(payload): Json<ReviewDiscoveryCandidateRequest>,
 ) -> AppResult<Json<ReviewDiscoveryCandidateResponse>> {
     let reviewed_by = normalize_reviewer(payload.reviewed_by);
+    let review_reason = normalize_review_reason(payload.reason)?;
+    let strategy = normalize_approval_strategy(payload.strategy)?;
     let candidate = get_candidate_by_id(&state.db, candidate_id).await?;
     ensure_candidate_pending(&candidate)?;
 
@@ -450,83 +476,174 @@ async fn approve_discovery_candidate(
         .filter(|value| !value.is_empty())
         .map(ToString::to_string);
 
-    let asset_match = find_asset_by_hostname_ip(&state.db, &hostname, &ip).await?;
-    let (action, asset_id) = if let Some(asset_match) = asset_match {
-        ("merged".to_string(), Some(asset_match.id))
-    } else {
-        let metadata = candidate_payload
-            .get("metadata")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+    let matching_assets =
+        find_assets_by_identity(&state.db, &candidate.fingerprint, &hostname, &ip).await?;
 
-        let mut custom_fields = metadata;
-        if let Some(value) = candidate_payload
-            .get("resource_kind")
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-        {
-            custom_fields.insert("resource_kind".to_string(), Value::String(value));
+    let (action, review_status, asset_id) = match strategy {
+        CandidateApprovalStrategy::Create => {
+            if payload.target_asset_id.is_some() {
+                return Err(AppError::Validation(
+                    "target_asset_id is not allowed when strategy=create".to_string(),
+                ));
+            }
+            if !matching_assets.is_empty() {
+                let ids = matching_assets
+                    .iter()
+                    .map(|item| item.id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(AppError::Validation(format!(
+                    "strategy=create conflicts with existing asset identity matches: {ids}"
+                )));
+            }
+            let created_asset_id = create_asset_from_candidate_payload(
+                &state.db,
+                &candidate.fingerprint,
+                &candidate_payload,
+                &name,
+                &asset_class,
+                &hostname,
+                &ip,
+            )
+            .await?;
+            (
+                "approve:create".to_string(),
+                "created".to_string(),
+                Some(created_asset_id),
+            )
         }
-        if let Some(value) = candidate_payload
-            .get("source_type")
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-        {
-            custom_fields.insert("source_type".to_string(), Value::String(value));
+        CandidateApprovalStrategy::Merge => {
+            let merge_target_id = resolve_merge_target_id(
+                &state.db,
+                payload.target_asset_id,
+                &matching_assets,
+                "strategy=merge",
+            )
+            .await?;
+            upsert_asset_discovery_fingerprint(
+                &state.db,
+                merge_target_id,
+                &candidate.fingerprint,
+                candidate_payload.get("source_type").and_then(Value::as_str),
+            )
+            .await?;
+            (
+                "approve:merge".to_string(),
+                "merged".to_string(),
+                Some(merge_target_id),
+            )
         }
-
-        let site = candidate_payload
-            .get("site")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-        let department = candidate_payload
-            .get("department")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-        let owner = candidate_payload
-            .get("owner")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-
-        let created_asset_id: i64 = sqlx::query_scalar(
-            "INSERT INTO assets (asset_class, name, hostname, ip, status, site, department, owner, custom_fields)
-             VALUES ($1, $2, $3, $4, 'idle', $5, $6, $7, $8)
-             RETURNING id",
-        )
-        .bind(asset_class)
-        .bind(name)
-        .bind(hostname)
-        .bind(ip)
-        .bind(site)
-        .bind(department)
-        .bind(owner)
-        .bind(Value::Object(custom_fields))
-        .fetch_one(&state.db)
-        .await?;
-
-        ("created".to_string(), Some(created_asset_id))
+        CandidateApprovalStrategy::Auto => {
+            if payload.target_asset_id.is_some() {
+                let merge_target_id = resolve_merge_target_id(
+                    &state.db,
+                    payload.target_asset_id,
+                    &matching_assets,
+                    "strategy=auto",
+                )
+                .await?;
+                upsert_asset_discovery_fingerprint(
+                    &state.db,
+                    merge_target_id,
+                    &candidate.fingerprint,
+                    candidate_payload.get("source_type").and_then(Value::as_str),
+                )
+                .await?;
+                (
+                    "approve:merge".to_string(),
+                    "merged".to_string(),
+                    Some(merge_target_id),
+                )
+            } else if matching_assets.is_empty() {
+                let created_asset_id = create_asset_from_candidate_payload(
+                    &state.db,
+                    &candidate.fingerprint,
+                    &candidate_payload,
+                    &name,
+                    &asset_class,
+                    &hostname,
+                    &ip,
+                )
+                .await?;
+                (
+                    "approve:create".to_string(),
+                    "created".to_string(),
+                    Some(created_asset_id),
+                )
+            } else if matching_assets.len() == 1 {
+                let merge_target_id = matching_assets[0].id;
+                upsert_asset_discovery_fingerprint(
+                    &state.db,
+                    merge_target_id,
+                    &candidate.fingerprint,
+                    candidate_payload.get("source_type").and_then(Value::as_str),
+                )
+                .await?;
+                (
+                    "approve:merge".to_string(),
+                    "merged".to_string(),
+                    Some(merge_target_id),
+                )
+            } else {
+                let ids = matching_assets
+                    .iter()
+                    .map(|item| item.id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(AppError::Validation(format!(
+                    "strategy=auto found multiple matching assets ({ids}); rerun with strategy=merge and target_asset_id"
+                )));
+            }
+        }
     };
 
     let reviewed_candidate: DiscoveryCandidate = sqlx::query_as(
         "UPDATE discovery_candidates
          SET review_status = $2,
              reviewed_by = $3,
+             review_strategy = $4,
+             review_reason = $5,
+             review_asset_id = $6,
              reviewed_at = NOW(),
              updated_at = NOW()
          WHERE id = $1
-         RETURNING id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, reviewed_at, created_at, updated_at",
+         RETURNING id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, review_strategy, review_reason, review_asset_id, reviewed_at, created_at, updated_at",
     )
     .bind(candidate_id)
-    .bind(action.as_str())
+    .bind(review_status)
     .bind(reviewed_by)
+    .bind(action.as_str())
+    .bind(review_reason.clone())
+    .bind(asset_id)
     .fetch_one(&state.db)
+    .await?;
+
+    let decision_event_type = if action == "approve:create" {
+        EVENT_CANDIDATE_APPROVED_CREATE
+    } else {
+        EVENT_CANDIDATE_APPROVED_MERGE
+    };
+    let decision_payload = json!({
+        "candidate_id": reviewed_candidate.id,
+        "fingerprint": reviewed_candidate.fingerprint,
+        "decision": action,
+        "review_status": reviewed_candidate.review_status,
+        "reviewed_by": reviewed_candidate.reviewed_by,
+        "review_reason": reviewed_candidate.review_reason,
+        "review_asset_id": reviewed_candidate.review_asset_id,
+        "name": candidate_payload.get("name").cloned().unwrap_or(Value::Null),
+        "hostname": candidate_payload.get("hostname").cloned().unwrap_or(Value::Null),
+        "ip": candidate_payload.get("ip").cloned().unwrap_or(Value::Null),
+        "source_type": candidate_payload.get("source_type").cloned().unwrap_or(Value::Null)
+    });
+    emit_discovery_event(
+        &state.db,
+        reviewed_candidate.job_id,
+        reviewed_candidate.review_asset_id,
+        decision_event_type,
+        Some(&reviewed_candidate.fingerprint),
+        &decision_payload,
+    )
     .await?;
 
     write_from_headers_best_effort(
@@ -539,7 +656,8 @@ async fn approve_discovery_candidate(
         None,
         json!({
             "action": action,
-            "asset_id": asset_id
+            "asset_id": asset_id,
+            "reason": review_reason
         }),
     )
     .await;
@@ -558,6 +676,7 @@ async fn reject_discovery_candidate(
     Json(payload): Json<ReviewDiscoveryCandidateRequest>,
 ) -> AppResult<Json<ReviewDiscoveryCandidateResponse>> {
     let reviewed_by = normalize_reviewer(payload.reviewed_by);
+    let review_reason = normalize_review_reason(payload.reason)?;
     let candidate = get_candidate_by_id(&state.db, candidate_id).await?;
     ensure_candidate_pending(&candidate)?;
 
@@ -565,14 +684,44 @@ async fn reject_discovery_candidate(
         "UPDATE discovery_candidates
          SET review_status = 'rejected',
              reviewed_by = $2,
+             review_strategy = 'reject',
+             review_reason = $3,
+             review_asset_id = NULL,
              reviewed_at = NOW(),
              updated_at = NOW()
          WHERE id = $1
-         RETURNING id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, reviewed_at, created_at, updated_at",
+         RETURNING id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, review_strategy, review_reason, review_asset_id, reviewed_at, created_at, updated_at",
     )
     .bind(candidate_id)
     .bind(reviewed_by)
+    .bind(review_reason.clone())
     .fetch_one(&state.db)
+    .await?;
+
+    let decision_payload = json!({
+        "candidate_id": reviewed_candidate.id,
+        "fingerprint": reviewed_candidate.fingerprint,
+        "decision": "reject",
+        "review_status": reviewed_candidate.review_status,
+        "reviewed_by": reviewed_candidate.reviewed_by,
+        "review_reason": reviewed_candidate.review_reason,
+        "name": reviewed_candidate.payload.get("name").cloned().unwrap_or(Value::Null),
+        "hostname": reviewed_candidate.payload.get("hostname").cloned().unwrap_or(Value::Null),
+        "ip": reviewed_candidate.payload.get("ip").cloned().unwrap_or(Value::Null),
+        "source_type": reviewed_candidate
+            .payload
+            .get("source_type")
+            .cloned()
+            .unwrap_or(Value::Null)
+    });
+    emit_discovery_event(
+        &state.db,
+        reviewed_candidate.job_id,
+        None,
+        EVENT_CANDIDATE_REJECTED,
+        Some(&reviewed_candidate.fingerprint),
+        &decision_payload,
+    )
     .await?;
 
     write_from_headers_best_effort(
@@ -583,13 +732,15 @@ async fn reject_discovery_candidate(
         Some(reviewed_candidate.id.to_string()),
         "success",
         None,
-        json!({}),
+        json!({
+            "reason": review_reason
+        }),
     )
     .await;
 
     Ok(Json(ReviewDiscoveryCandidateResponse {
         candidate: reviewed_candidate,
-        action: "rejected".to_string(),
+        action: "reject".to_string(),
         asset_id: None,
     }))
 }
@@ -722,12 +873,25 @@ async fn execute_discovery_job(
             continue;
         }
 
-        if pending_candidate_exists(db, &fingerprint).await? {
+        if let Some(existing_candidate_id) =
+            find_pending_candidate_conflict_id(db, &fingerprint, &item.hostname, &item.ip).await?
+        {
+            sqlx::query(
+                "UPDATE discovery_candidates
+                 SET payload = $2,
+                     discovered_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = $1",
+            )
+            .bind(existing_candidate_id)
+            .bind(candidate_payload)
+            .execute(db)
+            .await?;
             stats.skipped_candidates += 1;
             continue;
         }
 
-        sqlx::query(
+        let insert_result = sqlx::query(
             "INSERT INTO discovery_candidates (job_id, fingerprint, payload, review_status)
              VALUES ($1, $2, $3, 'pending')",
         )
@@ -735,13 +899,21 @@ async fn execute_discovery_job(
         .bind(&fingerprint)
         .bind(candidate_payload.clone())
         .execute(db)
-        .await?;
+        .await;
+        match insert_result {
+            Ok(_) => {}
+            Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("23505") => {
+                stats.skipped_candidates += 1;
+                continue;
+            }
+            Err(err) => return Err(AppError::Database(err)),
+        }
 
         stats.queued_candidates += 1;
 
         emit_discovery_event(
             db,
-            job.id,
+            Some(job.id),
             None,
             EVENT_ASSET_NEW_DETECTED,
             Some(&fingerprint),
@@ -1030,6 +1202,197 @@ async fn find_asset_by_hostname_ip(
     Ok(item)
 }
 
+async fn find_assets_by_identity(
+    db: &sqlx::PgPool,
+    fingerprint: &str,
+    hostname: &Option<String>,
+    ip: &Option<String>,
+) -> AppResult<Vec<AssetMatch>> {
+    let hostname = normalize_hostname(hostname.as_deref());
+    let ip = normalize_ip(ip.as_deref());
+
+    let mut builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT id, name FROM assets WHERE ");
+    let mut separated = builder.separated(" OR ");
+    let mut clause_count = 0_u8;
+
+    if !fingerprint.trim().is_empty() {
+        separated
+            .push("COALESCE(custom_fields->>'discovery_fingerprint', '') = ")
+            .push_bind(fingerprint.trim());
+        clause_count += 1;
+    }
+    if let Some(hostname) = hostname.as_deref() {
+        separated
+            .push("LOWER(COALESCE(hostname, '')) = ")
+            .push_bind(hostname);
+        clause_count += 1;
+    }
+    if let Some(ip) = ip.as_deref() {
+        separated.push("COALESCE(ip, '') = ").push_bind(ip);
+        clause_count += 1;
+    }
+    drop(separated);
+
+    if clause_count == 0 {
+        return Ok(vec![]);
+    }
+
+    builder.push(" ORDER BY id DESC");
+    let items: Vec<AssetMatch> = builder.build_query_as().fetch_all(db).await?;
+    Ok(items)
+}
+
+async fn resolve_merge_target_id(
+    db: &sqlx::PgPool,
+    target_asset_id: Option<i64>,
+    matching_assets: &[AssetMatch],
+    strategy_label: &str,
+) -> AppResult<i64> {
+    if let Some(target_id) = target_asset_id {
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM assets WHERE id = $1)")
+            .bind(target_id)
+            .fetch_one(db)
+            .await?;
+        if !exists {
+            return Err(AppError::Validation(format!(
+                "target_asset_id {target_id} does not exist"
+            )));
+        }
+        return Ok(target_id);
+    }
+
+    if matching_assets.is_empty() {
+        return Err(AppError::Validation(format!(
+            "{strategy_label} requires target_asset_id when no identity match exists"
+        )));
+    }
+    if matching_assets.len() > 1 {
+        let ids = matching_assets
+            .iter()
+            .map(|item| item.id.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(AppError::Validation(format!(
+            "{strategy_label} found multiple matching assets ({ids}); provide target_asset_id explicitly"
+        )));
+    }
+
+    Ok(matching_assets[0].id)
+}
+
+async fn create_asset_from_candidate_payload(
+    db: &sqlx::PgPool,
+    fingerprint: &str,
+    payload: &Map<String, Value>,
+    name: &str,
+    asset_class: &str,
+    hostname: &Option<String>,
+    ip: &Option<String>,
+) -> AppResult<i64> {
+    let metadata = payload
+        .get("metadata")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut custom_fields = metadata;
+    if let Some(value) = payload
+        .get("resource_kind")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+    {
+        custom_fields.insert("resource_kind".to_string(), Value::String(value));
+    }
+    if let Some(value) = payload
+        .get("source_type")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+    {
+        custom_fields.insert("source_type".to_string(), Value::String(value));
+    }
+    if let Some(value) = payload
+        .get("source_type")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+    {
+        custom_fields.insert("discovery_source_type".to_string(), Value::String(value));
+    }
+    custom_fields.insert(
+        "discovery_fingerprint".to_string(),
+        Value::String(fingerprint.to_string()),
+    );
+
+    let site = payload
+        .get("site")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let department = payload
+        .get("department")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let owner = payload
+        .get("owner")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    let created_asset_id: i64 = sqlx::query_scalar(
+        "INSERT INTO assets (asset_class, name, hostname, ip, status, site, department, owner, custom_fields)
+         VALUES ($1, $2, $3, $4, 'idle', $5, $6, $7, $8)
+         RETURNING id",
+    )
+    .bind(asset_class)
+    .bind(name)
+    .bind(hostname)
+    .bind(ip)
+    .bind(site)
+    .bind(department)
+    .bind(owner)
+    .bind(Value::Object(custom_fields))
+    .fetch_one(db)
+    .await?;
+
+    Ok(created_asset_id)
+}
+
+async fn upsert_asset_discovery_fingerprint(
+    db: &sqlx::PgPool,
+    asset_id: i64,
+    fingerprint: &str,
+    source_type: Option<&str>,
+) -> AppResult<()> {
+    let mut payload = Map::new();
+    payload.insert(
+        "discovery_fingerprint".to_string(),
+        Value::String(fingerprint.to_string()),
+    );
+    if let Some(source_type) = source_type {
+        payload.insert(
+            "discovery_source_type".to_string(),
+            Value::String(source_type.to_string()),
+        );
+    }
+
+    sqlx::query(
+        "UPDATE assets
+         SET custom_fields = COALESCE(custom_fields, '{}'::jsonb) || $2::jsonb,
+             updated_at = NOW()
+         WHERE id = $1",
+    )
+    .bind(asset_id)
+    .bind(Value::Object(payload))
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
 async fn apply_asset_state_for_match(
     db: &sqlx::PgPool,
     job_id: i64,
@@ -1061,7 +1424,7 @@ async fn apply_asset_state_for_match(
             });
             emit_discovery_event(
                 db,
-                job_id,
+                Some(job_id),
                 Some(asset_id),
                 EVENT_ASSET_PROFILE_CHANGED,
                 Some(fingerprint),
@@ -1136,7 +1499,7 @@ async fn process_missing_assets(
             });
             emit_discovery_event(
                 db,
-                job_id,
+                Some(job_id),
                 Some(state.asset_id),
                 EVENT_ASSET_OFFBOARDED_SUSPECTED,
                 None,
@@ -1166,7 +1529,7 @@ async fn process_missing_assets(
 
 async fn emit_discovery_event(
     db: &sqlx::PgPool,
-    job_id: i64,
+    job_id: Option<i64>,
     asset_id: Option<i64>,
     event_type: &str,
     fingerprint: Option<&str>,
@@ -1603,19 +1966,103 @@ fn build_candidate_payload(source_type: &str, item: &DiscoveryInputItem) -> Valu
     Value::Object(payload)
 }
 
-async fn pending_candidate_exists(db: &sqlx::PgPool, fingerprint: &str) -> AppResult<bool> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
-            SELECT 1 FROM discovery_candidates
-            WHERE fingerprint = $1
-              AND review_status = 'pending'
-        )",
-    )
-    .bind(fingerprint)
-    .fetch_one(db)
-    .await?;
+async fn find_pending_candidate_conflict_id(
+    db: &sqlx::PgPool,
+    fingerprint: &str,
+    hostname: &Option<String>,
+    ip: &Option<String>,
+) -> AppResult<Option<i64>> {
+    let hostname_norm = normalize_hostname(hostname.as_deref());
+    let ip_norm = normalize_ip(ip.as_deref());
 
-    Ok(exists)
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, fingerprint, payload, discovered_at
+         FROM discovery_candidates
+         WHERE review_status = 'pending'
+           AND (fingerprint = ",
+    );
+    builder.push_bind(fingerprint);
+    if let Some(hostname_norm) = hostname_norm.as_deref() {
+        builder
+            .push(" OR LOWER(COALESCE(payload->>'hostname', '')) = ")
+            .push_bind(hostname_norm);
+    }
+    if let Some(ip_norm) = ip_norm.as_deref() {
+        builder
+            .push(" OR COALESCE(payload->>'ip', '') = ")
+            .push_bind(ip_norm);
+    }
+    builder.push(")");
+
+    let rows: Vec<PendingCandidateIdentity> = builder.build_query_as().fetch_all(db).await?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mut best: Option<(u8, DateTime<Utc>, i64)> = None;
+    for row in rows {
+        let (row_hostname, row_ip) = extract_payload_identity(&row.payload);
+        let Some(rank) = pending_candidate_rank(
+            fingerprint,
+            hostname_norm.as_deref(),
+            ip_norm.as_deref(),
+            &row.fingerprint,
+            row_hostname.as_deref(),
+            row_ip.as_deref(),
+        ) else {
+            continue;
+        };
+
+        match best {
+            None => best = Some((rank, row.discovered_at, row.id)),
+            Some((best_rank, best_discovered_at, best_id)) => {
+                if rank < best_rank
+                    || (rank == best_rank
+                        && (row.discovered_at > best_discovered_at
+                            || (row.discovered_at == best_discovered_at && row.id > best_id)))
+                {
+                    best = Some((rank, row.discovered_at, row.id));
+                }
+            }
+        }
+    }
+
+    Ok(best.map(|(_, _, id)| id))
+}
+
+fn extract_payload_identity(payload: &Value) -> (Option<String>, Option<String>) {
+    let hostname = payload
+        .get("hostname")
+        .and_then(Value::as_str)
+        .and_then(|item| normalize_hostname(Some(item)));
+    let ip = payload
+        .get("ip")
+        .and_then(Value::as_str)
+        .and_then(|item| normalize_ip(Some(item)));
+    (hostname, ip)
+}
+
+fn pending_candidate_rank(
+    fingerprint: &str,
+    hostname: Option<&str>,
+    ip: Option<&str>,
+    row_fingerprint: &str,
+    row_hostname: Option<&str>,
+    row_ip: Option<&str>,
+) -> Option<u8> {
+    if row_fingerprint == fingerprint {
+        return Some(1);
+    }
+    if hostname.is_some() && ip.is_some() && row_hostname == hostname && row_ip == ip {
+        return Some(2);
+    }
+    if hostname.is_some() && row_hostname == hostname {
+        return Some(3);
+    }
+    if ip.is_some() && row_ip == ip {
+        return Some(4);
+    }
+    None
 }
 
 async fn get_candidate_by_id(
@@ -1623,7 +2070,7 @@ async fn get_candidate_by_id(
     candidate_id: i64,
 ) -> AppResult<DiscoveryCandidate> {
     let item: Option<DiscoveryCandidate> = sqlx::query_as(
-        "SELECT id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, reviewed_at, created_at, updated_at
+        "SELECT id, job_id, fingerprint, payload, review_status, discovered_at, reviewed_by, review_strategy, review_reason, review_asset_id, reviewed_at, created_at, updated_at
          FROM discovery_candidates
          WHERE id = $1",
     )
@@ -1656,6 +2103,58 @@ fn normalize_reviewer(value: Option<String>) -> String {
             }
         })
         .unwrap_or_else(|| "system".to_string())
+}
+
+fn normalize_review_reason(value: Option<String>) -> AppResult<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.len() > 512 {
+        return Err(AppError::Validation(
+            "reason length must be <= 512".to_string(),
+        ));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn normalize_approval_strategy(value: Option<String>) -> AppResult<CandidateApprovalStrategy> {
+    let Some(value) = value else {
+        return Ok(CandidateApprovalStrategy::Auto);
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" => Ok(CandidateApprovalStrategy::Auto),
+        "create" => Ok(CandidateApprovalStrategy::Create),
+        "merge" => Ok(CandidateApprovalStrategy::Merge),
+        other => Err(AppError::Validation(format!(
+            "strategy must be one of: auto, create, merge (got '{other}')"
+        ))),
+    }
+}
+
+fn normalize_hostname(value: Option<&str>) -> Option<String> {
+    value.and_then(|item| {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_ascii_lowercase())
+        }
+    })
+}
+
+fn normalize_ip(value: Option<&str>) -> Option<String> {
+    value.and_then(|item| {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 fn append_candidate_filters(builder: &mut QueryBuilder<Postgres>, review_status: Option<String>) {

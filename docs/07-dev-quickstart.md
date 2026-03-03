@@ -252,17 +252,23 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs/1/run \
 # list pending discovery candidates
 curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates?review_status=pending"
 
-# approve a candidate (create or merge asset automatically)
+# approve a candidate with explicit create strategy
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates/1/approve \
   -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
-  -d '{ "reviewed_by": "ops-admin" }'
+  -d '{ "reviewed_by": "ops-admin", "strategy": "create", "reason": "new onboarding" }'
+
+# approve a candidate with explicit merge strategy
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates/2/approve \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{ "reviewed_by": "ops-admin", "strategy": "merge", "target_asset_id": 1, "reason": "same host already exists" }'
 
 # reject a candidate
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates/2/reject \
   -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
-  -d '{ "reviewed_by": "ops-admin" }'
+  -d '{ "reviewed_by": "ops-admin", "reason": "out of scope" }'
 
 # query discovery events by asset and time range (RFC3339)
 curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/discovery/events?asset_id=1&time_from=2026-03-02T00:00:00Z&time_to=2026-03-02T23:59:59Z"

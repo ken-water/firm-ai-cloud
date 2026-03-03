@@ -8,15 +8,38 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- None
+- Discovery candidate review hardening migration:
+  - `202603030003_harden_discovery_candidate_review.sql`
+  - new candidate metadata: `review_strategy`, `review_reason`, `review_asset_id`
+  - pending-candidate identity indexes and unique pending fingerprint guard
+- Candidate decision timeline events:
+  - `candidate.approved_create`
+  - `candidate.approved_merge`
+  - `candidate.rejected`
 
 ### Changed
 
-- None
+- Candidate approve API now supports explicit strategy controls:
+  - `strategy=auto|create|merge`
+  - optional `target_asset_id` for deterministic merge target selection
+  - optional `reason` for decision traceability
+- Candidate review response now returns action contract values:
+  - `approve:create`
+  - `approve:merge`
+  - `reject`
+- Discovery run dedup now uses deterministic identity conflict detection across:
+  - fingerprint
+  - hostname
+  - ip
+  and refreshes existing pending candidates instead of creating duplicates.
+- CMDB loop smoke test now covers:
+  - discover -> `approve:create`
+  - discover -> `approve:merge`
+- Developer quickstart discovery examples now document explicit review strategy and reason fields.
 
 ### Fixed
 
-- None
+- Prevented repeated discovery runs from producing duplicate pending candidates for the same identity signals.
 
 ## [0.0.5] - 2026-03-03
 

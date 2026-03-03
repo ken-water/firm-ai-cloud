@@ -61,35 +61,69 @@ echo "$REL_LIST" | grep -q '"relation_type":"depends_on"' || {
   exit 1
 }
 
-log "Create discovery job with mock hosts"
-JOB_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/jobs" \
+log "Create discovery job for approve:create path"
+JOB_CREATE_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/jobs" \
   -H 'Content-Type: application/json' \
   -d "{\"name\":\"it-loop-${STAMP}\",\"source_type\":\"zabbix_hosts\",\"scope\":{\"offboarded_threshold\":2,\"mock_hosts\":[{\"name\":\"it-a-${STAMP}\",\"hostname\":\"it-a-${STAMP}.local\",\"ip\":\"10.80.0.11\",\"asset_class\":\"server\"},{\"name\":\"new-candidate-${STAMP}\",\"hostname\":\"new-candidate-${STAMP}.local\",\"ip\":\"10.80.0.21\",\"asset_class\":\"server\"}]}}")"
-JOB_ID="$(echo "$JOB_JSON" | extract_first_id)"
-if [[ -z "$JOB_ID" ]]; then
+JOB_CREATE_ID="$(echo "$JOB_CREATE_JSON" | extract_first_id)"
+if [[ -z "$JOB_CREATE_ID" ]]; then
   echo "ERROR: failed to create discovery job" >&2
   exit 1
 fi
 
-log "Run discovery job"
-RUN_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/jobs/${JOB_ID}/run")"
+log "Run discovery job for approve:create"
+RUN_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/jobs/${JOB_CREATE_ID}/run")"
 echo "$RUN_JSON" | grep -q '"stats"' || {
   echo "ERROR: run response missing stats" >&2
   exit 1
 }
 
-log "Review one pending candidate"
-CANDIDATES_JSON="$(api_curl "${API_BASE_URL}/api/v1/cmdb/discovery/candidates?review_status=pending&limit=20")"
-CANDIDATE_ID="$(echo "$CANDIDATES_JSON" | extract_first_id)"
-if [[ -n "$CANDIDATE_ID" ]]; then
-  APPROVE_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/candidates/${CANDIDATE_ID}/approve" \
-    -H 'Content-Type: application/json' \
-    -d '{"reviewed_by":"smoke-test"}')"
-  echo "$APPROVE_JSON" | grep -Eq '"action":"(created|merged)"' || {
-    echo "ERROR: candidate approve action is invalid" >&2
-    exit 1
-  }
+log "Approve one pending candidate with strategy=create"
+CANDIDATES_JSON="$(api_curl "${API_BASE_URL}/api/v1/cmdb/discovery/candidates?review_status=pending&limit=1")"
+CANDIDATE_CREATE_ID="$(echo "$CANDIDATES_JSON" | extract_first_id)"
+if [[ -z "$CANDIDATE_CREATE_ID" ]]; then
+  echo "ERROR: no pending candidate available for approve:create" >&2
+  exit 1
 fi
+APPROVE_CREATE_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/candidates/${CANDIDATE_CREATE_ID}/approve" \
+  -H 'Content-Type: application/json' \
+  -d '{"reviewed_by":"smoke-test","strategy":"create","reason":"integration-create"}')"
+echo "$APPROVE_CREATE_JSON" | grep -q '"action":"approve:create"' || {
+  echo "ERROR: candidate approve:create action is invalid" >&2
+  exit 1
+}
+
+log "Create discovery job for approve:merge path"
+JOB_MERGE_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/jobs" \
+  -H 'Content-Type: application/json' \
+  -d "{\"name\":\"it-loop-merge-${STAMP}\",\"source_type\":\"zabbix_hosts\",\"scope\":{\"offboarded_threshold\":2,\"mock_hosts\":[{\"name\":\"merge-candidate-${STAMP}\",\"hostname\":\"merge-candidate-${STAMP}.local\",\"ip\":\"10.80.0.31\",\"asset_class\":\"server\"}]}}")"
+JOB_MERGE_ID="$(echo "$JOB_MERGE_JSON" | extract_first_id)"
+if [[ -z "$JOB_MERGE_ID" ]]; then
+  echo "ERROR: failed to create merge discovery job" >&2
+  exit 1
+fi
+
+log "Run discovery job for approve:merge"
+api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/jobs/${JOB_MERGE_ID}/run" >/dev/null
+
+log "Approve one pending candidate with strategy=merge"
+CANDIDATES_JSON="$(api_curl "${API_BASE_URL}/api/v1/cmdb/discovery/candidates?review_status=pending&limit=1")"
+CANDIDATE_MERGE_ID="$(echo "$CANDIDATES_JSON" | extract_first_id)"
+if [[ -z "$CANDIDATE_MERGE_ID" ]]; then
+  echo "ERROR: no pending candidate available for approve:merge" >&2
+  exit 1
+fi
+APPROVE_MERGE_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/candidates/${CANDIDATE_MERGE_ID}/approve" \
+  -H 'Content-Type: application/json' \
+  -d "{\"reviewed_by\":\"smoke-test\",\"strategy\":\"merge\",\"target_asset_id\":${ASSET_B_ID},\"reason\":\"integration-merge\"}")"
+echo "$APPROVE_MERGE_JSON" | grep -q '"action":"approve:merge"' || {
+  echo "ERROR: candidate approve:merge action is invalid" >&2
+  exit 1
+}
+echo "$APPROVE_MERGE_JSON" | grep -q "\"asset_id\":${ASSET_B_ID}" || {
+  echo "ERROR: candidate approve:merge did not return expected target asset id" >&2
+  exit 1
+}
 
 log "Query discovery events"
 EVENTS_JSON="$(api_curl "${API_BASE_URL}/api/v1/cmdb/discovery/events?limit=20")"
@@ -117,7 +151,7 @@ api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/notification-subscriptio
   -d "{\"channel_id\":${CHANNEL_ID},\"event_type\":\"asset.new_detected\"}" >/dev/null
 
 log "Trigger discovery again to generate and dispatch event"
-api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/jobs/${JOB_ID}/run" >/dev/null
+api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/discovery/jobs/${JOB_CREATE_ID}/run" >/dev/null
 
 log "Check delivery logs"
 DELIVERIES_JSON="$(api_curl "${API_BASE_URL}/api/v1/cmdb/discovery/notification-deliveries?limit=20")"
