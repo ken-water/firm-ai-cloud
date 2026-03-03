@@ -212,7 +212,24 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets/1/monitoring-sync \
   -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{ "reason": "manual retry after source fix" }'
+
+# monitoring overview (layer summary + source summary), supports site/department filter
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/monitoring/overview?site=dc-a&department=platform"
+
+# monitoring layer detail list, supports pagination and same scope filters
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/monitoring/layers/hardware?site=dc-a&department=platform&limit=20&offset=0"
 ```
+
+Monitoring overview/layer API conventions:
+
+- Layer enum is fixed to: `hardware`, `network`, `service`, `business`.
+- Unknown layer requests return HTTP `400` with explicit validation error.
+- Both endpoints include `empty` in payload for frontend empty-state handling.
+- `monitoring_health` is normalized from sync status:
+  - `healthy` <- `success`
+  - `warning` <- `pending`/`running`
+  - `critical` <- `failed`/`dead_letter`
+  - `unknown` <- missing binding, `skipped`, or unsupported status
 
 Troubleshooting notes:
 

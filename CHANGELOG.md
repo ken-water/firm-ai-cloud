@@ -33,6 +33,11 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - in-UI binding editor for departments/business services/owner bindings (team/user/group/external)
   - in-UI monitoring sync status and manual sync trigger entrypoint
   - impact-hint view for hierarchy edges and affected service/owner summary
+- Monitoring overview and layer baseline APIs:
+  - `GET /api/v1/monitoring/overview`
+  - `GET /api/v1/monitoring/layers/{layer}`
+  - supported layer model: `hardware`, `network`, `service`, `business`
+  - response contract includes scope echo and `empty` flag for frontend empty-state rendering
 
 ### Changed
 
@@ -61,6 +66,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - CMDB smoke test now verifies hierarchy + service/owner mappings and incident impact API output.
 - Web-console navigation now includes a dedicated readiness section and refresh flow tied to selected relation-source asset.
 - Dev quickstart now includes explicit unbind example and readiness-panel monitoring-binding inspection command.
+- RBAC monitoring-read mapping now also covers `/api/v1/monitoring/overview` and `/api/v1/monitoring/layers/*`.
 
 ### Fixed
 

@@ -51,6 +51,8 @@ RBAC route mapping source:
 | Route Group | Permission |
 | --- | --- |
 | `/api/v1/monitoring/sources*` | `monitoring.sources.read` / `monitoring.sources.write` |
+| `/api/v1/monitoring/overview` | `monitoring.sources.read` |
+| `/api/v1/monitoring/layers*` | `monitoring.sources.read` |
 
 ### 2.3 Administration
 

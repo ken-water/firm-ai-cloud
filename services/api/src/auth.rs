@@ -254,6 +254,10 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         "cmdb.notifications"
     } else if matches_scope(&normalized, "/monitoring/sources") {
         "monitoring.sources"
+    } else if matches_scope(&normalized, "/monitoring/overview")
+        || matches_scope(&normalized, "/monitoring/layers")
+    {
+        "monitoring.sources"
     } else if matches_scope(&normalized, "/cmdb/discovery")
         || matches_scope(&normalized, "/discovery")
     {
@@ -397,6 +401,16 @@ mod tests {
         assert_permission(
             Method::GET,
             "/api/v1/monitoring/sources",
+            "monitoring.sources.read",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/monitoring/overview",
+            "monitoring.sources.read",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/monitoring/layers/hardware",
             "monitoring.sources.read",
         );
         assert_permission(
@@ -595,6 +609,16 @@ mod tests {
             (
                 Method::GET,
                 "/api/v1/monitoring/sources",
+                "monitoring.sources.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/monitoring/overview",
+                "monitoring.sources.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/monitoring/layers/service",
                 "monitoring.sources.read",
             ),
             (
