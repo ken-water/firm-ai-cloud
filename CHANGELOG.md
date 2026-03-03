@@ -24,6 +24,10 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
     - `GET /api/v1/cmdb/assets/{id}/monitoring-binding`
     - `POST /api/v1/cmdb/assets/{id}/monitoring-sync`
     - `GET /api/v1/cmdb/monitoring-sync/jobs`
+- Infra hierarchy and impact traversal baseline:
+  - migration: `202603030005_standardize_relation_types_and_hierarchy_indexes.sql`
+  - canonical relation types: `contains`, `depends_on`, `runs_service`, `owned_by`
+  - impact API: `GET /api/v1/cmdb/assets/{id}/impact`
 
 ### Changed
 
@@ -47,10 +51,14 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - CMDB asset API now supports `PATCH /api/v1/cmdb/assets/{id}` and enqueues monitoring sync on eligible asset create/update.
 - API service now starts a built-in monitoring sync worker for queued CMDB -> Zabbix provisioning jobs.
 - RBAC mapping now covers `/api/v1/cmdb/monitoring-sync/*` under `cmdb.assets.read/write`.
+- Relation API now canonicalizes common aliases (`hosts`, `dependency`, `serves`, `managed_by`) into standardized relation types.
+- Impact traversal now supports deterministic upstream/downstream/both traversal with depth limit and relation-type filter.
+- CMDB smoke test now verifies hierarchy + service/owner mappings and incident impact API output.
 
 ### Fixed
 
 - Prevented repeated discovery runs from producing duplicate pending candidates for the same identity signals.
+- Prevented invalid `contains` hierarchy structures by rejecting cycle creation and conflicting multi-parent child edges.
 
 ## [0.0.5] - 2026-03-03
 

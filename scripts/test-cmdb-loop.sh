@@ -45,7 +45,35 @@ if [[ -z "$ASSET_A_ID" || -z "$ASSET_B_ID" ]]; then
   exit 1
 fi
 
-log "Create and validate relation"
+log "Create hierarchy/service/owner assets for impact graph"
+PHYSICAL_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/assets" \
+  -H 'Content-Type: application/json' \
+  -d "{\"asset_class\":\"physical_host\",\"name\":\"phy-${STAMP}\",\"hostname\":\"phy-${STAMP}.local\",\"ip\":\"10.80.0.41\",\"status\":\"active\"}")"
+VM_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/assets" \
+  -H 'Content-Type: application/json' \
+  -d "{\"asset_class\":\"virtual_machine\",\"name\":\"vm-${STAMP}\",\"hostname\":\"vm-${STAMP}.local\",\"ip\":\"10.80.0.42\",\"status\":\"active\"}")"
+CONTAINER_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/assets" \
+  -H 'Content-Type: application/json' \
+  -d "{\"asset_class\":\"container\",\"name\":\"ct-${STAMP}\",\"hostname\":\"ct-${STAMP}.local\",\"ip\":\"10.80.0.43\",\"status\":\"active\"}")"
+SERVICE_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/assets" \
+  -H 'Content-Type: application/json' \
+  -d "{\"asset_class\":\"business_service\",\"name\":\"svc-${STAMP}\",\"status\":\"active\"}")"
+TEAM_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/assets" \
+  -H 'Content-Type: application/json' \
+  -d "{\"asset_class\":\"team\",\"name\":\"team-${STAMP}\",\"status\":\"active\"}")"
+
+PHYSICAL_ID="$(echo "$PHYSICAL_JSON" | extract_first_id)"
+VM_ID="$(echo "$VM_JSON" | extract_first_id)"
+CONTAINER_ID="$(echo "$CONTAINER_JSON" | extract_first_id)"
+SERVICE_ID="$(echo "$SERVICE_JSON" | extract_first_id)"
+TEAM_ID="$(echo "$TEAM_JSON" | extract_first_id)"
+
+if [[ -z "$PHYSICAL_ID" || -z "$VM_ID" || -z "$CONTAINER_ID" || -z "$SERVICE_ID" || -z "$TEAM_ID" ]]; then
+  echo "ERROR: failed to parse hierarchy/service/owner asset IDs" >&2
+  exit 1
+fi
+
+log "Create and validate relation set"
 REL_JSON="$(api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/relations" \
   -H 'Content-Type: application/json' \
   -d "{\"src_asset_id\":${ASSET_A_ID},\"dst_asset_id\":${ASSET_B_ID},\"relation_type\":\"depends_on\",\"source\":\"manual\"}")"
@@ -55,9 +83,37 @@ if [[ -z "$REL_ID" ]]; then
   exit 1
 fi
 
+api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/relations" \
+  -H 'Content-Type: application/json' \
+  -d "{\"src_asset_id\":${PHYSICAL_ID},\"dst_asset_id\":${VM_ID},\"relation_type\":\"contains\",\"source\":\"manual\"}" >/dev/null
+api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/relations" \
+  -H 'Content-Type: application/json' \
+  -d "{\"src_asset_id\":${VM_ID},\"dst_asset_id\":${CONTAINER_ID},\"relation_type\":\"contains\",\"source\":\"manual\"}" >/dev/null
+api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/relations" \
+  -H 'Content-Type: application/json' \
+  -d "{\"src_asset_id\":${VM_ID},\"dst_asset_id\":${SERVICE_ID},\"relation_type\":\"runs_service\",\"source\":\"manual\"}" >/dev/null
+api_curl -X POST "${API_BASE_URL}/api/v1/cmdb/relations" \
+  -H 'Content-Type: application/json' \
+  -d "{\"src_asset_id\":${VM_ID},\"dst_asset_id\":${TEAM_ID},\"relation_type\":\"owned_by\",\"source\":\"manual\"}" >/dev/null
+
 REL_LIST="$(api_curl "${API_BASE_URL}/api/v1/cmdb/relations?asset_id=${ASSET_A_ID}")"
 echo "$REL_LIST" | grep -q '"relation_type":"depends_on"' || {
   echo "ERROR: relation list does not contain expected relation" >&2
+  exit 1
+}
+
+log "Validate impact API blast-radius response"
+IMPACT_JSON="$(api_curl "${API_BASE_URL}/api/v1/cmdb/assets/${PHYSICAL_ID}/impact?direction=downstream&depth=4")"
+echo "$IMPACT_JSON" | grep -q "\"root_asset_id\":${PHYSICAL_ID}" || {
+  echo "ERROR: impact response missing root asset ${PHYSICAL_ID}" >&2
+  exit 1
+}
+echo "$IMPACT_JSON" | grep -q "\"id\":${SERVICE_ID}" || {
+  echo "ERROR: impact response missing business service node ${SERVICE_ID}" >&2
+  exit 1
+}
+echo "$IMPACT_JSON" | grep -q "\"id\":${TEAM_ID}" || {
+  echo "ERROR: impact response missing owner/team node ${TEAM_ID}" >&2
   exit 1
 }
 

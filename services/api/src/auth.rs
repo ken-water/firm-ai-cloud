@@ -478,6 +478,11 @@ mod tests {
             ),
             (
                 Method::GET,
+                "/api/v1/cmdb/assets/1/impact",
+                "cmdb.assets.read",
+            ),
+            (
+                Method::GET,
                 "/api/v1/cmdb/assets/1/monitoring-binding",
                 "cmdb.assets.read",
             ),

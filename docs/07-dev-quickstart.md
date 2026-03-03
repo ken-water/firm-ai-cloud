@@ -255,7 +255,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets/1/lifecycle \
 CMDB relation APIs:
 
 ```bash
-# create a relation: source asset depends on target asset
+# create a dependency relation: source asset depends on target asset
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/relations \
   -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
@@ -266,11 +266,45 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/relations \
     "source": "manual"
   }'
 
+# create hierarchy relation: physical host contains VM
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/relations \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "src_asset_id": 10,
+    "dst_asset_id": 11,
+    "relation_type": "contains",
+    "source": "manual"
+  }'
+
+# create business ownership/service mapping
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/relations \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "src_asset_id": 11,
+    "dst_asset_id": 20,
+    "relation_type": "runs_service",
+    "source": "manual"
+  }'
+curl -X POST http://127.0.0.1:8080/api/v1/cmdb/relations \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "src_asset_id": 11,
+    "dst_asset_id": 30,
+    "relation_type": "owned_by",
+    "source": "manual"
+  }'
+
 # list all relations that involve asset 1
 curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/relations?asset_id=1"
 
 # get one-hop relation graph for asset 1
 curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/assets/1/graph"
+
+# get incident impact graph (direction + depth + relation type filter)
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/assets/1/impact?direction=both&depth=4&relation_types=contains,depends_on,runs_service,owned_by"
 
 # delete relation
 curl -X DELETE http://127.0.0.1:8080/api/v1/cmdb/relations/1 \
