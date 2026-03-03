@@ -1002,23 +1002,35 @@ export function App() {
     const downstream = relations.filter((item) => item.src_asset_id === selectedAssetNumericId).length;
     return { upstream, downstream };
   }, [relations, selectedAssetNumericId]);
+  const navigationItems = useMemo(
+    () => [
+      { href: "#section-scan", label: t("auth.navigation.scan") },
+      { href: "#section-discovery", label: t("auth.navigation.discovery") },
+      { href: "#section-notifications", label: t("auth.navigation.notifications") },
+      { href: "#section-fields", label: t("auth.navigation.fields") },
+      { href: "#section-relations", label: t("auth.navigation.relations") },
+      { href: "#section-assets", label: t("auth.navigation.assets") },
+      ...(canAccessAdmin ? [{ href: "#section-admin", label: t("auth.navigation.admin") }] : [])
+    ],
+    [canAccessAdmin, t]
+  );
 
   if (!authSession || !authIdentity) {
     return (
-      <main style={{ fontFamily: "sans-serif", padding: "2rem", lineHeight: 1.5 }}>
-        <header style={{ marginBottom: "1rem" }}>
-          <h1 style={{ marginBottom: "0.25rem" }}>{t("app.title")}</h1>
-          <p style={{ marginTop: 0 }}>{t("app.subtitle")}</p>
+      <main className="auth-gate">
+        <header className="auth-gate-header">
+          <h1>{t("app.title")}</h1>
+          <p>{t("app.subtitle")}</p>
         </header>
 
-        {authNotice && <p style={{ color: "#00695c" }}>{authNotice}</p>}
-        {authError && <p style={{ color: "#b00020" }}>{authError}</p>}
+        {authNotice && <p className="banner banner-success">{authNotice}</p>}
+        {authError && <p className="banner banner-error">{authError}</p>}
 
-        <section style={{ border: "1px solid #ddd", borderRadius: "8px", padding: "1rem", maxWidth: "720px" }}>
-          <h2 style={{ marginTop: 0 }}>{t("auth.title")}</h2>
-          <p style={{ marginTop: 0 }}>{t("auth.subtitle")}</p>
+        <section className="auth-card">
+          <h2>{t("auth.title")}</h2>
+          <p>{t("auth.subtitle")}</p>
 
-          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+          <div className="auth-form-row">
             <label>
               {t("auth.modeLabel")}{" "}
               <select value={loginMode} onChange={(event) => setLoginMode(event.target.value as AuthMode)}>
@@ -1043,7 +1055,7 @@ export function App() {
                   value={loginToken}
                   onChange={(event) => setLoginToken(event.target.value)}
                   placeholder={t("auth.tokenPlaceholder")}
-                  style={{ width: "100%", minWidth: "320px" }}
+                  className="auth-token-input"
                 />
               </label>
             )}
@@ -1058,51 +1070,46 @@ export function App() {
   }
 
   return (
-    <main style={{ fontFamily: "sans-serif", padding: "2rem", lineHeight: 1.5 }}>
-      <header style={{ marginBottom: "1rem" }}>
-        <h1 style={{ marginBottom: "0.25rem" }}>{t("app.title")}</h1>
-        <p style={{ marginTop: 0 }}>{t("app.subtitle")}</p>
-      </header>
+    <main className="app-shell">
+      <aside className="app-sidebar">
+        <div className="sidebar-brand">
+          <h1>{t("app.title")}</h1>
+          <p>{t("app.subtitle")}</p>
+        </div>
+        <nav className="sidebar-nav">
+          {navigationItems.map((item) => (
+            <a key={item.href} href={item.href}>
+              {item.label}
+            </a>
+          ))}
+        </nav>
+      </aside>
 
-      <section
-        style={{
-          marginBottom: "1rem",
-          border: "1px solid #ddd",
-          borderRadius: "8px",
-          padding: "0.75rem",
-          display: "flex",
-          gap: "0.75rem",
-          flexWrap: "wrap",
-          alignItems: "center"
-        }}
-      >
-        <strong>{t("auth.status", { username: authIdentity.user.username, roles: roleText })}</strong>
-        <span>{t("auth.statusMode", { mode: authSession.mode })}</span>
-        <button onClick={() => void signOut()}>{t("auth.signOut")}</button>
-      </section>
+      <div className="app-main">
+        <header className="app-topbar">
+          <div>
+            <strong>{t("auth.status", { username: authIdentity.user.username, roles: roleText })}</strong>
+            <p>{t("auth.statusMode", { mode: authSession.mode })}</p>
+          </div>
+          <button onClick={() => void signOut()}>{t("auth.signOut")}</button>
+        </header>
 
-      {authNotice && <p style={{ color: "#00695c" }}>{authNotice}</p>}
+        {authNotice && <p className="banner banner-success">{authNotice}</p>}
+        {error && (
+          <p className="banner banner-error">
+            {t("cmdb.messages.error")}: {error}
+          </p>
+        )}
+        {!canWriteCmdb && <p className="banner banner-warn">{t("auth.messages.readOnly")}</p>}
 
-      {!canWriteCmdb && <p style={{ color: "#6d4c41" }}>{t("auth.messages.readOnly")}</p>}
+        {canAccessAdmin && (
+          <section id="section-admin" className="section-card">
+            <h2 style={sectionTitleStyle}>{t("auth.adminPanel.title")}</h2>
+            <p style={{ marginTop: 0 }}>{t("auth.adminPanel.description")}</p>
+          </section>
+        )}
 
-      <nav style={{ marginBottom: "1rem", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-        <a href="#section-scan">{t("auth.navigation.scan")}</a>
-        <a href="#section-discovery">{t("auth.navigation.discovery")}</a>
-        <a href="#section-notifications">{t("auth.navigation.notifications")}</a>
-        <a href="#section-fields">{t("auth.navigation.fields")}</a>
-        <a href="#section-relations">{t("auth.navigation.relations")}</a>
-        <a href="#section-assets">{t("auth.navigation.assets")}</a>
-        {canAccessAdmin && <a href="#section-admin">{t("auth.navigation.admin")}</a>}
-      </nav>
-
-      {canAccessAdmin && (
-        <section id="section-admin" style={{ marginBottom: "1.5rem" }}>
-          <h2 style={sectionTitleStyle}>{t("auth.adminPanel.title")}</h2>
-          <p style={{ marginTop: 0 }}>{t("auth.adminPanel.description")}</p>
-        </section>
-      )}
-
-      <section style={{ marginBottom: "1rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+        <section className="section-card toolbar-row">
         <button onClick={() => void loadAssets()} disabled={loadingAssets}>
           {loadingAssets ? t("cmdb.actions.loading") : t("cmdb.actions.refreshAssets")}
         </button>
@@ -1114,15 +1121,9 @@ export function App() {
             {creatingSample ? t("cmdb.actions.creating") : t("cmdb.actions.createSample")}
           </button>
         )}
-      </section>
+        </section>
 
-      {error && (
-        <p style={{ color: "#b00020", marginTop: 0 }}>
-          {t("cmdb.messages.error")}: {error}
-        </p>
-      )}
-
-      <section id="section-scan" style={{ marginBottom: "1.5rem" }}>
+      <section id="section-scan" className="section-card">
         <h2 style={sectionTitleStyle}>{t("cmdb.scan.title")}</h2>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
           <input
@@ -1147,7 +1148,7 @@ export function App() {
         )}
       </section>
 
-      <section id="section-discovery" style={{ marginBottom: "1.5rem" }}>
+      <section id="section-discovery" className="section-card">
         <h2 style={sectionTitleStyle}>{t("cmdb.discovery.title")}</h2>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
           <button onClick={() => void loadDiscoveryJobs()} disabled={loadingDiscoveryJobs}>
@@ -1258,7 +1259,7 @@ export function App() {
         )}
       </section>
 
-      <section id="section-notifications" style={{ marginBottom: "1.5rem" }}>
+      <section id="section-notifications" className="section-card">
         <h2 style={sectionTitleStyle}>{t("cmdb.notifications.title")}</h2>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
           <button onClick={() => void loadNotificationChannels()} disabled={loadingNotificationChannels}>
@@ -1533,7 +1534,7 @@ export function App() {
         )}
       </section>
 
-      <section id="section-fields" style={{ marginBottom: "1.5rem" }}>
+      <section id="section-fields" className="section-card">
         <h2 style={sectionTitleStyle}>{t("cmdb.fields.title")}</h2>
         {canWriteCmdb ? (
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
@@ -1633,7 +1634,7 @@ export function App() {
         )}
       </section>
 
-      <section id="section-relations" style={{ marginBottom: "1.5rem" }}>
+      <section id="section-relations" className="section-card">
         <h2 style={sectionTitleStyle}>{t("cmdb.relations.title")}</h2>
         {emptyState ? (
           <p>{t("cmdb.relations.messages.noAssets")}</p>
@@ -1761,7 +1762,7 @@ export function App() {
         )}
       </section>
 
-      <section id="section-assets">
+      <section id="section-assets" className="section-card">
         <h2 style={sectionTitleStyle}>{t("cmdb.assets.title")}</h2>
         {emptyState ? (
           <p>{t("cmdb.messages.empty")}</p>
@@ -1808,6 +1809,7 @@ export function App() {
           </div>
         )}
       </section>
+      </div>
     </main>
   );
 }

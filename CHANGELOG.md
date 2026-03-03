@@ -11,11 +11,13 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - LAN helper scripts:
   - `scripts/dev-lan-up.sh`
   - `scripts/dev-lan-down.sh`
+- v0.0.4 UI iteration planning document: `docs/12-v0.0.4-ui-iteration-plan.md`.
 
 ### Changed
 
 - CI trigger policy updated: GitHub Actions CI now runs by manual dispatch only (`workflow_dispatch`) to avoid automatic resource consumption.
 - Web console default API base now follows current host (`<current-host>:8080`) when `VITE_API_BASE_URL` is not provided, improving LAN access.
+- Web console now uses a UI baseline shell with sidebar/topbar layout and shared design-token stylesheet.
 
 ### Fixed
 

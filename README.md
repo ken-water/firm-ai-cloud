@@ -77,6 +77,7 @@ Details: [docs/06-offline-installation.md](docs/06-offline-installation.md)
 - [Developer quickstart](docs/07-dev-quickstart.md)
 - [v0.0.2 sprint backlog](docs/09-v0.0.2-sprint-backlog.md)
 - [Security operations guide (v0.0.3)](docs/11-security-operations-v0.0.3.md)
+- [v0.0.4 UI iteration plan](docs/12-v0.0.4-ui-iteration-plan.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
