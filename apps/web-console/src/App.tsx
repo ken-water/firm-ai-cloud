@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
+import { AppShell, AuthGate, SectionCard } from "./components/layout";
 
 type Asset = {
   id: number;
@@ -1017,114 +1018,90 @@ export function App() {
 
   if (!authSession || !authIdentity) {
     return (
-      <main className="auth-gate">
-        <header className="auth-gate-header">
-          <h1>{t("app.title")}</h1>
-          <p>{t("app.subtitle")}</p>
-        </header>
+      <AuthGate
+        title={t("app.title")}
+        subtitle={t("app.subtitle")}
+        notice={authNotice}
+        error={authError}
+      >
+        <h2>{t("auth.title")}</h2>
+        <p>{t("auth.subtitle")}</p>
 
-        {authNotice && <p className="banner banner-success">{authNotice}</p>}
-        {authError && <p className="banner banner-error">{authError}</p>}
+        <div className="auth-form-row">
+          <label>
+            {t("auth.modeLabel")}{" "}
+            <select value={loginMode} onChange={(event) => setLoginMode(event.target.value as AuthMode)}>
+              <option value="header">{t("auth.modes.header")}</option>
+              <option value="bearer">{t("auth.modes.bearer")}</option>
+            </select>
+          </label>
 
-        <section className="auth-card">
-          <h2>{t("auth.title")}</h2>
-          <p>{t("auth.subtitle")}</p>
-
-          <div className="auth-form-row">
+          {loginMode === "header" ? (
             <label>
-              {t("auth.modeLabel")}{" "}
-              <select value={loginMode} onChange={(event) => setLoginMode(event.target.value as AuthMode)}>
-                <option value="header">{t("auth.modes.header")}</option>
-                <option value="bearer">{t("auth.modes.bearer")}</option>
-              </select>
+              {t("auth.usernameLabel")}{" "}
+              <input
+                value={loginPrincipal}
+                onChange={(event) => setLoginPrincipal(event.target.value)}
+                placeholder={t("auth.usernamePlaceholder")}
+              />
             </label>
+          ) : (
+            <label style={{ flex: "1 1 420px" }}>
+              {t("auth.tokenLabel")}{" "}
+              <input
+                value={loginToken}
+                onChange={(event) => setLoginToken(event.target.value)}
+                placeholder={t("auth.tokenPlaceholder")}
+                className="auth-token-input"
+              />
+            </label>
+          )}
 
-            {loginMode === "header" ? (
-              <label>
-                {t("auth.usernameLabel")}{" "}
-                <input
-                  value={loginPrincipal}
-                  onChange={(event) => setLoginPrincipal(event.target.value)}
-                  placeholder={t("auth.usernamePlaceholder")}
-                />
-              </label>
-            ) : (
-              <label style={{ flex: "1 1 420px" }}>
-                {t("auth.tokenLabel")}{" "}
-                <input
-                  value={loginToken}
-                  onChange={(event) => setLoginToken(event.target.value)}
-                  placeholder={t("auth.tokenPlaceholder")}
-                  className="auth-token-input"
-                />
-              </label>
-            )}
-
-            <button onClick={() => void signIn()} disabled={authLoading}>
-              {authLoading ? t("auth.signingIn") : t("auth.signIn")}
-            </button>
-          </div>
-        </section>
-      </main>
+          <button onClick={() => void signIn()} disabled={authLoading}>
+            {authLoading ? t("auth.signingIn") : t("auth.signIn")}
+          </button>
+        </div>
+      </AuthGate>
     );
   }
 
   return (
-    <main className="app-shell">
-      <aside className="app-sidebar">
-        <div className="sidebar-brand">
-          <h1>{t("app.title")}</h1>
-          <p>{t("app.subtitle")}</p>
-        </div>
-        <nav className="sidebar-nav">
-          {navigationItems.map((item) => (
-            <a key={item.href} href={item.href}>
-              {item.label}
-            </a>
-          ))}
-        </nav>
-      </aside>
+    <AppShell
+      title={t("app.title")}
+      subtitle={t("app.subtitle")}
+      statusText={t("auth.status", { username: authIdentity.user.username, roles: roleText })}
+      modeText={t("auth.statusMode", { mode: authSession.mode })}
+      signOutLabel={t("auth.signOut")}
+      onSignOut={() => void signOut()}
+      navigationItems={navigationItems}
+      notice={authNotice}
+      error={error ? `${t("cmdb.messages.error")}: ${error}` : null}
+      warning={!canWriteCmdb ? t("auth.messages.readOnly") : null}
+    >
 
-      <div className="app-main">
-        <header className="app-topbar">
-          <div>
-            <strong>{t("auth.status", { username: authIdentity.user.username, roles: roleText })}</strong>
-            <p>{t("auth.statusMode", { mode: authSession.mode })}</p>
-          </div>
-          <button onClick={() => void signOut()}>{t("auth.signOut")}</button>
-        </header>
+      {canAccessAdmin && (
+        <SectionCard id="section-admin" title={t("auth.adminPanel.title")}>
+          <p style={{ marginTop: 0 }}>{t("auth.adminPanel.description")}</p>
+        </SectionCard>
+      )}
 
-        {authNotice && <p className="banner banner-success">{authNotice}</p>}
-        {error && (
-          <p className="banner banner-error">
-            {t("cmdb.messages.error")}: {error}
-          </p>
-        )}
-        {!canWriteCmdb && <p className="banner banner-warn">{t("auth.messages.readOnly")}</p>}
-
-        {canAccessAdmin && (
-          <section id="section-admin" className="section-card">
-            <h2 style={sectionTitleStyle}>{t("auth.adminPanel.title")}</h2>
-            <p style={{ marginTop: 0 }}>{t("auth.adminPanel.description")}</p>
-          </section>
-        )}
-
-        <section className="section-card toolbar-row">
-        <button onClick={() => void loadAssets()} disabled={loadingAssets}>
-          {loadingAssets ? t("cmdb.actions.loading") : t("cmdb.actions.refreshAssets")}
-        </button>
-        <button onClick={() => void loadFieldDefinitions()} disabled={loadingFields}>
-          {loadingFields ? t("cmdb.actions.loading") : t("cmdb.actions.refreshFields")}
-        </button>
-        {canWriteCmdb && (
-          <button onClick={() => void createSampleAsset()} disabled={creatingSample}>
-            {creatingSample ? t("cmdb.actions.creating") : t("cmdb.actions.createSample")}
+      <SectionCard>
+        <div className="toolbar-row">
+          <button onClick={() => void loadAssets()} disabled={loadingAssets}>
+            {loadingAssets ? t("cmdb.actions.loading") : t("cmdb.actions.refreshAssets")}
           </button>
-        )}
-        </section>
+          <button onClick={() => void loadFieldDefinitions()} disabled={loadingFields}>
+            {loadingFields ? t("cmdb.actions.loading") : t("cmdb.actions.refreshFields")}
+          </button>
+          {canWriteCmdb && (
+            <button onClick={() => void createSampleAsset()} disabled={creatingSample}>
+              {creatingSample ? t("cmdb.actions.creating") : t("cmdb.actions.createSample")}
+            </button>
+          )}
+        </div>
+      </SectionCard>
 
-      <section id="section-scan" className="section-card">
-        <h2 style={sectionTitleStyle}>{t("cmdb.scan.title")}</h2>
+      <SectionCard id="section-scan" title={t("cmdb.scan.title")}>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
           <input
             value={scanCode}
@@ -1146,10 +1123,9 @@ export function App() {
             {t("cmdb.scan.hit")}: #{scanResult.id} {scanResult.name} ({scanResult.asset_class})
           </p>
         )}
-      </section>
+      </SectionCard>
 
-      <section id="section-discovery" className="section-card">
-        <h2 style={sectionTitleStyle}>{t("cmdb.discovery.title")}</h2>
+      <SectionCard id="section-discovery" title={t("cmdb.discovery.title")}>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
           <button onClick={() => void loadDiscoveryJobs()} disabled={loadingDiscoveryJobs}>
             {loadingDiscoveryJobs ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.refreshJobs")}
@@ -1257,10 +1233,9 @@ export function App() {
             </table>
           </div>
         )}
-      </section>
+      </SectionCard>
 
-      <section id="section-notifications" className="section-card">
-        <h2 style={sectionTitleStyle}>{t("cmdb.notifications.title")}</h2>
+      <SectionCard id="section-notifications" title={t("cmdb.notifications.title")}>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
           <button onClick={() => void loadNotificationChannels()} disabled={loadingNotificationChannels}>
             {loadingNotificationChannels ? t("cmdb.actions.loading") : t("cmdb.notifications.actions.refreshChannels")}
@@ -1532,10 +1507,9 @@ export function App() {
             </table>
           </div>
         )}
-      </section>
+      </SectionCard>
 
-      <section id="section-fields" className="section-card">
-        <h2 style={sectionTitleStyle}>{t("cmdb.fields.title")}</h2>
+      <SectionCard id="section-fields" title={t("cmdb.fields.title")}>
         {canWriteCmdb ? (
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
             <input
@@ -1632,10 +1606,9 @@ export function App() {
             </table>
           </div>
         )}
-      </section>
+      </SectionCard>
 
-      <section id="section-relations" className="section-card">
-        <h2 style={sectionTitleStyle}>{t("cmdb.relations.title")}</h2>
+      <SectionCard id="section-relations" title={t("cmdb.relations.title")}>
         {emptyState ? (
           <p>{t("cmdb.relations.messages.noAssets")}</p>
         ) : (
@@ -1760,10 +1733,9 @@ export function App() {
             )}
           </>
         )}
-      </section>
+      </SectionCard>
 
-      <section id="section-assets" className="section-card">
-        <h2 style={sectionTitleStyle}>{t("cmdb.assets.title")}</h2>
+      <SectionCard id="section-assets" title={t("cmdb.assets.title")}>
         {emptyState ? (
           <p>{t("cmdb.messages.empty")}</p>
         ) : (
@@ -1808,9 +1780,8 @@ export function App() {
             </table>
           </div>
         )}
-      </section>
-      </div>
-    </main>
+      </SectionCard>
+    </AppShell>
   );
 }
 
@@ -2016,11 +1987,6 @@ async function extractApiErrorMessage(response: Response): Promise<string | null
 
   return null;
 }
-
-const sectionTitleStyle: CSSProperties = {
-  marginTop: 0,
-  marginBottom: "0.5rem"
-};
 
 const subSectionTitleStyle: CSSProperties = {
   marginTop: 0,
