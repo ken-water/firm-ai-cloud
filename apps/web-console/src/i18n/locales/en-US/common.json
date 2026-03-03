@@ -23,6 +23,7 @@
     "navigation": {
       "scan": "Scan",
       "discovery": "Discovery",
+      "monitoringSources": "Monitoring Sources",
       "notifications": "Notifications",
       "fields": "Fields",
       "relations": "Relations",
@@ -186,6 +187,80 @@
           "enabled": "Enabled",
           "updatedAt": "Updated At"
         }
+      }
+    },
+    "monitoringSources": {
+      "title": "Monitoring Source Registry",
+      "summary": "Sources: {{total}} | Enabled: {{enabled}} | Reachable: {{reachable}} | Unreachable: {{unreachable}}",
+      "actions": {
+        "refresh": "Refresh Sources",
+        "applyFilters": "Apply Filters",
+        "resetFilters": "Reset Filters",
+        "create": "Create Source",
+        "probe": "Probe"
+      },
+      "messages": {
+        "loading": "Loading monitoring sources...",
+        "noSources": "No monitoring sources found.",
+        "created": "Monitoring source '{{name}}' created.",
+        "probed": "Probe completed for source #{{id}} ({{result}}).",
+        "reachable": "reachable",
+        "unreachable": "unreachable",
+        "neverProbed": "never probed",
+        "readOnlyHint": "Read-only mode: create/probe actions require operator or admin permission."
+      },
+      "validation": {
+        "nameRequired": "Source name is required.",
+        "endpointRequired": "Endpoint is required.",
+        "secretRefRequired": "Secret reference is required.",
+        "usernameRequired": "Username is required when auth type is basic."
+      },
+      "filters": {
+        "sourceTypeLabel": "Source Type",
+        "allSourceTypes": "All Source Types",
+        "siteLabel": "Site",
+        "sitePlaceholder": "dc-a",
+        "departmentLabel": "Department",
+        "departmentPlaceholder": "platform",
+        "enabledLabel": "Enabled",
+        "enabledAll": "All",
+        "enabledOnly": "Enabled Only",
+        "disabledOnly": "Disabled Only"
+      },
+      "form": {
+        "name": "Name",
+        "namePlaceholder": "local-zabbix",
+        "sourceType": "Source Type",
+        "authType": "Auth Type",
+        "endpoint": "Endpoint",
+        "endpointPlaceholder": "http://127.0.0.1:8082/api_jsonrpc.php",
+        "proxyEndpoint": "Proxy Endpoint (optional)",
+        "proxyEndpointPlaceholder": "http://127.0.0.1:10051",
+        "secretRef": "Secret Ref",
+        "secretRefPlaceholder": "plain:zabbix",
+        "username": "Username (basic auth)",
+        "usernamePlaceholder": "Admin",
+        "site": "Site (optional)",
+        "sitePlaceholder": "dc-a",
+        "department": "Department (optional)",
+        "departmentPlaceholder": "platform",
+        "enabled": "Enabled",
+        "enabledTrue": "Yes",
+        "enabledFalse": "No"
+      },
+      "table": {
+        "id": "ID",
+        "name": "Name",
+        "type": "Type",
+        "endpoint": "Endpoint",
+        "authType": "Auth",
+        "scope": "Scope (Site/Department)",
+        "enabled": "Enabled",
+        "probeStatus": "Probe Status",
+        "probeTime": "Last Probe At",
+        "probeMessage": "Probe Message",
+        "actions": "Actions",
+        "proxyLabel": "Proxy"
       }
     },
     "fields": {

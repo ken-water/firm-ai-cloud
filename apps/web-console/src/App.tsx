@@ -206,6 +206,25 @@ type NotificationSubscription = {
   updated_at: string;
 };
 
+type MonitoringSource = {
+  id: number;
+  name: string;
+  source_type: string;
+  endpoint: string;
+  proxy_endpoint: string | null;
+  auth_type: string;
+  username: string | null;
+  secret_ref: string;
+  site: string | null;
+  department: string | null;
+  is_enabled: boolean;
+  last_probe_at: string | null;
+  last_probe_status: string | null;
+  last_probe_message: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type NewFieldForm = {
   field_key: string;
   name: string;
@@ -240,6 +259,26 @@ type NewNotificationSubscriptionForm = {
   event_type: string;
   site: string;
   department: string;
+};
+
+type NewMonitoringSourceForm = {
+  name: string;
+  source_type: "zabbix";
+  endpoint: string;
+  proxy_endpoint: string;
+  auth_type: "token" | "basic";
+  username: string;
+  secret_ref: string;
+  site: string;
+  department: string;
+  is_enabled: boolean;
+};
+
+type MonitoringSourceFilterForm = {
+  source_type: string;
+  site: string;
+  department: string;
+  is_enabled: "all" | "true" | "false";
 };
 
 type AssetSortMode = "updated_desc" | "name_asc" | "id_asc";
@@ -318,6 +357,26 @@ const defaultNotificationSubscriptionForm: NewNotificationSubscriptionForm = {
   event_type: "asset.new_detected",
   site: "",
   department: ""
+};
+
+const defaultMonitoringSourceForm: NewMonitoringSourceForm = {
+  name: "",
+  source_type: "zabbix",
+  endpoint: "",
+  proxy_endpoint: "",
+  auth_type: "token",
+  username: "",
+  secret_ref: "",
+  site: "",
+  department: "",
+  is_enabled: true
+};
+
+const defaultMonitoringSourceFilters: MonitoringSourceFilterForm = {
+  source_type: "",
+  site: "",
+  department: "",
+  is_enabled: "all"
 };
 
 const lifecycleStatuses: LifecycleStatus[] = [
@@ -401,6 +460,15 @@ export function App() {
   const [creatingNotificationTemplate, setCreatingNotificationTemplate] = useState(false);
   const [creatingNotificationSubscription, setCreatingNotificationSubscription] = useState(false);
   const [notificationNotice, setNotificationNotice] = useState<string | null>(null);
+  const [monitoringSources, setMonitoringSources] = useState<MonitoringSource[]>([]);
+  const [loadingMonitoringSources, setLoadingMonitoringSources] = useState(false);
+  const [creatingMonitoringSource, setCreatingMonitoringSource] = useState(false);
+  const [probingMonitoringSourceId, setProbingMonitoringSourceId] = useState<number | null>(null);
+  const [monitoringSourceNotice, setMonitoringSourceNotice] = useState<string | null>(null);
+  const [newMonitoringSource, setNewMonitoringSource] =
+    useState<NewMonitoringSourceForm>(defaultMonitoringSourceForm);
+  const [monitoringSourceFilters, setMonitoringSourceFilters] =
+    useState<MonitoringSourceFilterForm>(defaultMonitoringSourceFilters);
   const [newNotificationChannel, setNewNotificationChannel] =
     useState<NewNotificationChannelForm>(defaultNotificationChannelForm);
   const [newNotificationTemplate, setNewNotificationTemplate] =
@@ -737,6 +805,41 @@ export function App() {
       setLoadingNotificationSubscriptions(false);
     }
   }, []);
+
+  const loadMonitoringSources = useCallback(
+    async (filters: MonitoringSourceFilterForm = defaultMonitoringSourceFilters) => {
+      const activeFilters = filters;
+      const params = new URLSearchParams();
+      if (activeFilters.source_type.trim().length > 0) {
+        params.set("source_type", activeFilters.source_type.trim());
+      }
+      if (activeFilters.site.trim().length > 0) {
+        params.set("site", activeFilters.site.trim());
+      }
+      if (activeFilters.department.trim().length > 0) {
+        params.set("department", activeFilters.department.trim());
+      }
+      if (activeFilters.is_enabled !== "all") {
+        params.set("is_enabled", activeFilters.is_enabled);
+      }
+
+      setLoadingMonitoringSources(true);
+      setError(null);
+      try {
+        const response = await apiFetch(`${API_BASE_URL}/api/v1/monitoring/sources?${params.toString()}`);
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response));
+        }
+        const payload: MonitoringSource[] = await response.json();
+        setMonitoringSources(payload);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "unknown error");
+      } finally {
+        setLoadingMonitoringSources(false);
+      }
+    },
+    []
+  );
 
   const createSampleAsset = useCallback(async () => {
     if (!canWriteCmdb) {
@@ -1339,6 +1442,110 @@ export function App() {
     }
   }, [canWriteCmdb, loadNotificationSubscriptions, newNotificationSubscription, t]);
 
+  const createMonitoringSource = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const name = newMonitoringSource.name.trim();
+    const endpoint = newMonitoringSource.endpoint.trim();
+    const secretRef = newMonitoringSource.secret_ref.trim();
+    const username = newMonitoringSource.username.trim();
+
+    if (!name) {
+      setError(t("cmdb.monitoringSources.validation.nameRequired"));
+      return;
+    }
+    if (!endpoint) {
+      setError(t("cmdb.monitoringSources.validation.endpointRequired"));
+      return;
+    }
+    if (!secretRef) {
+      setError(t("cmdb.monitoringSources.validation.secretRefRequired"));
+      return;
+    }
+    if (newMonitoringSource.auth_type === "basic" && !username) {
+      setError(t("cmdb.monitoringSources.validation.usernameRequired"));
+      return;
+    }
+
+    setCreatingMonitoringSource(true);
+    setMonitoringSourceNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/monitoring/sources`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          name,
+          source_type: newMonitoringSource.source_type,
+          endpoint,
+          proxy_endpoint: trimToNull(newMonitoringSource.proxy_endpoint),
+          auth_type: newMonitoringSource.auth_type,
+          username: newMonitoringSource.auth_type === "basic" ? username : null,
+          secret_ref: secretRef,
+          site: trimToNull(newMonitoringSource.site),
+          department: trimToNull(newMonitoringSource.department),
+          is_enabled: newMonitoringSource.is_enabled
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: MonitoringSource = await response.json();
+      setNewMonitoringSource((prev) => ({
+        ...defaultMonitoringSourceForm,
+        source_type: prev.source_type
+      }));
+      await loadMonitoringSources(monitoringSourceFilters);
+      setMonitoringSourceNotice(t("cmdb.monitoringSources.messages.created", { name: payload.name }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setCreatingMonitoringSource(false);
+    }
+  }, [canWriteCmdb, loadMonitoringSources, monitoringSourceFilters, newMonitoringSource, t]);
+
+  const probeMonitoringSource = useCallback(
+    async (sourceId: number) => {
+      if (!canWriteCmdb) {
+        setError(t("auth.messages.forbiddenAction"));
+        return;
+      }
+
+      setProbingMonitoringSourceId(sourceId);
+      setMonitoringSourceNotice(null);
+      setError(null);
+      try {
+        const response = await apiFetch(`${API_BASE_URL}/api/v1/monitoring/sources/${sourceId}/probe`, {
+          method: "POST"
+        });
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response));
+        }
+        const payload: { reachable: boolean; message: string; source: MonitoringSource } = await response.json();
+        await loadMonitoringSources(monitoringSourceFilters);
+        setMonitoringSourceNotice(
+          t("cmdb.monitoringSources.messages.probed", {
+            id: sourceId,
+            result: payload.reachable
+              ? t("cmdb.monitoringSources.messages.reachable")
+              : t("cmdb.monitoringSources.messages.unreachable")
+          })
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "unknown error");
+      } finally {
+        setProbingMonitoringSourceId(null);
+      }
+    },
+    [canWriteCmdb, loadMonitoringSources, monitoringSourceFilters, t]
+  );
+
   const findAssetByCode = useCallback(async () => {
     const normalized = scanCode.trim();
     if (!normalized) {
@@ -1374,6 +1581,7 @@ export function App() {
       loadFieldDefinitions(),
       loadDiscoveryJobs(),
       loadDiscoveryCandidates(),
+      loadMonitoringSources(defaultMonitoringSourceFilters),
       loadNotificationChannels(),
       loadNotificationTemplates(),
       loadNotificationSubscriptions()
@@ -1383,6 +1591,7 @@ export function App() {
     loadFieldDefinitions,
     loadDiscoveryCandidates,
     loadDiscoveryJobs,
+    loadMonitoringSources,
     loadNotificationChannels,
     loadNotificationTemplates,
     loadNotificationSubscriptions,
@@ -1483,6 +1692,36 @@ export function App() {
     () => (assetImpact?.edges ?? []).filter((edge) => edge.relation_type === "contains").slice(0, 10),
     [assetImpact?.edges]
   );
+  const monitoringSourceStats = useMemo(() => {
+    let enabled = 0;
+    let reachable = 0;
+    let unreachable = 0;
+    for (const source of monitoringSources) {
+      if (source.is_enabled) {
+        enabled += 1;
+      }
+      if (source.last_probe_status === "reachable") {
+        reachable += 1;
+      }
+      if (source.last_probe_status === "unreachable") {
+        unreachable += 1;
+      }
+    }
+    return {
+      total: monitoringSources.length,
+      enabled,
+      reachable,
+      unreachable
+    };
+  }, [monitoringSources]);
+  const hasMonitoringSourceFilter = useMemo(
+    () =>
+      monitoringSourceFilters.source_type.trim().length > 0
+      || monitoringSourceFilters.site.trim().length > 0
+      || monitoringSourceFilters.department.trim().length > 0
+      || monitoringSourceFilters.is_enabled !== "all",
+    [monitoringSourceFilters]
+  );
   const assetStatusOptions = useMemo(
     () => Array.from(new Set(assets.map((item) => item.status).filter((item) => item.trim().length > 0))).sort(),
     [assets]
@@ -1558,6 +1797,7 @@ export function App() {
     () => [
       { href: "#section-scan", label: t("auth.navigation.scan") },
       { href: "#section-discovery", label: t("auth.navigation.discovery") },
+      { href: "#section-monitoring-sources", label: t("auth.navigation.monitoringSources") },
       { href: "#section-notifications", label: t("auth.navigation.notifications") },
       { href: "#section-fields", label: t("auth.navigation.fields") },
       { href: "#section-relations", label: t("auth.navigation.relations") },
@@ -1789,6 +2029,331 @@ export function App() {
                               : t("cmdb.discovery.actions.reject")}
                           </button>
                         </div>
+                      ) : (
+                        <span>{t("auth.labels.readOnly")}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard id="section-monitoring-sources" title={t("cmdb.monitoringSources.title")}>
+        <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
+          <button onClick={() => void loadMonitoringSources(monitoringSourceFilters)} disabled={loadingMonitoringSources}>
+            {loadingMonitoringSources
+              ? t("cmdb.actions.loading")
+              : t("cmdb.monitoringSources.actions.refresh")}
+          </button>
+          <span className="section-meta">
+            {t("cmdb.monitoringSources.summary", {
+              total: monitoringSourceStats.total,
+              enabled: monitoringSourceStats.enabled,
+              reachable: monitoringSourceStats.reachable,
+              unreachable: monitoringSourceStats.unreachable
+            })}
+          </span>
+        </div>
+
+        {monitoringSourceNotice && <p className="banner banner-success">{monitoringSourceNotice}</p>}
+
+        <div className="filter-grid" style={{ marginBottom: "0.75rem" }}>
+          <label className="control-field">
+            <span>{t("cmdb.monitoringSources.filters.sourceTypeLabel")}</span>
+            <select
+              value={monitoringSourceFilters.source_type}
+              onChange={(event) =>
+                setMonitoringSourceFilters((prev) => ({
+                  ...prev,
+                  source_type: event.target.value
+                }))
+              }
+            >
+              <option value="">{t("cmdb.monitoringSources.filters.allSourceTypes")}</option>
+              <option value="zabbix">zabbix</option>
+            </select>
+          </label>
+          <label className="control-field">
+            <span>{t("cmdb.monitoringSources.filters.siteLabel")}</span>
+            <input
+              value={monitoringSourceFilters.site}
+              onChange={(event) =>
+                setMonitoringSourceFilters((prev) => ({
+                  ...prev,
+                  site: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.monitoringSources.filters.sitePlaceholder")}
+            />
+          </label>
+          <label className="control-field">
+            <span>{t("cmdb.monitoringSources.filters.departmentLabel")}</span>
+            <input
+              value={monitoringSourceFilters.department}
+              onChange={(event) =>
+                setMonitoringSourceFilters((prev) => ({
+                  ...prev,
+                  department: event.target.value
+                }))
+              }
+              placeholder={t("cmdb.monitoringSources.filters.departmentPlaceholder")}
+            />
+          </label>
+          <label className="control-field">
+            <span>{t("cmdb.monitoringSources.filters.enabledLabel")}</span>
+            <select
+              value={monitoringSourceFilters.is_enabled}
+              onChange={(event) =>
+                setMonitoringSourceFilters((prev) => ({
+                  ...prev,
+                  is_enabled: event.target.value as "all" | "true" | "false"
+                }))
+              }
+            >
+              <option value="all">{t("cmdb.monitoringSources.filters.enabledAll")}</option>
+              <option value="true">{t("cmdb.monitoringSources.filters.enabledOnly")}</option>
+              <option value="false">{t("cmdb.monitoringSources.filters.disabledOnly")}</option>
+            </select>
+          </label>
+        </div>
+        <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
+          <button onClick={() => void loadMonitoringSources(monitoringSourceFilters)} disabled={loadingMonitoringSources}>
+            {loadingMonitoringSources ? t("cmdb.actions.loading") : t("cmdb.monitoringSources.actions.applyFilters")}
+          </button>
+          <button
+            onClick={() => {
+              const next = { ...defaultMonitoringSourceFilters };
+              setMonitoringSourceFilters(next);
+              void loadMonitoringSources(next);
+            }}
+            disabled={!hasMonitoringSourceFilter || loadingMonitoringSources}
+          >
+            {t("cmdb.monitoringSources.actions.resetFilters")}
+          </button>
+        </div>
+
+        {!canWriteCmdb && <p className="inline-note">{t("cmdb.monitoringSources.messages.readOnlyHint")}</p>}
+
+        {canWriteCmdb && (
+          <div className="form-grid" style={{ marginBottom: "0.9rem" }}>
+            <label className="control-field">
+              <span>{t("cmdb.monitoringSources.form.name")}</span>
+              <input
+                value={newMonitoringSource.name}
+                onChange={(event) =>
+                  setNewMonitoringSource((prev) => ({
+                    ...prev,
+                    name: event.target.value
+                  }))
+                }
+                placeholder={t("cmdb.monitoringSources.form.namePlaceholder")}
+              />
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.monitoringSources.form.sourceType")}</span>
+              <select
+                value={newMonitoringSource.source_type}
+                onChange={(event) =>
+                  setNewMonitoringSource((prev) => ({
+                    ...prev,
+                    source_type: event.target.value as "zabbix"
+                  }))
+                }
+              >
+                <option value="zabbix">zabbix</option>
+              </select>
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.monitoringSources.form.authType")}</span>
+              <select
+                value={newMonitoringSource.auth_type}
+                onChange={(event) =>
+                  setNewMonitoringSource((prev) => ({
+                    ...prev,
+                    auth_type: event.target.value as "token" | "basic"
+                  }))
+                }
+              >
+                <option value="token">token</option>
+                <option value="basic">basic</option>
+              </select>
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.monitoringSources.form.endpoint")}</span>
+              <input
+                value={newMonitoringSource.endpoint}
+                onChange={(event) =>
+                  setNewMonitoringSource((prev) => ({
+                    ...prev,
+                    endpoint: event.target.value
+                  }))
+                }
+                placeholder={t("cmdb.monitoringSources.form.endpointPlaceholder")}
+              />
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.monitoringSources.form.proxyEndpoint")}</span>
+              <input
+                value={newMonitoringSource.proxy_endpoint}
+                onChange={(event) =>
+                  setNewMonitoringSource((prev) => ({
+                    ...prev,
+                    proxy_endpoint: event.target.value
+                  }))
+                }
+                placeholder={t("cmdb.monitoringSources.form.proxyEndpointPlaceholder")}
+              />
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.monitoringSources.form.secretRef")}</span>
+              <input
+                value={newMonitoringSource.secret_ref}
+                onChange={(event) =>
+                  setNewMonitoringSource((prev) => ({
+                    ...prev,
+                    secret_ref: event.target.value
+                  }))
+                }
+                placeholder={t("cmdb.monitoringSources.form.secretRefPlaceholder")}
+              />
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.monitoringSources.form.username")}</span>
+              <input
+                value={newMonitoringSource.username}
+                onChange={(event) =>
+                  setNewMonitoringSource((prev) => ({
+                    ...prev,
+                    username: event.target.value
+                  }))
+                }
+                placeholder={t("cmdb.monitoringSources.form.usernamePlaceholder")}
+                disabled={newMonitoringSource.auth_type !== "basic"}
+              />
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.monitoringSources.form.site")}</span>
+              <input
+                value={newMonitoringSource.site}
+                onChange={(event) =>
+                  setNewMonitoringSource((prev) => ({
+                    ...prev,
+                    site: event.target.value
+                  }))
+                }
+                placeholder={t("cmdb.monitoringSources.form.sitePlaceholder")}
+              />
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.monitoringSources.form.department")}</span>
+              <input
+                value={newMonitoringSource.department}
+                onChange={(event) =>
+                  setNewMonitoringSource((prev) => ({
+                    ...prev,
+                    department: event.target.value
+                  }))
+                }
+                placeholder={t("cmdb.monitoringSources.form.departmentPlaceholder")}
+              />
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.monitoringSources.form.enabled")}</span>
+              <select
+                value={newMonitoringSource.is_enabled ? "true" : "false"}
+                onChange={(event) =>
+                  setNewMonitoringSource((prev) => ({
+                    ...prev,
+                    is_enabled: event.target.value === "true"
+                  }))
+                }
+              >
+                <option value="true">{t("cmdb.monitoringSources.form.enabledTrue")}</option>
+                <option value="false">{t("cmdb.monitoringSources.form.enabledFalse")}</option>
+              </select>
+            </label>
+          </div>
+        )}
+        {canWriteCmdb && (
+          <div className="toolbar-row" style={{ marginBottom: "0.8rem" }}>
+            <button onClick={() => void createMonitoringSource()} disabled={creatingMonitoringSource}>
+              {creatingMonitoringSource
+                ? t("cmdb.actions.creating")
+                : t("cmdb.monitoringSources.actions.create")}
+            </button>
+          </div>
+        )}
+
+        {loadingMonitoringSources && monitoringSources.length === 0 ? (
+          <p>{t("cmdb.monitoringSources.messages.loading")}</p>
+        ) : monitoringSources.length === 0 ? (
+          <p>{t("cmdb.monitoringSources.messages.noSources")}</p>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", minWidth: "1500px", width: "100%" }}>
+              <thead>
+                <tr>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.id")}</th>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.name")}</th>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.type")}</th>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.endpoint")}</th>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.authType")}</th>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.scope")}</th>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.enabled")}</th>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.probeStatus")}</th>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.probeTime")}</th>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.probeMessage")}</th>
+                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.actions")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {monitoringSources.map((source) => (
+                  <tr key={source.id}>
+                    <td style={cellStyle}>{source.id}</td>
+                    <td style={cellStyle}>{source.name}</td>
+                    <td style={cellStyle}>{source.source_type}</td>
+                    <td style={cellStyle}>
+                      <div>{source.endpoint}</div>
+                      {source.proxy_endpoint && (
+                        <div className="section-meta">
+                          {t("cmdb.monitoringSources.table.proxyLabel")}: {source.proxy_endpoint}
+                        </div>
+                      )}
+                    </td>
+                    <td style={cellStyle}>
+                      {source.auth_type}
+                      {source.username ? ` (${source.username})` : ""}
+                    </td>
+                    <td style={cellStyle}>
+                      {(source.site ?? "*")} / {(source.department ?? "*")}
+                    </td>
+                    <td style={cellStyle}>
+                      {source.is_enabled
+                        ? t("cmdb.monitoringSources.form.enabledTrue")
+                        : t("cmdb.monitoringSources.form.enabledFalse")}
+                    </td>
+                    <td style={cellStyle}>
+                      <span className={statusChipClass(source.last_probe_status ?? "unknown")}>
+                        {source.last_probe_status ?? t("cmdb.monitoringSources.messages.neverProbed")}
+                      </span>
+                    </td>
+                    <td style={cellStyle}>
+                      {source.last_probe_at ? new Date(source.last_probe_at).toLocaleString() : "-"}
+                    </td>
+                    <td style={cellStyle}>{source.last_probe_message ?? "-"}</td>
+                    <td style={cellStyle}>
+                      {canWriteCmdb ? (
+                        <button
+                          onClick={() => void probeMonitoringSource(source.id)}
+                          disabled={probingMonitoringSourceId === source.id}
+                        >
+                          {probingMonitoringSourceId === source.id
+                            ? t("cmdb.actions.loading")
+                            : t("cmdb.monitoringSources.actions.probe")}
+                        </button>
                       ) : (
                         <span>{t("auth.labels.readOnly")}</span>
                       )}

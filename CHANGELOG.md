@@ -38,6 +38,11 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - `GET /api/v1/monitoring/layers/{layer}`
   - supported layer model: `hardware`, `network`, `service`, `business`
   - response contract includes scope echo and `empty` flag for frontend empty-state rendering
+- Monitoring source management UI baseline in web-console:
+  - dedicated navigation + section for source registry operations
+  - source list with probe status/health visibility
+  - source create form (validation + role-aware write controls)
+  - probe action with immediate success/failure feedback
 
 ### Changed
 
@@ -67,6 +72,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Web-console navigation now includes a dedicated readiness section and refresh flow tied to selected relation-source asset.
 - Dev quickstart now includes explicit unbind example and readiness-panel monitoring-binding inspection command.
 - RBAC monitoring-read mapping now also covers `/api/v1/monitoring/overview` and `/api/v1/monitoring/layers/*`.
+- Monitoring bootstrap plan now includes completed I3 notes for web-console monitoring source UX.
 
 ### Fixed
 

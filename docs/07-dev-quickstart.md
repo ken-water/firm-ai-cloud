@@ -231,6 +231,15 @@ Monitoring overview/layer API conventions:
   - `critical` <- `failed`/`dead_letter`
   - `unknown` <- missing binding, `skipped`, or unsupported status
 
+Web-console monitoring source UX baseline:
+
+- Open section: `Monitoring Sources` in the left navigation.
+- Operators/admin can:
+  - create source entries
+  - apply scope filters (`source_type`, `site`, `department`, `enabled`)
+  - trigger probe and see immediate status feedback
+- Viewer role can inspect table/status only (read-only mode, no write actions).
+
 Troubleshooting notes:
 
 - If source auth fails, use `secret_ref: "env:YOUR_SECRET_ENV"` and export secret locally before API start.
