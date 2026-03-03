@@ -8,6 +8,20 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
+- None
+
+### Changed
+
+- None
+
+### Fixed
+
+- None
+
+## [0.0.5] - 2026-03-03
+
+### Added
+
 - Monitoring source registry baseline:
   - migration: `202603030001_create_monitoring_sources.sql`
   - APIs: `GET /api/v1/monitoring/sources`, `POST /api/v1/monitoring/sources`, `POST /api/v1/monitoring/sources/{id}/probe`
