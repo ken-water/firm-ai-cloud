@@ -29,11 +29,11 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web-console/package-lock.json
 
-      - name: Web console build
+      - name: Web console quality checks
         working-directory: apps/web-console
         run: |
           npm ci
-          npm run build
+          npm run check:ui
 
   auth-rbac-integration:
     runs-on: ubuntu-latest
