@@ -260,6 +260,7 @@ export function App() {
   const [loadingDiscoveryCandidates, setLoadingDiscoveryCandidates] = useState(false);
   const [runningDiscoveryJobId, setRunningDiscoveryJobId] = useState<number | null>(null);
   const [reviewingCandidateId, setReviewingCandidateId] = useState<number | null>(null);
+  const [discoveryNotice, setDiscoveryNotice] = useState<string | null>(null);
   const [notificationChannels, setNotificationChannels] = useState<NotificationChannel[]>([]);
   const [notificationTemplates, setNotificationTemplates] = useState<NotificationTemplate[]>([]);
   const [notificationSubscriptions, setNotificationSubscriptions] = useState<NotificationSubscription[]>([]);
@@ -269,6 +270,7 @@ export function App() {
   const [creatingNotificationChannel, setCreatingNotificationChannel] = useState(false);
   const [creatingNotificationTemplate, setCreatingNotificationTemplate] = useState(false);
   const [creatingNotificationSubscription, setCreatingNotificationSubscription] = useState(false);
+  const [notificationNotice, setNotificationNotice] = useState<string | null>(null);
   const [newNotificationChannel, setNewNotificationChannel] =
     useState<NewNotificationChannelForm>(defaultNotificationChannelForm);
   const [newNotificationTemplate, setNewNotificationTemplate] =
@@ -730,6 +732,7 @@ export function App() {
     }
 
     setRunningDiscoveryJobId(jobId);
+    setDiscoveryNotice(null);
     setError(null);
     try {
       const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/jobs/${jobId}/run`, {
@@ -739,6 +742,7 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       await Promise.all([loadDiscoveryJobs(), loadDiscoveryCandidates(), loadAssets()]);
+      setDiscoveryNotice(t("cmdb.discovery.messages.jobRunTriggered", { id: jobId }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
@@ -754,6 +758,7 @@ export function App() {
       }
 
       setReviewingCandidateId(candidateId);
+      setDiscoveryNotice(null);
       setError(null);
       try {
         const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/candidates/${candidateId}/${action}`, {
@@ -767,6 +772,11 @@ export function App() {
           throw new Error(await readErrorMessage(response));
         }
         await Promise.all([loadDiscoveryCandidates(), loadAssets()]);
+        setDiscoveryNotice(
+          action === "approve"
+            ? t("cmdb.discovery.messages.candidateApproved", { id: candidateId })
+            : t("cmdb.discovery.messages.candidateRejected", { id: candidateId })
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : "unknown error");
       } finally {
@@ -810,6 +820,7 @@ export function App() {
     }
 
     setCreatingNotificationChannel(true);
+    setNotificationNotice(null);
     setError(null);
     try {
       const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-channels`, {
@@ -829,6 +840,7 @@ export function App() {
       }
       setNewNotificationChannel(defaultNotificationChannelForm);
       await loadNotificationChannels();
+      setNotificationNotice(t("cmdb.notifications.messages.channelCreated", { name }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
@@ -859,6 +871,7 @@ export function App() {
     }
 
     setCreatingNotificationTemplate(true);
+    setNotificationNotice(null);
     setError(null);
     try {
       const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-templates`, {
@@ -877,6 +890,7 @@ export function App() {
       }
       setNewNotificationTemplate((prev) => ({ ...prev, title_template: "", body_template: "" }));
       await loadNotificationTemplates();
+      setNotificationNotice(t("cmdb.notifications.messages.templateCreated", { eventType }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
@@ -902,6 +916,7 @@ export function App() {
     }
 
     setCreatingNotificationSubscription(true);
+    setNotificationNotice(null);
     setError(null);
     try {
       const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/discovery/notification-subscriptions`, {
@@ -921,6 +936,7 @@ export function App() {
       }
       setNewNotificationSubscription((prev) => ({ ...prev, site: "", department: "" }));
       await loadNotificationSubscriptions();
+      setNotificationNotice(t("cmdb.notifications.messages.subscriptionCreated", { eventType }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
@@ -1228,7 +1244,7 @@ export function App() {
       </SectionCard>
 
       <SectionCard id="section-discovery" title={t("cmdb.discovery.title")}>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+        <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
           <button onClick={() => void loadDiscoveryJobs()} disabled={loadingDiscoveryJobs}>
             {loadingDiscoveryJobs ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.refreshJobs")}
           </button>
@@ -1237,8 +1253,16 @@ export function App() {
           </button>
         </div>
 
+        {discoveryNotice && <p className="banner banner-success">{discoveryNotice}</p>}
+        <p className="section-note">
+          {t("cmdb.discovery.summary", { jobs: discoveryJobs.length, candidates: discoveryCandidates.length })}
+        </p>
+        {!canWriteCmdb && <p className="inline-note">{t("cmdb.discovery.messages.readOnlyHint")}</p>}
+
         <h3 style={subSectionTitleStyle}>{t("cmdb.discovery.jobsTitle")}</h3>
-        {discoveryJobs.length === 0 ? (
+        {loadingDiscoveryJobs && discoveryJobs.length === 0 ? (
+          <p>{t("cmdb.discovery.messages.loadingJobs")}</p>
+        ) : discoveryJobs.length === 0 ? (
           <p>{t("cmdb.discovery.messages.noJobs")}</p>
         ) : (
           <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
@@ -1260,8 +1284,12 @@ export function App() {
                     <td style={cellStyle}>{job.id}</td>
                     <td style={cellStyle}>{job.name}</td>
                     <td style={cellStyle}>{job.source_type}</td>
-                    <td style={cellStyle}>{job.status}</td>
-                    <td style={cellStyle}>{job.last_run_status ?? "-"}</td>
+                    <td style={cellStyle}>
+                      <span className={statusChipClass(job.status)}>{job.status}</span>
+                    </td>
+                    <td style={cellStyle}>
+                      {job.last_run_status ? <span className={statusChipClass(job.last_run_status)}>{job.last_run_status}</span> : "-"}
+                    </td>
                     <td style={cellStyle}>{job.last_run_at ? new Date(job.last_run_at).toLocaleString() : "-"}</td>
                     <td style={cellStyle}>
                       {canWriteCmdb ? (
@@ -1280,7 +1308,9 @@ export function App() {
         )}
 
         <h3 style={subSectionTitleStyle}>{t("cmdb.discovery.candidatesTitle")}</h3>
-        {discoveryCandidates.length === 0 ? (
+        {loadingDiscoveryCandidates && discoveryCandidates.length === 0 ? (
+          <p>{t("cmdb.discovery.messages.loadingCandidates")}</p>
+        ) : discoveryCandidates.length === 0 ? (
           <p>{t("cmdb.discovery.messages.noCandidates")}</p>
         ) : (
           <div style={{ overflowX: "auto" }}>
@@ -1338,7 +1368,7 @@ export function App() {
       </SectionCard>
 
       <SectionCard id="section-notifications" title={t("cmdb.notifications.title")}>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+        <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
           <button onClick={() => void loadNotificationChannels()} disabled={loadingNotificationChannels}>
             {loadingNotificationChannels ? t("cmdb.actions.loading") : t("cmdb.notifications.actions.refreshChannels")}
           </button>
@@ -1354,8 +1384,18 @@ export function App() {
           </button>
         </div>
 
+        {notificationNotice && <p className="banner banner-success">{notificationNotice}</p>}
+        <p className="section-note">
+          {t("cmdb.notifications.summary", {
+            channels: notificationChannels.length,
+            templates: notificationTemplates.length,
+            subscriptions: notificationSubscriptions.length
+          })}
+        </p>
+        {!canWriteCmdb && <p className="inline-note">{t("cmdb.notifications.messages.readOnlyHint")}</p>}
+
         <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.channelsTitle")}</h3>
-        {canWriteCmdb ? (
+        {canWriteCmdb && (
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
             <input
               value={newNotificationChannel.name}
@@ -1405,10 +1445,10 @@ export function App() {
               {creatingNotificationChannel ? t("cmdb.actions.creating") : t("cmdb.notifications.actions.createChannel")}
             </button>
           </div>
-        ) : (
-          <p>{t("auth.labels.readOnly")}</p>
         )}
-        {notificationChannels.length === 0 ? (
+        {loadingNotificationChannels && notificationChannels.length === 0 ? (
+          <p>{t("cmdb.notifications.messages.loadingChannels")}</p>
+        ) : notificationChannels.length === 0 ? (
           <p>{t("cmdb.notifications.messages.noChannels")}</p>
         ) : (
           <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
@@ -1440,7 +1480,7 @@ export function App() {
         )}
 
         <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.templatesTitle")}</h3>
-        {canWriteCmdb ? (
+        {canWriteCmdb && (
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
             <input
               value={newNotificationTemplate.event_type}
@@ -1478,10 +1518,10 @@ export function App() {
               {creatingNotificationTemplate ? t("cmdb.actions.creating") : t("cmdb.notifications.actions.createTemplate")}
             </button>
           </div>
-        ) : (
-          <p>{t("auth.labels.readOnly")}</p>
         )}
-        {notificationTemplates.length === 0 ? (
+        {loadingNotificationTemplates && notificationTemplates.length === 0 ? (
+          <p>{t("cmdb.notifications.messages.loadingTemplates")}</p>
+        ) : notificationTemplates.length === 0 ? (
           <p>{t("cmdb.notifications.messages.noTemplates")}</p>
         ) : (
           <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
@@ -1513,7 +1553,7 @@ export function App() {
         )}
 
         <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.subscriptionsTitle")}</h3>
-        {canWriteCmdb ? (
+        {canWriteCmdb && (
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
             <select
               value={newNotificationSubscription.channel_id}
@@ -1567,10 +1607,10 @@ export function App() {
                 : t("cmdb.notifications.actions.createSubscription")}
             </button>
           </div>
-        ) : (
-          <p>{t("auth.labels.readOnly")}</p>
         )}
-        {notificationSubscriptions.length === 0 ? (
+        {loadingNotificationSubscriptions && notificationSubscriptions.length === 0 ? (
+          <p>{t("cmdb.notifications.messages.loadingSubscriptions")}</p>
+        ) : notificationSubscriptions.length === 0 ? (
           <p>{t("cmdb.notifications.messages.noSubscriptions")}</p>
         ) : (
           <div style={{ overflowX: "auto" }}>
@@ -2083,6 +2123,25 @@ function renderCustomFields(value: Record<string, unknown>): string {
     return preview;
   }
   return `${preview} ...`;
+}
+
+function statusChipClass(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized.includes("active") || normalized.includes("enabled") || normalized.includes("success") || normalized === "ok") {
+    return "status-chip status-chip-success";
+  }
+  if (
+    normalized.includes("fail")
+    || normalized.includes("error")
+    || normalized.includes("disabled")
+    || normalized.includes("reject")
+  ) {
+    return "status-chip status-chip-danger";
+  }
+  if (normalized.includes("pending") || normalized.includes("review") || normalized.includes("running")) {
+    return "status-chip status-chip-warn";
+  }
+  return "status-chip";
 }
 
 function deriveDefaultAuthSession(): AuthSession | null {

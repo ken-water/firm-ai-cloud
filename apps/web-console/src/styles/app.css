@@ -291,6 +291,35 @@ a {
   margin-top: 0;
 }
 
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(79, 100, 120, 0.35);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  background: #f5f8fb;
+}
+
+.status-chip-success {
+  border-color: rgba(10, 111, 75, 0.35);
+  color: var(--success);
+  background: rgba(10, 111, 75, 0.08);
+}
+
+.status-chip-warn {
+  border-color: rgba(138, 91, 10, 0.35);
+  color: var(--warn);
+  background: rgba(138, 91, 10, 0.08);
+}
+
+.status-chip-danger {
+  border-color: rgba(176, 24, 57, 0.35);
+  color: var(--danger);
+  background: rgba(176, 24, 57, 0.08);
+}
+
 table {
   background: #fff;
 }

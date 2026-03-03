@@ -73,6 +73,7 @@
       "title": "Discovery Operations",
       "jobsTitle": "Discovery Jobs",
       "candidatesTitle": "Discovery Candidates (Pending Review)",
+      "summary": "Jobs: {{jobs}} | Pending candidates: {{candidates}}",
       "actions": {
         "refreshJobs": "Refresh Jobs",
         "refreshCandidates": "Refresh Candidates",
@@ -81,8 +82,14 @@
         "reject": "Reject"
       },
       "messages": {
+        "loadingJobs": "Loading discovery jobs...",
+        "loadingCandidates": "Loading discovery candidates...",
         "noJobs": "No discovery jobs found.",
-        "noCandidates": "No pending candidates."
+        "noCandidates": "No pending candidates.",
+        "jobRunTriggered": "Discovery job #{{id}} triggered.",
+        "candidateApproved": "Candidate #{{id}} approved.",
+        "candidateRejected": "Candidate #{{id}} rejected.",
+        "readOnlyHint": "Read-only mode: discovery review actions require operator or admin permission."
       },
       "table": {
         "job": {
@@ -110,6 +117,7 @@
       "channelsTitle": "Notification Channels",
       "templatesTitle": "Notification Templates",
       "subscriptionsTitle": "Event Subscriptions",
+      "summary": "Channels: {{channels}} | Templates: {{templates}} | Subscriptions: {{subscriptions}}",
       "actions": {
         "refreshChannels": "Refresh Channels",
         "refreshTemplates": "Refresh Templates",
@@ -119,9 +127,16 @@
         "createSubscription": "Create Subscription"
       },
       "messages": {
+        "loadingChannels": "Loading notification channels...",
+        "loadingTemplates": "Loading notification templates...",
+        "loadingSubscriptions": "Loading notification subscriptions...",
         "noChannels": "No notification channels found.",
         "noTemplates": "No notification templates found.",
-        "noSubscriptions": "No notification subscriptions found."
+        "noSubscriptions": "No notification subscriptions found.",
+        "channelCreated": "Notification channel '{{name}}' created.",
+        "templateCreated": "Template for event '{{eventType}}' created.",
+        "subscriptionCreated": "Subscription for '{{eventType}}' created.",
+        "readOnlyHint": "Read-only mode: notification changes require operator or admin permission."
       },
       "validation": {
         "channelNameRequired": "Notification channel name is required.",
