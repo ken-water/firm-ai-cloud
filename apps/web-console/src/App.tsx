@@ -51,6 +51,101 @@ type AssetRelation = {
   updated_at: string;
 };
 
+type AssetOwnerBinding = {
+  owner_type: string;
+  owner_ref: string;
+};
+
+type AssetOperationalReadiness = {
+  department_count: number;
+  business_service_count: number;
+  owner_count: number;
+  can_transition_operational: boolean;
+  missing: string[];
+};
+
+type AssetBindingsResponse = {
+  asset_id: number;
+  departments: string[];
+  business_services: string[];
+  owners: AssetOwnerBinding[];
+  readiness: AssetOperationalReadiness;
+};
+
+type MonitoringBindingRecord = {
+  id: number;
+  asset_id: number;
+  source_system: string;
+  source_id: number | null;
+  external_host_id: string | null;
+  last_sync_status: string;
+  last_sync_message: string | null;
+  last_sync_at: string | null;
+  mapping: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+type MonitoringSyncJobRecord = {
+  id: number;
+  asset_id: number;
+  trigger_source: string;
+  status: string;
+  attempt: number;
+  max_attempts: number;
+  run_after: string;
+  requested_by: string | null;
+  requested_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  last_error: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+type AssetMonitoringBindingResponse = {
+  asset_id: number;
+  binding: MonitoringBindingRecord | null;
+  latest_job: MonitoringSyncJobRecord | null;
+};
+
+type AssetLifecycleTransitionResponse = {
+  asset_id: number;
+  previous_status: string;
+  status: string;
+  readiness: AssetOperationalReadiness;
+};
+
+type ImpactNode = {
+  id: number;
+  name: string;
+  asset_class: string;
+  status: string;
+  depth: number;
+};
+
+type ImpactEdge = {
+  id: number;
+  src_asset_id: number;
+  dst_asset_id: number;
+  relation_type: string;
+  source: string;
+  direction: string;
+  depth: number;
+};
+
+type AssetImpactResponse = {
+  root_asset_id: number;
+  direction: string;
+  depth_limit: number;
+  relation_types: string[];
+  nodes: ImpactNode[];
+  edges: ImpactEdge[];
+  affected_business_services: ImpactNode[];
+  affected_owners: ImpactNode[];
+};
+
 type DiscoveryJob = {
   id: number;
   name: string;
@@ -148,6 +243,15 @@ type NewNotificationSubscriptionForm = {
 };
 
 type AssetSortMode = "updated_desc" | "name_asc" | "id_asc";
+type LifecycleStatus = "idle" | "onboarding" | "operational" | "maintenance" | "retired";
+type ImpactDirection = "downstream" | "upstream" | "both";
+type OwnerType = "team" | "user" | "group" | "external";
+
+type OwnerDraft = {
+  key: string;
+  owner_type: OwnerType;
+  owner_ref: string;
+};
 
 const DEFAULT_API_BASE_URL =
   typeof window !== "undefined"
@@ -216,6 +320,14 @@ const defaultNotificationSubscriptionForm: NewNotificationSubscriptionForm = {
   department: ""
 };
 
+const lifecycleStatuses: LifecycleStatus[] = [
+  "idle",
+  "onboarding",
+  "operational",
+  "maintenance",
+  "retired"
+];
+
 export function App() {
   const { t } = useTranslation();
   const [authSession, setAuthSession] = useState<AuthSession | null>(runtimeAuthSession);
@@ -254,6 +366,24 @@ export function App() {
   const [creatingRelation, setCreatingRelation] = useState(false);
   const [deletingRelationId, setDeletingRelationId] = useState<number | null>(null);
   const [newRelation, setNewRelation] = useState<NewRelationForm>(defaultRelationForm);
+  const [assetBindings, setAssetBindings] = useState<AssetBindingsResponse | null>(null);
+  const [loadingAssetBindings, setLoadingAssetBindings] = useState(false);
+  const [updatingAssetBindings, setUpdatingAssetBindings] = useState(false);
+  const [bindingNotice, setBindingNotice] = useState<string | null>(null);
+  const [bindingDepartmentsInput, setBindingDepartmentsInput] = useState("");
+  const [bindingBusinessServicesInput, setBindingBusinessServicesInput] = useState("");
+  const [bindingOwnerDrafts, setBindingOwnerDrafts] = useState<OwnerDraft[]>([]);
+  const [transitioningLifecycleStatus, setTransitioningLifecycleStatus] = useState<LifecycleStatus | null>(null);
+  const [lifecycleNotice, setLifecycleNotice] = useState<string | null>(null);
+  const [assetMonitoring, setAssetMonitoring] = useState<AssetMonitoringBindingResponse | null>(null);
+  const [loadingAssetMonitoring, setLoadingAssetMonitoring] = useState(false);
+  const [triggeringMonitoringSync, setTriggeringMonitoringSync] = useState(false);
+  const [monitoringNotice, setMonitoringNotice] = useState<string | null>(null);
+  const [impactDirection, setImpactDirection] = useState<ImpactDirection>("downstream");
+  const [impactDepth, setImpactDepth] = useState("4");
+  const [assetImpact, setAssetImpact] = useState<AssetImpactResponse | null>(null);
+  const [loadingAssetImpact, setLoadingAssetImpact] = useState(false);
+  const [impactNotice, setImpactNotice] = useState<string | null>(null);
   const [discoveryJobs, setDiscoveryJobs] = useState<DiscoveryJob[]>([]);
   const [discoveryCandidates, setDiscoveryCandidates] = useState<DiscoveryCandidate[]>([]);
   const [loadingDiscoveryJobs, setLoadingDiscoveryJobs] = useState(false);
@@ -448,6 +578,78 @@ export function App() {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setLoadingRelations(false);
+    }
+  }, []);
+
+  const applyBindingsToForm = useCallback((payload: AssetBindingsResponse) => {
+    setBindingDepartmentsInput(payload.departments.join(", "));
+    setBindingBusinessServicesInput(payload.business_services.join(", "));
+    setBindingOwnerDrafts(
+      payload.owners.map((owner, index) =>
+        createOwnerDraft(normalizeOwnerType(owner.owner_type), owner.owner_ref, `${payload.asset_id}-${index}`)
+      )
+    );
+  }, []);
+
+  const loadAssetBindings = useCallback(async (assetId: number) => {
+    setLoadingAssetBindings(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets/${assetId}/bindings`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AssetBindingsResponse = await response.json();
+      setAssetBindings(payload);
+      applyBindingsToForm(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setAssetBindings(null);
+      setBindingOwnerDrafts([]);
+    } finally {
+      setLoadingAssetBindings(false);
+    }
+  }, [applyBindingsToForm]);
+
+  const loadAssetMonitoring = useCallback(async (assetId: number) => {
+    setLoadingAssetMonitoring(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets/${assetId}/monitoring-binding`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AssetMonitoringBindingResponse = await response.json();
+      setAssetMonitoring(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setAssetMonitoring(null);
+    } finally {
+      setLoadingAssetMonitoring(false);
+    }
+  }, []);
+
+  const loadAssetImpact = useCallback(async (assetId: number, direction: ImpactDirection, depth: number) => {
+    setLoadingAssetImpact(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        direction,
+        depth: String(depth)
+      });
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets/${assetId}/impact?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AssetImpactResponse = await response.json();
+      setAssetImpact(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setAssetImpact(null);
+      return null;
+    } finally {
+      setLoadingAssetImpact(false);
     }
   }, []);
 
@@ -724,6 +926,199 @@ export function App() {
     },
     [canWriteCmdb, loadRelations, selectedAssetId, t]
   );
+
+  const addOwnerDraft = useCallback(() => {
+    setBindingOwnerDrafts((prev) => [...prev, createOwnerDraft("team", "")]);
+  }, []);
+
+  const updateOwnerDraftType = useCallback((key: string, ownerType: OwnerType) => {
+    setBindingOwnerDrafts((prev) =>
+      prev.map((item) => (item.key === key ? { ...item, owner_type: ownerType } : item))
+    );
+  }, []);
+
+  const updateOwnerDraftRef = useCallback((key: string, ownerRef: string) => {
+    setBindingOwnerDrafts((prev) =>
+      prev.map((item) => (item.key === key ? { ...item, owner_ref: ownerRef } : item))
+    );
+  }, []);
+
+  const removeOwnerDraft = useCallback((key: string) => {
+    setBindingOwnerDrafts((prev) => prev.filter((item) => item.key !== key));
+  }, []);
+
+  const saveAssetBindings = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const assetId = Number.parseInt(selectedAssetId, 10);
+    if (!Number.isFinite(assetId) || assetId <= 0) {
+      setError(t("cmdb.assetDetail.messages.selectAsset"));
+      return;
+    }
+
+    setUpdatingAssetBindings(true);
+    setBindingNotice(null);
+    setError(null);
+    try {
+      const owners = bindingOwnerDrafts
+        .map((item) => ({
+          owner_type: item.owner_type,
+          owner_ref: item.owner_ref.trim()
+        }))
+        .filter((item) => item.owner_ref.length > 0);
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets/${assetId}/bindings`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          departments: parseBindingList(bindingDepartmentsInput),
+          business_services: parseBindingList(bindingBusinessServicesInput),
+          owners
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AssetBindingsResponse = await response.json();
+      setAssetBindings(payload);
+      applyBindingsToForm(payload);
+      setBindingNotice(t("cmdb.assetDetail.messages.bindingsSaved"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setUpdatingAssetBindings(false);
+    }
+  }, [
+    applyBindingsToForm,
+    bindingBusinessServicesInput,
+    bindingDepartmentsInput,
+    bindingOwnerDrafts,
+    canWriteCmdb,
+    selectedAssetId,
+    t
+  ]);
+
+  const transitionAssetLifecycle = useCallback(async (status: LifecycleStatus) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const assetId = Number.parseInt(selectedAssetId, 10);
+    if (!Number.isFinite(assetId) || assetId <= 0) {
+      setError(t("cmdb.assetDetail.messages.selectAsset"));
+      return;
+    }
+
+    setTransitioningLifecycleStatus(status);
+    setLifecycleNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets/${assetId}/lifecycle`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ status })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: AssetLifecycleTransitionResponse = await response.json();
+      setAssets((prev) =>
+        prev.map((item) =>
+          item.id === payload.asset_id
+            ? {
+                ...item,
+                status: payload.status
+              }
+            : item
+        )
+      );
+      setAssetBindings((prev) =>
+        prev
+          ? {
+              ...prev,
+              readiness: payload.readiness
+            }
+          : prev
+      );
+      setLifecycleNotice(t("cmdb.assetDetail.messages.lifecycleChanged", { status: payload.status }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setTransitioningLifecycleStatus(null);
+    }
+  }, [canWriteCmdb, selectedAssetId, t]);
+
+  const triggerAssetMonitoringSync = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const assetId = Number.parseInt(selectedAssetId, 10);
+    if (!Number.isFinite(assetId) || assetId <= 0) {
+      setError(t("cmdb.assetDetail.messages.selectAsset"));
+      return;
+    }
+
+    setTriggeringMonitoringSync(true);
+    setMonitoringNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets/${assetId}/monitoring-sync`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          reason: "manual sync from readiness panel"
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: { job_id: number } = await response.json();
+      await loadAssetMonitoring(assetId);
+      setMonitoringNotice(t("cmdb.assetDetail.monitoring.messages.syncQueued", { id: payload.job_id }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setTriggeringMonitoringSync(false);
+    }
+  }, [canWriteCmdb, loadAssetMonitoring, selectedAssetId, t]);
+
+  const refreshImpact = useCallback(async () => {
+    const assetId = Number.parseInt(selectedAssetId, 10);
+    if (!Number.isFinite(assetId) || assetId <= 0) {
+      setError(t("cmdb.assetDetail.messages.selectAsset"));
+      return;
+    }
+
+    const depth = parseImpactDepth(impactDepth);
+    if (depth === null) {
+      setError(t("cmdb.assetDetail.impact.messages.invalidDepth"));
+      return;
+    }
+
+    setImpactNotice(null);
+    const payload = await loadAssetImpact(assetId, impactDirection, depth);
+    if (payload) {
+      setImpactNotice(
+        t("cmdb.assetDetail.impact.messages.loaded", {
+          nodes: payload.nodes.length,
+          edges: payload.edges.length
+        })
+      );
+    }
+  }, [impactDepth, impactDirection, loadAssetImpact, selectedAssetId, t]);
 
   const runDiscoveryJob = useCallback(async (jobId: number) => {
     if (!canWriteCmdb) {
@@ -1004,6 +1399,10 @@ export function App() {
 
   useEffect(() => {
     setRelationNotice(null);
+    setBindingNotice(null);
+    setLifecycleNotice(null);
+    setMonitoringNotice(null);
+    setImpactNotice(null);
   }, [selectedAssetId]);
 
   useEffect(() => {
@@ -1014,6 +1413,24 @@ export function App() {
     }
     void loadRelations(assetId);
   }, [loadRelations, selectedAssetId]);
+
+  useEffect(() => {
+    const assetId = Number.parseInt(selectedAssetId, 10);
+    if (!Number.isFinite(assetId) || assetId <= 0) {
+      setAssetBindings(null);
+      setAssetMonitoring(null);
+      setAssetImpact(null);
+      setBindingOwnerDrafts([]);
+      return;
+    }
+
+    const depth = parseImpactDepth(impactDepth) ?? 4;
+    void Promise.all([
+      loadAssetBindings(assetId),
+      loadAssetMonitoring(assetId),
+      loadAssetImpact(assetId, impactDirection, depth)
+    ]);
+  }, [loadAssetBindings, loadAssetImpact, loadAssetMonitoring, selectedAssetId]);
 
   const emptyState = useMemo(() => assets.length === 0, [assets]);
   const assetNameById = useMemo(() => {
@@ -1050,6 +1467,22 @@ export function App() {
     const downstream = relations.filter((item) => item.src_asset_id === selectedAssetNumericId).length;
     return { upstream, downstream };
   }, [relations, selectedAssetNumericId]);
+  const impactNodeNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const node of assetImpact?.nodes ?? []) {
+      map.set(node.id, node.name);
+    }
+    for (const asset of assets) {
+      if (!map.has(asset.id)) {
+        map.set(asset.id, asset.name);
+      }
+    }
+    return map;
+  }, [assetImpact?.nodes, assets]);
+  const hierarchyHintEdges = useMemo(
+    () => (assetImpact?.edges ?? []).filter((edge) => edge.relation_type === "contains").slice(0, 10),
+    [assetImpact?.edges]
+  );
   const assetStatusOptions = useMemo(
     () => Array.from(new Set(assets.map((item) => item.status).filter((item) => item.trim().length > 0))).sort(),
     [assets]
@@ -1128,6 +1561,7 @@ export function App() {
       { href: "#section-notifications", label: t("auth.navigation.notifications") },
       { href: "#section-fields", label: t("auth.navigation.fields") },
       { href: "#section-relations", label: t("auth.navigation.relations") },
+      { href: "#section-readiness", label: t("auth.navigation.readiness") },
       { href: "#section-assets", label: t("auth.navigation.assets") },
       ...(canAccessAdmin ? [{ href: "#section-admin", label: t("auth.navigation.admin") }] : [])
     ],
@@ -1902,6 +2336,306 @@ export function App() {
       </SectionCard>
 
       <SectionCard
+        id="section-readiness"
+        title={t("cmdb.assetDetail.title")}
+        actions={selectedAsset ? <span className="section-meta">#{selectedAsset.id} {selectedAsset.name}</span> : undefined}
+      >
+        {emptyState ? (
+          <p>{t("cmdb.assetDetail.messages.noAssets")}</p>
+        ) : !selectedAsset ? (
+          <p>{t("cmdb.assetDetail.messages.selectAsset")}</p>
+        ) : (
+          <>
+            <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
+              <button
+                onClick={() => {
+                  const assetId = Number.parseInt(selectedAssetId, 10);
+                  if (!Number.isFinite(assetId) || assetId <= 0) {
+                    return;
+                  }
+                  const depth = parseImpactDepth(impactDepth) ?? 4;
+                  void Promise.all([
+                    loadAssetBindings(assetId),
+                    loadAssetMonitoring(assetId),
+                    loadAssetImpact(assetId, impactDirection, depth)
+                  ]);
+                }}
+                disabled={loadingAssetBindings || loadingAssetMonitoring || loadingAssetImpact}
+              >
+                {t("cmdb.assetDetail.actions.refresh")}
+              </button>
+              <span className="section-meta">
+                {t("cmdb.assetDetail.assetSummary", {
+                  class: selectedAsset.asset_class,
+                  status: selectedAsset.status,
+                  ip: selectedAsset.ip ?? "-"
+                })}
+              </span>
+            </div>
+
+            {bindingNotice && <p className="banner banner-success">{bindingNotice}</p>}
+            {lifecycleNotice && <p className="banner banner-success">{lifecycleNotice}</p>}
+            {monitoringNotice && <p className="banner banner-success">{monitoringNotice}</p>}
+            {impactNotice && <p className="banner banner-success">{impactNotice}</p>}
+
+            <div className="detail-grid">
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.assetDetail.lifecycle.title")}</h3>
+                {loadingAssetBindings && !assetBindings ? (
+                  <p>{t("cmdb.assetDetail.lifecycle.loading")}</p>
+                ) : !assetBindings ? (
+                  <p>{t("cmdb.assetDetail.lifecycle.empty")}</p>
+                ) : (
+                  <>
+                    <p className="section-note">
+                      {t("cmdb.assetDetail.lifecycle.summary", {
+                        status: selectedAsset.status,
+                        departments: assetBindings.readiness.department_count,
+                        services: assetBindings.readiness.business_service_count,
+                        owners: assetBindings.readiness.owner_count
+                      })}
+                    </p>
+                    <div className="readiness-checklist">
+                      <span
+                        className={`status-chip ${assetBindings.readiness.department_count > 0 ? "status-chip-success" : "status-chip-warn"}`}
+                      >
+                        {t("cmdb.assetDetail.readiness.department")}
+                      </span>
+                      <span
+                        className={`status-chip ${assetBindings.readiness.business_service_count > 0 ? "status-chip-success" : "status-chip-warn"}`}
+                      >
+                        {t("cmdb.assetDetail.readiness.businessService")}
+                      </span>
+                      <span
+                        className={`status-chip ${assetBindings.readiness.owner_count > 0 ? "status-chip-success" : "status-chip-warn"}`}
+                      >
+                        {t("cmdb.assetDetail.readiness.owner")}
+                      </span>
+                    </div>
+
+                    {assetBindings.readiness.can_transition_operational ? (
+                      <p className="inline-note">{t("cmdb.assetDetail.readiness.ready")}</p>
+                    ) : (
+                      <p className="inline-note">
+                        {t("cmdb.assetDetail.readiness.blocked", {
+                          missing: assetBindings.readiness.missing
+                            .map((item) => t(`cmdb.assetDetail.readiness.missing.${item}`))
+                            .join(", ")
+                        })}
+                      </p>
+                    )}
+
+                    <div className="toolbar-row">
+                      {lifecycleStatuses.map((status) => (
+                        <button
+                          key={status}
+                          onClick={() => void transitionAssetLifecycle(status)}
+                          disabled={
+                            !canWriteCmdb
+                            || transitioningLifecycleStatus !== null
+                            || selectedAsset.status === status
+                          }
+                        >
+                          {transitioningLifecycleStatus === status
+                            ? t("cmdb.actions.loading")
+                            : t("cmdb.assetDetail.lifecycle.transitionTo", { status })}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.assetDetail.monitoring.title")}</h3>
+                {loadingAssetMonitoring && !assetMonitoring ? (
+                  <p>{t("cmdb.assetDetail.monitoring.loading")}</p>
+                ) : !assetMonitoring ? (
+                  <p>{t("cmdb.assetDetail.monitoring.empty")}</p>
+                ) : (
+                  <>
+                    <p className="section-note">
+                      {t("cmdb.assetDetail.monitoring.bindingSummary", {
+                        source: assetMonitoring.binding?.source_system ?? "-",
+                        status: assetMonitoring.binding?.last_sync_status ?? "unknown",
+                        host: assetMonitoring.binding?.external_host_id ?? "-"
+                      })}
+                    </p>
+                    <p className="section-note">
+                      {t("cmdb.assetDetail.monitoring.latestJob", {
+                        status: assetMonitoring.latest_job?.status ?? "-",
+                        attempt: assetMonitoring.latest_job?.attempt ?? 0,
+                        maxAttempts: assetMonitoring.latest_job?.max_attempts ?? 0,
+                        error: assetMonitoring.latest_job?.last_error ?? "-"
+                      })}
+                    </p>
+                    <div className="toolbar-row">
+                      <button
+                        onClick={() => void triggerAssetMonitoringSync()}
+                        disabled={!canWriteCmdb || triggeringMonitoringSync}
+                      >
+                        {triggeringMonitoringSync
+                          ? t("cmdb.actions.loading")
+                          : t("cmdb.assetDetail.monitoring.actions.triggerSync")}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.assetDetail.bindings.title")}</h3>
+                <div className="form-grid">
+                  <label className="control-field">
+                    <span>{t("cmdb.assetDetail.bindings.departments")}</span>
+                    <input
+                      value={bindingDepartmentsInput}
+                      onChange={(event) => setBindingDepartmentsInput(event.target.value)}
+                      placeholder={t("cmdb.assetDetail.bindings.departmentsPlaceholder")}
+                      disabled={!canWriteCmdb}
+                    />
+                  </label>
+                  <label className="control-field">
+                    <span>{t("cmdb.assetDetail.bindings.businessServices")}</span>
+                    <input
+                      value={bindingBusinessServicesInput}
+                      onChange={(event) => setBindingBusinessServicesInput(event.target.value)}
+                      placeholder={t("cmdb.assetDetail.bindings.businessServicesPlaceholder")}
+                      disabled={!canWriteCmdb}
+                    />
+                  </label>
+                </div>
+
+                <p className="section-note">{t("cmdb.assetDetail.bindings.ownerHint")}</p>
+                {bindingOwnerDrafts.length === 0 ? (
+                  <p className="inline-note">{t("cmdb.assetDetail.bindings.noOwners")}</p>
+                ) : (
+                  <div className="owner-list">
+                    {bindingOwnerDrafts.map((owner) => (
+                      <div className="owner-row" key={owner.key}>
+                        <select
+                          value={owner.owner_type}
+                          onChange={(event) => updateOwnerDraftType(owner.key, normalizeOwnerType(event.target.value))}
+                          disabled={!canWriteCmdb}
+                        >
+                          <option value="team">team</option>
+                          <option value="user">user</option>
+                          <option value="group">group</option>
+                          <option value="external">external</option>
+                        </select>
+                        <input
+                          value={owner.owner_ref}
+                          onChange={(event) => updateOwnerDraftRef(owner.key, event.target.value)}
+                          placeholder={t("cmdb.assetDetail.bindings.ownerRefPlaceholder")}
+                          disabled={!canWriteCmdb}
+                        />
+                        <button onClick={() => removeOwnerDraft(owner.key)} disabled={!canWriteCmdb}>
+                          {t("cmdb.assetDetail.bindings.actions.removeOwner")}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="toolbar-row" style={{ marginTop: "0.75rem" }}>
+                  <button onClick={() => addOwnerDraft()} disabled={!canWriteCmdb}>
+                    {t("cmdb.assetDetail.bindings.actions.addOwner")}
+                  </button>
+                  <button onClick={() => void saveAssetBindings()} disabled={!canWriteCmdb || updatingAssetBindings}>
+                    {updatingAssetBindings
+                      ? t("cmdb.actions.loading")
+                      : t("cmdb.assetDetail.bindings.actions.save")}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setBindingDepartmentsInput("");
+                      setBindingBusinessServicesInput("");
+                      setBindingOwnerDrafts([]);
+                    }}
+                    disabled={!canWriteCmdb || updatingAssetBindings}
+                  >
+                    {t("cmdb.assetDetail.bindings.actions.clear")}
+                  </button>
+                </div>
+              </div>
+
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.assetDetail.impact.title")}</h3>
+                <div className="toolbar-row">
+                  <label>
+                    {t("cmdb.assetDetail.impact.directionLabel")}{" "}
+                    <select
+                      value={impactDirection}
+                      onChange={(event) => setImpactDirection(event.target.value as ImpactDirection)}
+                    >
+                      <option value="downstream">downstream</option>
+                      <option value="upstream">upstream</option>
+                      <option value="both">both</option>
+                    </select>
+                  </label>
+                  <label>
+                    {t("cmdb.assetDetail.impact.depthLabel")}{" "}
+                    <input
+                      value={impactDepth}
+                      onChange={(event) => setImpactDepth(event.target.value)}
+                      style={{ width: "72px" }}
+                    />
+                  </label>
+                  <button onClick={() => void refreshImpact()} disabled={loadingAssetImpact}>
+                    {loadingAssetImpact ? t("cmdb.actions.loading") : t("cmdb.assetDetail.impact.actions.refresh")}
+                  </button>
+                </div>
+
+                {loadingAssetImpact && !assetImpact ? (
+                  <p>{t("cmdb.assetDetail.impact.loading")}</p>
+                ) : !assetImpact ? (
+                  <p>{t("cmdb.assetDetail.impact.empty")}</p>
+                ) : (
+                  <>
+                    <p className="section-note">
+                      {t("cmdb.assetDetail.impact.summary", {
+                        direction: assetImpact.direction,
+                        depth: assetImpact.depth_limit,
+                        nodes: assetImpact.nodes.length,
+                        edges: assetImpact.edges.length,
+                        services: assetImpact.affected_business_services.length,
+                        owners: assetImpact.affected_owners.length
+                      })}
+                    </p>
+                    {hierarchyHintEdges.length === 0 ? (
+                      <p className="inline-note">{t("cmdb.assetDetail.impact.noHierarchyHints")}</p>
+                    ) : (
+                      <div className="hint-list">
+                        {hierarchyHintEdges.map((edge) => (
+                          <div key={`${edge.id}-${edge.direction}`} className="hint-row">
+                            #{edge.id}: {impactNodeNameById.get(edge.src_asset_id) ?? edge.src_asset_id} {"-> "}
+                            {impactNodeNameById.get(edge.dst_asset_id) ?? edge.dst_asset_id}
+                            {" "}({edge.direction}, d={edge.depth})
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <p className="section-note">
+                      {t("cmdb.assetDetail.impact.affectedServices", {
+                        value: assetImpact.affected_business_services.map((item) => item.name).join(", ") || "-"
+                      })}
+                    </p>
+                    <p className="section-note">
+                      {t("cmdb.assetDetail.impact.affectedOwners", {
+                        value: assetImpact.affected_owners.map((item) => item.name).join(", ") || "-"
+                      })}
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </SectionCard>
+
+      <SectionCard
         id="section-assets"
         title={t("cmdb.assets.title")}
         actions={(
@@ -2142,6 +2876,49 @@ function statusChipClass(value: string): string {
     return "status-chip status-chip-warn";
   }
   return "status-chip";
+}
+
+let ownerDraftSequence = 0;
+
+function createOwnerDraft(ownerType: OwnerType, ownerRef: string, keyHint?: string): OwnerDraft {
+  ownerDraftSequence += 1;
+  return {
+    key: keyHint ? `${keyHint}-${ownerDraftSequence}` : `owner-${ownerDraftSequence}`,
+    owner_type: ownerType,
+    owner_ref: ownerRef
+  };
+}
+
+function normalizeOwnerType(value: string): OwnerType {
+  if (value === "team" || value === "user" || value === "group" || value === "external") {
+    return value;
+  }
+  return "team";
+}
+
+function parseBindingList(value: string): string[] {
+  const parts = value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const item of parts) {
+    const key = item.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      normalized.push(item);
+    }
+  }
+  return normalized;
+}
+
+function parseImpactDepth(value: string): number | null {
+  const parsed = Number.parseInt(value.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 8) {
+    return null;
+  }
+  return parsed;
 }
 
 function deriveDefaultAuthSession(): AuthSession | null {

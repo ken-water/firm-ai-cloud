@@ -250,6 +250,19 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets/1/lifecycle \
   -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{ "status": "operational" }'
+
+# clear all bindings (unbind) and keep asset in non-operational states
+curl -X PUT http://127.0.0.1:8080/api/v1/cmdb/assets/1/bindings \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "departments": [],
+    "business_services": [],
+    "owners": []
+  }'
+
+# inspect monitoring sync result shown in web-console readiness panel
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/assets/1/monitoring-binding
 ```
 
 CMDB relation APIs:

@@ -26,6 +26,7 @@
       "notifications": "Notifications",
       "fields": "Fields",
       "relations": "Relations",
+      "readiness": "Readiness",
       "assets": "Assets",
       "admin": "System Admin"
     },
@@ -246,6 +247,83 @@
         "origin": "Source Type",
         "updatedAt": "Updated At",
         "actions": "Actions"
+      }
+    },
+    "assetDetail": {
+      "title": "Asset Readiness and Binding Management",
+      "assetSummary": "class={{class}} | status={{status}} | ip={{ip}}",
+      "actions": {
+        "refresh": "Refresh Detail Data"
+      },
+      "messages": {
+        "noAssets": "No assets available. Create assets first.",
+        "selectAsset": "Select one asset in the relation panel to manage readiness."
+      },
+      "lifecycle": {
+        "title": "Lifecycle Gate",
+        "loading": "Loading lifecycle readiness...",
+        "empty": "Lifecycle readiness data is not available.",
+        "summary": "Current status: {{status}} | Departments: {{departments}} | Services: {{services}} | Owners: {{owners}}",
+        "transitionTo": "Transition to {{status}}"
+      },
+      "readiness": {
+        "department": "Department Binding",
+        "businessService": "Business Service Binding",
+        "owner": "Owner Binding",
+        "ready": "All required bindings are complete. Asset can transition to operational.",
+        "blocked": "Operational transition is blocked. Missing: {{missing}}.",
+        "missing": {
+          "department_binding": "department binding",
+          "business_service_binding": "business service binding",
+          "owner_binding": "owner binding"
+        }
+      },
+      "bindings": {
+        "title": "Binding Editor",
+        "departments": "Departments",
+        "departmentsPlaceholder": "platform, dba, network",
+        "businessServices": "Business Services",
+        "businessServicesPlaceholder": "orders, payment, product-catalog",
+        "ownerHint": "Owners can be team/user/group/external. Blank owner references are ignored on save.",
+        "noOwners": "No owner bindings configured.",
+        "ownerRefPlaceholder": "owner reference (e.g. dba-team or alice)",
+        "actions": {
+          "addOwner": "Add Owner",
+          "removeOwner": "Remove",
+          "save": "Save Bindings",
+          "clear": "Clear Draft"
+        }
+      },
+      "monitoring": {
+        "title": "Monitoring Sync Status",
+        "loading": "Loading monitoring sync status...",
+        "empty": "Monitoring binding status is unavailable.",
+        "bindingSummary": "Source={{source}} | Last Sync={{status}} | External Host={{host}}",
+        "latestJob": "Latest Job: status={{status}}, attempt={{attempt}}/{{maxAttempts}}, last_error={{error}}",
+        "actions": {
+          "triggerSync": "Trigger Sync"
+        },
+        "messages": {
+          "syncQueued": "Monitoring sync queued as job #{{id}}."
+        }
+      },
+      "impact": {
+        "title": "Hierarchy and Impact Hints",
+        "directionLabel": "Direction",
+        "depthLabel": "Depth (1-8)",
+        "loading": "Loading impact graph...",
+        "empty": "Impact graph is unavailable for current asset.",
+        "summary": "direction={{direction}}, depth={{depth}}, nodes={{nodes}}, edges={{edges}}, services={{services}}, owners={{owners}}",
+        "noHierarchyHints": "No hierarchy (`contains`) edges in current impact result.",
+        "affectedServices": "Affected business services: {{value}}",
+        "affectedOwners": "Affected owners: {{value}}",
+        "actions": {
+          "refresh": "Refresh Impact"
+        },
+        "messages": {
+          "invalidDepth": "Impact depth must be an integer between 1 and 8.",
+          "loaded": "Impact graph loaded: {{nodes}} nodes, {{edges}} edges."
+        }
       }
     },
     "assets": {

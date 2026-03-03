@@ -28,6 +28,11 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - migration: `202603030005_standardize_relation_types_and_hierarchy_indexes.sql`
   - canonical relation types: `contains`, `depends_on`, `runs_service`, `owned_by`
   - impact API: `GET /api/v1/cmdb/assets/{id}/impact`
+- CMDB readiness and binding-management web-console baseline:
+  - new asset detail panel for lifecycle gate, readiness checklist, and blocking requirements
+  - in-UI binding editor for departments/business services/owner bindings (team/user/group/external)
+  - in-UI monitoring sync status and manual sync trigger entrypoint
+  - impact-hint view for hierarchy edges and affected service/owner summary
 
 ### Changed
 
@@ -54,6 +59,8 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Relation API now canonicalizes common aliases (`hosts`, `dependency`, `serves`, `managed_by`) into standardized relation types.
 - Impact traversal now supports deterministic upstream/downstream/both traversal with depth limit and relation-type filter.
 - CMDB smoke test now verifies hierarchy + service/owner mappings and incident impact API output.
+- Web-console navigation now includes a dedicated readiness section and refresh flow tied to selected relation-source asset.
+- Dev quickstart now includes explicit unbind example and readiness-panel monitoring-binding inspection command.
 
 ### Fixed
 
