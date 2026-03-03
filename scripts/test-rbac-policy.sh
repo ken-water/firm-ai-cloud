@@ -112,6 +112,16 @@ log "Validate operator permission matrix"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-op-asset-${STAMP}\",\"status\":\"active\"}"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/monitoring/sources"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/monitoring/sources" \
+  "{\"name\":\"rbac-op-monitor-${STAMP}\",\"source_type\":\"zabbix\",\"endpoint\":\"http://127.0.0.1:8080/health\",\"secret_ref\":\"dev/rbac-op-monitor-${STAMP}\"}"
+OPERATOR_MONITOR_SOURCE_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
+if [[ -z "$OPERATOR_MONITOR_SOURCE_ID" ]]; then
+  echo "ERROR: failed to parse operator monitoring source ID" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/monitoring/sources/${OPERATOR_MONITOR_SOURCE_ID}/probe"
 assert_code 403 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/iam/users"
 grep -q "permission denied" "$LAST_BODY_FILE" || {
   echo "ERROR: operator forbidden response is not expected English message" >&2
@@ -124,6 +134,9 @@ log "Validate viewer permission matrix"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-viewer-asset-${STAMP}\",\"status\":\"active\"}"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/monitoring/sources"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/monitoring/sources" \
+  "{\"name\":\"rbac-viewer-monitor-${STAMP}\",\"source_type\":\"zabbix\",\"endpoint\":\"http://127.0.0.1:8080/health\",\"secret_ref\":\"dev/rbac-viewer-monitor-${STAMP}\"}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/cmdb/discovery/jobs"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/discovery/jobs" \
   "{\"name\":\"rbac-viewer-job-${STAMP}\",\"source_type\":\"mock_hosts\",\"scope\":{}}"

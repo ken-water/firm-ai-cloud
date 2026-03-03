@@ -19,6 +19,8 @@ This document is the permission coverage report/checklist for issue `V030-005`.
 | `cmdb.discovery.write` | Allow | Allow | Deny |
 | `cmdb.notifications.read` | Allow | Allow | Allow |
 | `cmdb.notifications.write` | Allow | Allow | Deny |
+| `monitoring.sources.read` | Allow | Allow | Allow |
+| `monitoring.sources.write` | Allow | Allow | Deny |
 | `workflow.requests.read` | Allow | Allow | Allow |
 | `workflow.requests.write` | Allow | Allow | Deny |
 | `workflow.approvals.read` | Allow | Allow | Allow |
@@ -44,7 +46,13 @@ RBAC route mapping source:
 | `/api/v1/cmdb/discovery*` | `cmdb.discovery.read` / `cmdb.discovery.write` |
 | `/api/v1/cmdb/discovery/notification-{channels,templates,subscriptions}*` | `cmdb.notifications.read` / `cmdb.notifications.write` |
 
-### 2.2 Administration
+### 2.2 Monitoring
+
+| Route Group | Permission |
+| --- | --- |
+| `/api/v1/monitoring/sources*` | `monitoring.sources.read` / `monitoring.sources.write` |
+
+### 2.3 Administration
 
 | Route Group | Permission |
 | --- | --- |
@@ -52,7 +60,7 @@ RBAC route mapping source:
 | `/api/v1/iam/roles*` | `system.admin` |
 | `/api/v1/audit/logs*` | `system.admin` |
 
-### 2.3 Workflow (reserved mapping)
+### 2.4 Workflow (reserved mapping)
 
 Workflow APIs are not implemented yet, but RBAC mapping is already reserved:
 

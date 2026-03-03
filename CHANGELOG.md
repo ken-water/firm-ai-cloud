@@ -8,11 +8,17 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- None
+- Monitoring source registry baseline:
+  - migration: `202603030001_create_monitoring_sources.sql`
+  - APIs: `GET /api/v1/monitoring/sources`, `POST /api/v1/monitoring/sources`, `POST /api/v1/monitoring/sources/{id}/probe`
+  - new RBAC permission keys: `monitoring.sources.read`, `monitoring.sources.write`
+- v0.0.5 issue-first monitoring plan document: `docs/14-v0.0.5-monitoring-bootstrap-plan.md`.
 
 ### Changed
 
-- None
+- RBAC route mapping and auth tests now cover monitoring source endpoints.
+- RBAC integration script now validates monitoring source read/write permissions for operator and viewer roles.
+- RBAC coverage documentation now includes monitoring permission matrix and endpoint mapping.
 
 ### Fixed
 

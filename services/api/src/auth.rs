@@ -252,6 +252,8 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         || matches_scope(&normalized, "/discovery/notification-subscriptions")
     {
         "cmdb.notifications"
+    } else if matches_scope(&normalized, "/monitoring/sources") {
+        "monitoring.sources"
     } else if matches_scope(&normalized, "/cmdb/discovery")
         || matches_scope(&normalized, "/discovery")
     {
@@ -383,6 +385,25 @@ mod tests {
             Method::POST,
             "/api/v1/cmdb/discovery/jobs/1/run",
             "cmdb.discovery.write",
+        );
+    }
+
+    #[test]
+    fn maps_monitoring_source_permissions() {
+        assert_permission(
+            Method::GET,
+            "/api/v1/monitoring/sources",
+            "monitoring.sources.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/monitoring/sources",
+            "monitoring.sources.write",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/monitoring/sources/1/probe",
+            "monitoring.sources.write",
         );
     }
 
@@ -545,6 +566,21 @@ mod tests {
                 Method::POST,
                 "/api/v1/cmdb/discovery/notification-subscriptions",
                 "cmdb.notifications.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/monitoring/sources",
+                "monitoring.sources.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/monitoring/sources",
+                "monitoring.sources.write",
+            ),
+            (
+                Method::POST,
+                "/api/v1/monitoring/sources/1/probe",
+                "monitoring.sources.write",
             ),
             (Method::GET, "/api/v1/iam/users", "system.admin"),
             (Method::POST, "/api/v1/iam/users", "system.admin"),

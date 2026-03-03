@@ -4,6 +4,7 @@ mod auth_api;
 mod cmdb;
 mod error;
 mod iam;
+mod monitoring;
 mod state;
 
 use std::net::SocketAddr;
@@ -107,6 +108,14 @@ fn build_router(state: AppState) -> Router {
         ));
     }
 
+    let mut monitoring_routes = monitoring::routes();
+    if state.rbac_enabled {
+        monitoring_routes = monitoring_routes.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::rbac_guard,
+        ));
+    }
+
     let mut audit_routes = audit::routes();
     if state.rbac_enabled {
         audit_routes = audit_routes.route_layer(axum::middleware::from_fn_with_state(
@@ -120,6 +129,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/v1/ping", get(ping_handler))
         .nest("/api/v1/auth", auth_api::routes())
         .nest("/api/v1/cmdb", cmdb_routes)
+        .nest("/api/v1/monitoring", monitoring_routes)
         .nest("/api/v1/iam", iam_routes)
         .nest("/api/v1/audit", audit_routes)
         .with_state(state)
