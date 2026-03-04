@@ -22,6 +22,8 @@ pub struct AppConfig {
     pub oidc_auto_provision: bool,
     pub oidc_session_ttl_minutes: u32,
     pub oidc_dev_mode_enabled: bool,
+    pub monitoring_secret_encryption_key: Option<String>,
+    pub monitoring_secret_inline_policy: String,
     pub workflow_execution_policy_mode: String,
     pub workflow_execution_allowlist: Vec<String>,
     pub workflow_execution_sandbox_dir: String,
@@ -49,6 +51,13 @@ impl AppConfig {
         let oidc_auto_provision = parse_bool_env("AUTH_OIDC_AUTO_PROVISION", false)?;
         let oidc_session_ttl_minutes = parse_u32_env("AUTH_SESSION_TTL_MINUTES", 480)?;
         let oidc_dev_mode_enabled = parse_bool_env("AUTH_OIDC_DEV_MODE_ENABLED", false)?;
+        let monitoring_secret_encryption_key =
+            parse_optional_env("MONITORING_SECRET_ENCRYPTION_KEY");
+        let monitoring_secret_inline_policy = parse_enum_env(
+            "MONITORING_SECRET_INLINE_POLICY",
+            "allow",
+            &["allow", "forbid"],
+        )?;
         let workflow_execution_policy_mode = parse_enum_env(
             "WORKFLOW_EXECUTION_POLICY_MODE",
             "disabled",
@@ -76,6 +85,8 @@ impl AppConfig {
             oidc_auto_provision,
             oidc_session_ttl_minutes,
             oidc_dev_mode_enabled,
+            monitoring_secret_encryption_key,
+            monitoring_secret_inline_policy,
             workflow_execution_policy_mode,
             workflow_execution_allowlist,
             workflow_execution_sandbox_dir,
@@ -213,6 +224,8 @@ mod tests {
         assert!(cfg.oidc_client_id.is_none());
         assert!(cfg.oidc_client_secret.is_none());
         assert!(cfg.oidc_redirect_uri.is_none());
+        assert!(cfg.monitoring_secret_encryption_key.is_none());
+        assert_eq!(cfg.monitoring_secret_inline_policy, "allow");
         assert_eq!(cfg.workflow_execution_policy_mode, "disabled");
         assert!(cfg.workflow_execution_allowlist.is_empty());
         assert_eq!(

@@ -10,6 +10,7 @@ use crate::{
     audit::{AuditLogWriteInput, write_audit_log_best_effort},
     cmdb::monitoring_sync::is_eligible_asset_class,
     error::{AppError, AppResult},
+    secrets::resolve_monitoring_secret,
     state::AppState,
 };
 
@@ -150,7 +151,7 @@ async fn process_job(state: &AppState, job: &SyncJobRecord) -> AppResult<SyncSuc
         load_best_monitoring_source(state, asset.site.as_deref(), asset.department.as_deref())
             .await?
     };
-    let session = build_zabbix_session(&source).await?;
+    let session = build_zabbix_session(state, &source).await?;
 
     let mapping = resolve_mapping(&asset, &source)?;
     let group_id = ensure_host_group(&session, &mapping.host_group).await?;
@@ -379,6 +380,7 @@ struct MonitoringSourceRecord {
     auth_type: String,
     username: Option<String>,
     secret_ref: String,
+    secret_ciphertext: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -446,7 +448,7 @@ async fn load_best_monitoring_source(
     department: Option<&str>,
 ) -> AppResult<MonitoringSourceRecord> {
     let item: Option<MonitoringSourceRecord> = sqlx::query_as(
-        "SELECT id, endpoint, proxy_endpoint, auth_type, username, secret_ref
+        "SELECT id, endpoint, proxy_endpoint, auth_type, username, secret_ref, secret_ciphertext
          FROM monitoring_sources
          WHERE is_enabled = TRUE
            AND source_type = 'zabbix'
@@ -475,7 +477,7 @@ async fn load_monitoring_source_by_id(
     source_id: i64,
 ) -> AppResult<MonitoringSourceRecord> {
     let item: Option<MonitoringSourceRecord> = sqlx::query_as(
-        "SELECT id, endpoint, proxy_endpoint, auth_type, username, secret_ref
+        "SELECT id, endpoint, proxy_endpoint, auth_type, username, secret_ref, secret_ciphertext
          FROM monitoring_sources
          WHERE id = $1
            AND is_enabled = TRUE
@@ -492,7 +494,10 @@ async fn load_monitoring_source_by_id(
     })
 }
 
-async fn build_zabbix_session(source: &MonitoringSourceRecord) -> AppResult<ZabbixSession> {
+async fn build_zabbix_session(
+    state: &AppState,
+    source: &MonitoringSourceRecord,
+) -> AppResult<ZabbixSession> {
     let endpoint = normalize_zabbix_endpoint(source.endpoint.as_str())?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -501,7 +506,11 @@ async fn build_zabbix_session(source: &MonitoringSourceRecord) -> AppResult<Zabb
 
     match source.auth_type.as_str() {
         "token" => {
-            let secret = resolve_secret(source.secret_ref.as_str())?;
+            let secret = resolve_monitoring_secret(
+                source.secret_ref.as_str(),
+                source.secret_ciphertext.as_deref(),
+                state.monitoring_secret.encryption_key.as_deref(),
+            )?;
             Ok(ZabbixSession {
                 client,
                 endpoint,
@@ -515,7 +524,11 @@ async fn build_zabbix_session(source: &MonitoringSourceRecord) -> AppResult<Zabb
                     "monitoring source requires username for basic auth".to_string(),
                 )
             })?;
-            let password = resolve_secret(source.secret_ref.as_str())?;
+            let password = resolve_monitoring_secret(
+                source.secret_ref.as_str(),
+                source.secret_ciphertext.as_deref(),
+                state.monitoring_secret.encryption_key.as_deref(),
+            )?;
             let params = json!({
                 "username": username,
                 "password": password
@@ -999,42 +1012,6 @@ fn normalize_zabbix_endpoint(value: &str) -> AppResult<String> {
     }
 
     Ok(endpoint.to_string())
-}
-
-fn resolve_secret(secret_ref: &str) -> AppResult<String> {
-    let secret_ref = secret_ref.trim();
-    if let Some(key) = secret_ref.strip_prefix("env:") {
-        let key = key.trim();
-        if key.is_empty() {
-            return Err(AppError::Validation(
-                "secret_ref env key is empty".to_string(),
-            ));
-        }
-        let value = env::var(key).map_err(|_| {
-            AppError::Validation(format!("secret_ref env key '{}' is not set", key))
-        })?;
-        let value = value.trim();
-        if value.is_empty() {
-            return Err(AppError::Validation(format!(
-                "secret_ref env key '{}' resolved to empty value",
-                key
-            )));
-        }
-        return Ok(value.to_string());
-    }
-    if let Some(value) = secret_ref.strip_prefix("plain:") {
-        let value = value.trim();
-        if value.is_empty() {
-            return Err(AppError::Validation(
-                "secret_ref plain value is empty".to_string(),
-            ));
-        }
-        return Ok(value.to_string());
-    }
-    if secret_ref.is_empty() {
-        return Err(AppError::Validation("secret_ref is empty".to_string()));
-    }
-    Ok(secret_ref.to_string())
 }
 
 fn sanitize_host_key(value: &str) -> String {

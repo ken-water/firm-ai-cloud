@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::time::Duration;
 
 use axum::{
     Json, Router,
@@ -17,6 +17,10 @@ use sqlx::{Postgres, QueryBuilder};
 use crate::{
     audit::write_from_headers_best_effort,
     error::{AppError, AppResult},
+    secrets::{
+        classify_monitoring_secret_storage, mask_monitoring_secret,
+        prepare_monitoring_secret_for_storage, resolve_monitoring_secret,
+    },
     state::AppState,
 };
 
@@ -35,8 +39,8 @@ pub fn routes() -> Router<AppState> {
         )
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
-struct MonitoringSource {
+#[derive(Debug, sqlx::FromRow)]
+struct MonitoringSourceRecord {
     id: i64,
     name: String,
     source_type: String,
@@ -45,6 +49,7 @@ struct MonitoringSource {
     auth_type: String,
     username: Option<String>,
     secret_ref: String,
+    secret_ciphertext: Option<String>,
     site: Option<String>,
     department: Option<String>,
     is_enabled: bool,
@@ -61,6 +66,27 @@ struct MonitoringSourceProbeResponse {
     reachable: bool,
     status_code: Option<u16>,
     message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MonitoringSource {
+    id: i64,
+    name: String,
+    source_type: String,
+    endpoint: String,
+    proxy_endpoint: Option<String>,
+    auth_type: String,
+    username: Option<String>,
+    secret_ref: String,
+    secret_storage: String,
+    site: Option<String>,
+    department: Option<String>,
+    is_enabled: bool,
+    last_probe_at: Option<DateTime<Utc>>,
+    last_probe_status: Option<String>,
+    last_probe_message: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -530,7 +556,7 @@ async fn get_monitoring_metrics(
     )
     .await?;
 
-    let session = create_zabbix_session(&source).await?;
+    let session = create_zabbix_session(&state, &source).await?;
     let host_id = resolve_metric_host_id(&session, &context).await?;
 
     let now = Utc::now();
@@ -835,7 +861,7 @@ async fn resolve_monitoring_source_for_asset(
     source_id: Option<i64>,
     site: Option<&str>,
     department: Option<&str>,
-) -> AppResult<MonitoringSource> {
+) -> AppResult<MonitoringSourceRecord> {
     if let Some(source_id) = source_id {
         let source = get_monitoring_source(db, source_id).await?;
         if !source.is_enabled {
@@ -847,7 +873,7 @@ async fn resolve_monitoring_source_for_asset(
         return Ok(source);
     }
 
-    let fallback: Option<MonitoringSource> = sqlx::query_as(
+    let fallback: Option<MonitoringSourceRecord> = sqlx::query_as(
         "SELECT
             id,
             name,
@@ -857,6 +883,7 @@ async fn resolve_monitoring_source_for_asset(
             auth_type,
             username,
             secret_ref,
+            secret_ciphertext,
             site,
             department,
             is_enabled,
@@ -1016,6 +1043,35 @@ fn increment_job_summary(summary: &mut MonitoringJobStatusSummary, status: Optio
     }
 }
 
+fn to_monitoring_source(item: MonitoringSourceRecord) -> MonitoringSource {
+    MonitoringSource {
+        id: item.id,
+        name: item.name,
+        source_type: item.source_type,
+        endpoint: item.endpoint,
+        proxy_endpoint: item.proxy_endpoint,
+        auth_type: item.auth_type,
+        username: item.username,
+        secret_ref: mask_monitoring_secret(
+            item.secret_ref.as_str(),
+            item.secret_ciphertext.as_deref(),
+        ),
+        secret_storage: classify_monitoring_secret_storage(
+            item.secret_ref.as_str(),
+            item.secret_ciphertext.as_deref(),
+        )
+        .to_string(),
+        site: item.site,
+        department: item.department,
+        is_enabled: item.is_enabled,
+        last_probe_at: item.last_probe_at,
+        last_probe_status: item.last_probe_status,
+        last_probe_message: item.last_probe_message,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+    }
+}
+
 async fn list_monitoring_sources(
     State(state): State<AppState>,
     Query(query): Query<ListMonitoringSourcesQuery>,
@@ -1030,6 +1086,7 @@ async fn list_monitoring_sources(
             auth_type,
             username,
             secret_ref,
+            secret_ciphertext,
             site,
             department,
             is_enabled,
@@ -1056,8 +1113,8 @@ async fn list_monitoring_sources(
     }
 
     builder.push(" ORDER BY id DESC");
-    let items: Vec<MonitoringSource> = builder.build_query_as().fetch_all(&state.db).await?;
-    Ok(Json(items))
+    let items: Vec<MonitoringSourceRecord> = builder.build_query_as().fetch_all(&state.db).await?;
+    Ok(Json(items.into_iter().map(to_monitoring_source).collect()))
 }
 
 async fn create_monitoring_source(
@@ -1071,12 +1128,17 @@ async fn create_monitoring_source(
     let proxy_endpoint = normalize_optional_endpoint(payload.proxy_endpoint)?;
     let auth_type = normalize_auth_type(payload.auth_type)?;
     let username = normalize_username(payload.username, &auth_type)?;
-    let secret_ref = required_trimmed("secret_ref", payload.secret_ref, 255)?;
+    let secret_ref = required_trimmed("secret_ref", payload.secret_ref, 4096)?;
+    let stored_secret = prepare_monitoring_secret_for_storage(
+        secret_ref.as_str(),
+        state.monitoring_secret.inline_policy.as_str(),
+        state.monitoring_secret.encryption_key.as_deref(),
+    )?;
     let site = trim_optional(payload.site);
     let department = trim_optional(payload.department);
     let is_enabled = payload.is_enabled.unwrap_or(true);
 
-    let item: MonitoringSource = sqlx::query_as(
+    let item: MonitoringSourceRecord = sqlx::query_as(
         "INSERT INTO monitoring_sources (
             name,
             source_type,
@@ -1085,11 +1147,12 @@ async fn create_monitoring_source(
             auth_type,
             username,
             secret_ref,
+            secret_ciphertext,
             site,
             department,
             is_enabled
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING
             id,
             name,
@@ -1099,6 +1162,7 @@ async fn create_monitoring_source(
             auth_type,
             username,
             secret_ref,
+            secret_ciphertext,
             site,
             department,
             is_enabled,
@@ -1114,7 +1178,8 @@ async fn create_monitoring_source(
     .bind(proxy_endpoint)
     .bind(auth_type)
     .bind(username)
-    .bind(secret_ref)
+    .bind(stored_secret.secret_ref)
+    .bind(stored_secret.secret_ciphertext)
     .bind(site)
     .bind(department)
     .bind(is_enabled)
@@ -1138,7 +1203,7 @@ async fn create_monitoring_source(
     )
     .await;
 
-    Ok(Json(item))
+    Ok(Json(to_monitoring_source(item)))
 }
 
 async fn probe_monitoring_source(
@@ -1154,7 +1219,7 @@ async fn probe_monitoring_source(
         "unreachable"
     };
 
-    let updated: MonitoringSource = sqlx::query_as(
+    let updated: MonitoringSourceRecord = sqlx::query_as(
         "UPDATE monitoring_sources
          SET
             last_probe_at = NOW(),
@@ -1171,6 +1236,7 @@ async fn probe_monitoring_source(
             auth_type,
             username,
             secret_ref,
+            secret_ciphertext,
             site,
             department,
             is_enabled,
@@ -1202,15 +1268,18 @@ async fn probe_monitoring_source(
     .await;
 
     Ok(Json(MonitoringSourceProbeResponse {
-        source: updated,
+        source: to_monitoring_source(updated),
         reachable: probe.reachable,
         status_code: probe.status_code,
         message: probe.message,
     }))
 }
 
-async fn get_monitoring_source(db: &sqlx::PgPool, source_id: i64) -> AppResult<MonitoringSource> {
-    let item: Option<MonitoringSource> = sqlx::query_as(
+async fn get_monitoring_source(
+    db: &sqlx::PgPool,
+    source_id: i64,
+) -> AppResult<MonitoringSourceRecord> {
+    let item: Option<MonitoringSourceRecord> = sqlx::query_as(
         "SELECT
             id,
             name,
@@ -1220,6 +1289,7 @@ async fn get_monitoring_source(db: &sqlx::PgPool, source_id: i64) -> AppResult<M
             auth_type,
             username,
             secret_ref,
+            secret_ciphertext,
             site,
             department,
             is_enabled,
@@ -1260,10 +1330,17 @@ async fn probe_endpoint(endpoint: &str) -> ProbeResult {
     }
 }
 
-async fn create_zabbix_session(source: &MonitoringSource) -> AppResult<ZabbixSession> {
+async fn create_zabbix_session(
+    state: &AppState,
+    source: &MonitoringSourceRecord,
+) -> AppResult<ZabbixSession> {
     let endpoint = normalize_zabbix_rpc_endpoint(source.endpoint.as_str())?;
     let client = reqwest::Client::new();
-    let secret = resolve_secret_ref(source.secret_ref.as_str())?;
+    let secret = resolve_monitoring_secret(
+        source.secret_ref.as_str(),
+        source.secret_ciphertext.as_deref(),
+        state.monitoring_secret.encryption_key.as_deref(),
+    )?;
 
     match source.auth_type.as_str() {
         "token" => Ok(ZabbixSession {
@@ -1616,44 +1693,6 @@ fn normalize_zabbix_rpc_endpoint(value: &str) -> AppResult<String> {
         endpoint.set_path("/api_jsonrpc.php");
     }
     Ok(endpoint.to_string())
-}
-
-fn resolve_secret_ref(secret_ref: &str) -> AppResult<String> {
-    let secret_ref = secret_ref.trim();
-    if let Some(key) = secret_ref.strip_prefix("env:") {
-        let key = key.trim();
-        if key.is_empty() {
-            return Err(AppError::Validation(
-                "secret_ref env key is empty".to_string(),
-            ));
-        }
-        let value = env::var(key).map_err(|_| {
-            AppError::Validation(format!("secret_ref env key '{}' is not set", key))
-        })?;
-        let value = value.trim();
-        if value.is_empty() {
-            return Err(AppError::Validation(format!(
-                "secret_ref env key '{}' resolved to empty value",
-                key
-            )));
-        }
-        return Ok(value.to_string());
-    }
-
-    if let Some(value) = secret_ref.strip_prefix("plain:") {
-        let value = value.trim();
-        if value.is_empty() {
-            return Err(AppError::Validation(
-                "secret_ref plain value is empty".to_string(),
-            ));
-        }
-        return Ok(value.to_string());
-    }
-
-    if secret_ref.is_empty() {
-        return Err(AppError::Validation("secret_ref is empty".to_string()));
-    }
-    Ok(secret_ref.to_string())
 }
 
 fn sanitize_host_key(value: &str) -> String {

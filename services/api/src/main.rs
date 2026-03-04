@@ -7,6 +7,7 @@ mod error;
 mod iam;
 mod monitoring;
 mod monitoring_sync_worker;
+mod secrets;
 mod state;
 mod streams;
 mod tickets;
@@ -20,7 +21,7 @@ use common::config::AppConfig;
 use common::models::{HealthResponse, PingResponse};
 use error::AppResult;
 use sqlx::postgres::PgPoolOptions;
-use state::{AppState, OidcSettings, WorkflowExecutionSettings};
+use state::{AppState, MonitoringSecretSettings, OidcSettings, WorkflowExecutionSettings};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -57,6 +58,10 @@ async fn main() -> anyhow::Result<()> {
             auto_provision: config.oidc_auto_provision,
             session_ttl_minutes: config.oidc_session_ttl_minutes,
             dev_mode_enabled: config.oidc_dev_mode_enabled,
+        },
+        monitoring_secret: MonitoringSecretSettings {
+            encryption_key: config.monitoring_secret_encryption_key,
+            inline_policy: config.monitoring_secret_inline_policy,
         },
         workflow_execution: WorkflowExecutionSettings {
             policy_mode: config.workflow_execution_policy_mode,

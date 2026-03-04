@@ -243,6 +243,7 @@ type MonitoringSource = {
   auth_type: string;
   username: string | null;
   secret_ref: string;
+  secret_storage: string;
   site: string | null;
   department: string | null;
   is_enabled: boolean;

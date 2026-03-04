@@ -554,7 +554,7 @@
         "proxyEndpoint": "Proxy Endpoint (optional)",
         "proxyEndpointPlaceholder": "http://127.0.0.1:10051",
         "secretRef": "Secret Ref",
-        "secretRefPlaceholder": "plain:zabbix",
+        "secretRefPlaceholder": "env:ZABBIX_LOCAL_PASSWORD",
         "username": "Username (basic auth)",
         "usernamePlaceholder": "Admin",
         "site": "Site (optional)",

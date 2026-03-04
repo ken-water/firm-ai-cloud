@@ -173,6 +173,21 @@ Operational notes:
    - `command_hash_sha256`
    - `allowlist_match`
 
+### 3.5 Monitoring Secret Protection Policy
+
+Monitoring source credentials support encrypted-at-rest storage for inline secrets.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MONITORING_SECRET_ENCRYPTION_KEY` | empty | Base64-encoded 32-byte AES-256-GCM key used for inline secret encryption/decryption |
+| `MONITORING_SECRET_INLINE_POLICY` | `allow` | `allow` or `forbid`; `forbid` blocks new inline `plain:`/raw secrets |
+
+Operational notes:
+
+1. Set `MONITORING_SECRET_INLINE_POLICY=forbid` in production and use `secret_ref: env:KEY`.
+2. If inline secret mode is used, `MONITORING_SECRET_ENCRYPTION_KEY` is mandatory.
+3. API responses and probe payloads only return masked `secret_ref` values.
+
 ## 4. Deployment Security Notes
 
 ### 4.1 Online/Connected Environments

@@ -98,6 +98,16 @@ Notes:
 - `allowlist`: run only commands matched in `WORKFLOW_EXECUTION_ALLOWLIST`.
 - `sandboxed`: same allowlist check, and run with cleared environment under sandbox directory.
 
+Monitoring secret encryption settings:
+
+```bash
+# required when using inline secret values (plain/raw)
+export MONITORING_SECRET_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+
+# recommended for production: block inline secret_ref and enforce env:KEY mode
+export MONITORING_SECRET_INLINE_POLICY=forbid
+```
+
 Health check:
 
 ```bash
@@ -204,6 +214,8 @@ curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/assets/by-code/QR-10000
 Monitoring source and CMDB -> Zabbix auto-provisioning:
 
 ```bash
+export ZABBIX_LOCAL_PASSWORD='zabbix'
+
 # create one Zabbix monitoring source (for local bundled Zabbix web endpoint)
 curl -X POST http://127.0.0.1:8080/api/v1/monitoring/sources \
   -H "$AUTH_HEADER" \
@@ -214,7 +226,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/monitoring/sources \
     "endpoint": "http://127.0.0.1:8082/api_jsonrpc.php",
     "auth_type": "basic",
     "username": "Admin",
-    "secret_ref": "plain:zabbix",
+    "secret_ref": "env:ZABBIX_LOCAL_PASSWORD",
     "site": "dc-a",
     "department": "platform",
     "is_enabled": true
@@ -313,7 +325,8 @@ Web-console monitoring source UX baseline:
 
 Troubleshooting notes:
 
-- If source auth fails, use `secret_ref: "env:YOUR_SECRET_ENV"` and export secret locally before API start.
+- Preferred mode: use `secret_ref: "env:YOUR_SECRET_ENV"` and export the value before API start.
+- If you must use inline `plain:`/raw secret values, set `MONITORING_SECRET_ENCRYPTION_KEY` first so secrets are encrypted at rest.
 - If `candidate`/`asset` sync jobs keep retrying, check latest error in:
   - `GET /api/v1/cmdb/monitoring-sync/jobs`
   - `GET /api/v1/audit/logs?action=cmdb.monitoring_sync.provision`

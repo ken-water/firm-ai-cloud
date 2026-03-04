@@ -7,7 +7,9 @@ license = "Apache-2.0"
 [dependencies]
 async-stream = { workspace = true }
 anyhow = { workspace = true }
+aes-gcm = { workspace = true }
 axum = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
 common = { path = "../../libs/common" }
 reqwest = { workspace = true }

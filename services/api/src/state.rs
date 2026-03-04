@@ -21,9 +21,16 @@ pub struct WorkflowExecutionSettings {
 }
 
 #[derive(Clone)]
+pub struct MonitoringSecretSettings {
+    pub encryption_key: Option<String>,
+    pub inline_policy: String,
+}
+
+#[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub rbac_enabled: bool,
     pub oidc: OidcSettings,
+    pub monitoring_secret: MonitoringSecretSettings,
     pub workflow_execution: WorkflowExecutionSettings,
 }
