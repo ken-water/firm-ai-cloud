@@ -8,112 +8,94 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- Discovery candidate review hardening migration:
-  - `202603030003_harden_discovery_candidate_review.sql`
-  - new candidate metadata: `review_strategy`, `review_reason`, `review_asset_id`
-  - pending-candidate identity indexes and unique pending fingerprint guard
-- Candidate decision timeline events:
-  - `candidate.approved_create`
-  - `candidate.approved_merge`
-  - `candidate.rejected`
-- CMDB monitoring sync baseline:
-  - migration: `202603030004_create_cmdb_monitoring_sync.sql`
-  - async sync queue table: `cmdb_monitoring_sync_jobs`
-  - monitoring binding table: `cmdb_monitoring_bindings`
-  - API endpoints:
-    - `GET /api/v1/cmdb/assets/{id}/monitoring-binding`
-    - `POST /api/v1/cmdb/assets/{id}/monitoring-sync`
-    - `GET /api/v1/cmdb/monitoring-sync/jobs`
-- Infra hierarchy and impact traversal baseline:
-  - migration: `202603030005_standardize_relation_types_and_hierarchy_indexes.sql`
-  - canonical relation types: `contains`, `depends_on`, `runs_service`, `owned_by`
-  - impact API: `GET /api/v1/cmdb/assets/{id}/impact`
-- CMDB readiness and binding-management web-console baseline:
-  - new asset detail panel for lifecycle gate, readiness checklist, and blocking requirements
-  - in-UI binding editor for departments/business services/owner bindings (team/user/group/external)
-  - in-UI monitoring sync status and manual sync trigger entrypoint
-  - impact-hint view for hierarchy edges and affected service/owner summary
-- Monitoring overview and layer baseline APIs:
-  - `GET /api/v1/monitoring/overview`
-  - `GET /api/v1/monitoring/layers/{layer}`
-  - supported layer model: `hardware`, `network`, `service`, `business`
-  - response contract includes scope echo and `empty` flag for frontend empty-state rendering
-- Monitoring source management UI baseline in web-console:
-  - dedicated navigation + section for source registry operations
-  - source list with probe status/health visibility
-  - source create form (validation + role-aware write controls)
-  - probe action with immediate success/failure feedback
-- SSE real-time stream baseline:
-  - endpoint: `GET /api/v1/streams/sse`
-  - stream envelope fields: `event_type`, `scope`, `timestamp`, `payload`
-  - filter params: `site`, `department`, `severity`
-  - baseline event types: `stream.connected`, `stream.heartbeat`, `stream.stale`, `stream.recovered`, `alert.test`, `alert.monitoring_sync`
-- Customer demo data toolkit:
-  - `scripts/demo-seed-data.sh` for one-command CMDB/monitoring/discovery/notification demo dataset generation
-  - `scripts/demo-health-check.sh` for manifest-based verification and report output
-  - `scripts/demo-cleanup-data.sh` for tagged demo rollback (supports `--dry-run`)
-  - runbook: `docs/16-demo-runbook.md`
-- CMDB asset statistics baseline:
-  - API: `GET /api/v1/cmdb/assets/stats`
-  - aggregation dimensions: `status`, `department`, `business_service`
-  - response includes `total_assets` and `unbound` counters for department/business-service bindings
-- Web-console asset statistics section:
-  - navigation entry: `Asset Statistics`
-  - bar-chart style views for status/department/business-service distributions
-  - one-click stats refresh and summary visibility for unbound assets
-- Monitoring metrics API baseline:
-  - endpoint: `GET /api/v1/monitoring/metrics`
-  - query args: `asset_id`, `window_minutes`
-  - pulls recent CPU/load/network in/network out/disk-used series from bound Zabbix host
-- Web-console monitoring metrics section:
-  - navigation entry: `Monitoring Metrics`
-  - per-asset charts for CPU/load/network/disk with selectable time window
-  - latest-value display and empty-series guidance for missing data windows
-- Web-console topology deep-drill section:
-  - navigation entry: `Topology`
-  - auto-rendered SVG topology from CMDB impact graph
-  - parallel-line rendering for multi-edge device relationships
-  - click-line edge inspector with source/target quick-focus actions
-  - configurable traversal scope (`direction`, `depth`, `relation_types`)
+- Discovery scheduler baseline:
+  - migration: `202603040002_add_discovery_job_next_run_at.sql`
+  - worker: `services/api/src/discovery_scheduler_worker.rs`
+  - scheduler env controls: `DISCOVERY_SCHEDULER_ENABLED`, `DISCOVERY_SCHEDULER_POLL_SECONDS`
+- Ticket domain baseline:
+  - migrations: `202603040003_create_ticket_tables.sql`, `202603040004_add_ticket_permissions.sql`
+  - APIs and route wiring in `services/api/src/tickets.rs`
+  - web-console ticket dashboard and detail surfaces
+- Monitoring source secret hardening:
+  - migration: `202603040005_encrypt_monitoring_source_secrets.sql`
+  - encrypted-at-rest secret support and masked API outputs
+  - shared secret resolution module: `services/api/src/secrets.rs`
+- Runtime language switch baseline:
+  - supported locales: `en-US`, `zh-CN`
+  - new locale key coverage checker: `apps/web-console/scripts/check-i18n-coverage.mjs`
 
 ### Changed
 
-- Candidate approve API now supports explicit strategy controls:
-  - `strategy=auto|create|merge`
-  - optional `target_asset_id` for deterministic merge target selection
-  - optional `reason` for decision traceability
-- Candidate review response now returns action contract values:
-  - `approve:create`
-  - `approve:merge`
-  - `reject`
-- Discovery run dedup now uses deterministic identity conflict detection across:
-  - fingerprint
-  - hostname
-  - ip
-  and refreshes existing pending candidates instead of creating duplicates.
-- CMDB loop smoke test now covers:
-  - discover -> `approve:create`
-  - discover -> `approve:merge`
-- Developer quickstart discovery examples now document explicit review strategy and reason fields.
-- CMDB asset API now supports `PATCH /api/v1/cmdb/assets/{id}` and enqueues monitoring sync on eligible asset create/update.
-- API service now starts a built-in monitoring sync worker for queued CMDB -> Zabbix provisioning jobs.
-- RBAC mapping now covers `/api/v1/cmdb/monitoring-sync/*` under `cmdb.assets.read/write`.
-- Relation API now canonicalizes common aliases (`hosts`, `dependency`, `serves`, `managed_by`) into standardized relation types.
-- Impact traversal now supports deterministic upstream/downstream/both traversal with depth limit and relation-type filter.
-- CMDB smoke test now verifies hierarchy + service/owner mappings and incident impact API output.
-- Web-console navigation now includes a dedicated readiness section and refresh flow tied to selected relation-source asset.
-- Dev quickstart now includes explicit unbind example and readiness-panel monitoring-binding inspection command.
-- RBAC monitoring-read mapping now also covers `/api/v1/monitoring/overview` and `/api/v1/monitoring/layers/*`.
-- Monitoring bootstrap plan now includes completed I3 notes for web-console monitoring source UX.
-- RBAC monitoring-read mapping now also covers `/api/v1/streams/sse` for authenticated stream subscriptions.
-- Developer quickstart now includes demo toolkit commands and runbook reference.
-- Asset create/discovery/lifecycle operations in web-console now refresh asset statistics automatically to keep dashboard data aligned.
-- RBAC monitoring-read mapping now also covers `/api/v1/monitoring/metrics`.
+- Workflow script execution now enforces explicit runtime policy:
+  - `disabled` (default), `allowlist`, `sandboxed`
+  - allowlist and sandbox options are configurable by env
+- Web console now supports runtime language switching with persisted preference storage.
 
 ### Fixed
 
-- Prevented repeated discovery runs from producing duplicate pending candidates for the same identity signals.
-- Prevented invalid `contains` hierarchy structures by rejecting cycle creation and conflicting multi-parent child edges.
+- Unauthorized ticket list route handling now aligns with RBAC mapping.
+
+## [0.0.7] - 2026-03-04
+
+### Added
+
+- Page-level web-console navigation with active route highlighting and legacy hash compatibility:
+  - `#/overview`, `#/cmdb`, `#/monitoring`, `#/workflow`, `#/admin`
+- Workflow automation backend baseline:
+  - migration: `202603040001_create_workflow_tables.sql`
+  - APIs in `services/api/src/workflow.rs`
+  - template/request/approval/execution-log lifecycle support
+- Workflow cockpit and report-center visual baseline:
+  - KPI cards and distribution/trend panels
+  - CSV export and week/month ranking comparison
+- CMDB and monitoring chart baselines:
+  - `GET /api/v1/cmdb/assets/stats`
+  - `GET /api/v1/monitoring/metrics`
+- Demo operations toolkit:
+  - `scripts/demo-seed-data.sh`
+  - `scripts/demo-health-check.sh`
+  - `scripts/demo-cleanup-data.sh`
+  - `docs/16-demo-runbook.md`
+
+### Changed
+
+- RBAC alias mapping now covers nested and relative workflow/monitoring routes.
+- CI policy remains manual-trigger only (`workflow_dispatch`).
+
+### Fixed
+
+- Corrected workflow nested route permission mapping coverage.
+
+## [0.0.6] - 2026-03-03
+
+### Added
+
+- CMDB lifecycle and multi-binding governance:
+  - migration: `202603030002_create_asset_bindings_and_lifecycle.sql`
+  - APIs: `GET/PUT /api/v1/cmdb/assets/{id}/bindings`, `POST /api/v1/cmdb/assets/{id}/lifecycle`
+- Discovery candidate decision hardening:
+  - migration: `202603030003_harden_discovery_candidate_review.sql`
+  - candidate review metadata and stricter pending-candidate identity guards
+- Async CMDB-to-monitoring provisioning baseline:
+  - migration: `202603030004_create_cmdb_monitoring_sync.sql`
+  - queue table: `cmdb_monitoring_sync_jobs`
+  - binding table: `cmdb_monitoring_bindings`
+  - APIs: `GET /api/v1/cmdb/assets/{id}/monitoring-binding`, `POST /api/v1/cmdb/assets/{id}/monitoring-sync`, `GET /api/v1/cmdb/monitoring-sync/jobs`
+- Infrastructure hierarchy + impact traversal baseline:
+  - migration: `202603030005_standardize_relation_types_and_hierarchy_indexes.sql`
+  - impact API: `GET /api/v1/cmdb/assets/{id}/impact`
+
+### Changed
+
+- Candidate approval now supports explicit strategy (`auto|create|merge`) and optional merge target.
+- Discovery dedup now refreshes existing pending candidates for matching identity signals.
+- Relation API canonicalizes aliases to standard relation types (`contains`, `depends_on`, `runs_service`, `owned_by`).
+- Web console includes readiness/binding operations for lifecycle transition gating.
+
+### Fixed
+
+- Prevented duplicate pending candidates across repeated discovery runs.
+- Prevented invalid hierarchy cycles and conflicting multi-parent `contains` structures.
 
 ## [0.0.5] - 2026-03-03
 
