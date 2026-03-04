@@ -8,6 +8,7 @@ mod monitoring;
 mod monitoring_sync_worker;
 mod state;
 mod streams;
+mod workflow;
 
 use std::net::SocketAddr;
 
@@ -135,12 +136,21 @@ fn build_router(state: AppState) -> Router {
         ));
     }
 
+    let mut workflow_routes = workflow::routes();
+    if state.rbac_enabled {
+        workflow_routes = workflow_routes.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::rbac_guard,
+        ));
+    }
+
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/v1/ping", get(ping_handler))
         .nest("/api/v1/auth", auth_api::routes())
         .nest("/api/v1/cmdb", cmdb_routes)
         .nest("/api/v1/monitoring", monitoring_routes)
+        .nest("/api/v1/workflow", workflow_routes)
         .nest("/api/v1/streams", stream_routes)
         .nest("/api/v1/iam", iam_routes)
         .nest("/api/v1/audit", audit_routes)

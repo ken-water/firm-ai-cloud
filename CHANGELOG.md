@@ -48,6 +48,33 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - stream envelope fields: `event_type`, `scope`, `timestamp`, `payload`
   - filter params: `site`, `department`, `severity`
   - baseline event types: `stream.connected`, `stream.heartbeat`, `stream.stale`, `stream.recovered`, `alert.test`, `alert.monitoring_sync`
+- Customer demo data toolkit:
+  - `scripts/demo-seed-data.sh` for one-command CMDB/monitoring/discovery/notification demo dataset generation
+  - `scripts/demo-health-check.sh` for manifest-based verification and report output
+  - `scripts/demo-cleanup-data.sh` for tagged demo rollback (supports `--dry-run`)
+  - runbook: `docs/16-demo-runbook.md`
+- CMDB asset statistics baseline:
+  - API: `GET /api/v1/cmdb/assets/stats`
+  - aggregation dimensions: `status`, `department`, `business_service`
+  - response includes `total_assets` and `unbound` counters for department/business-service bindings
+- Web-console asset statistics section:
+  - navigation entry: `Asset Statistics`
+  - bar-chart style views for status/department/business-service distributions
+  - one-click stats refresh and summary visibility for unbound assets
+- Monitoring metrics API baseline:
+  - endpoint: `GET /api/v1/monitoring/metrics`
+  - query args: `asset_id`, `window_minutes`
+  - pulls recent CPU/load/network in/network out/disk-used series from bound Zabbix host
+- Web-console monitoring metrics section:
+  - navigation entry: `Monitoring Metrics`
+  - per-asset charts for CPU/load/network/disk with selectable time window
+  - latest-value display and empty-series guidance for missing data windows
+- Web-console topology deep-drill section:
+  - navigation entry: `Topology`
+  - auto-rendered SVG topology from CMDB impact graph
+  - parallel-line rendering for multi-edge device relationships
+  - click-line edge inspector with source/target quick-focus actions
+  - configurable traversal scope (`direction`, `depth`, `relation_types`)
 
 ### Changed
 
@@ -79,6 +106,9 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - RBAC monitoring-read mapping now also covers `/api/v1/monitoring/overview` and `/api/v1/monitoring/layers/*`.
 - Monitoring bootstrap plan now includes completed I3 notes for web-console monitoring source UX.
 - RBAC monitoring-read mapping now also covers `/api/v1/streams/sse` for authenticated stream subscriptions.
+- Developer quickstart now includes demo toolkit commands and runbook reference.
+- Asset create/discovery/lifecycle operations in web-console now refresh asset statistics automatically to keep dashboard data aligned.
+- RBAC monitoring-read mapping now also covers `/api/v1/monitoring/metrics`.
 
 ### Fixed
 

@@ -1,6 +1,6 @@
 # CloudOps One Developer Quickstart
 
-Version: v1.1  
+Version: v1.2  
 Date: 2026-03-03
 
 ## 1. Repository Layout
@@ -151,6 +151,9 @@ CMDB asset APIs:
 # list assets
 curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/assets
 
+# aggregate asset statistics (status/department/business-service + unbound counters)
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/cmdb/assets/stats
+
 # create an asset
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/assets \
   -H "$AUTH_HEADER" \
@@ -218,7 +221,14 @@ curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/monitoring/overview?site=dc
 
 # monitoring layer detail list, supports pagination and same scope filters
 curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/monitoring/layers/hardware?site=dc-a&department=platform&limit=20&offset=0"
+
+# monitoring metric series for one asset (cpu/load/network/disk from zabbix)
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/monitoring/metrics?asset_id=1&window_minutes=60"
 ```
+
+Web-console topology deep drill is available at:
+
+- `http://127.0.0.1:5173/#section-topology`
 
 Monitoring overview/layer API conventions:
 
@@ -603,9 +613,32 @@ OIDC dev-flow smoke check (requires API running with `AUTH_OIDC_ENABLED=true` an
 bash scripts/test-oidc-dev.sh
 ```
 
-## 9. Troubleshooting
+## 9. Demo Toolkit
 
-### 8.1 Discovery job run fails
+Prepare demo data pack:
+
+```bash
+bash scripts/demo-seed-data.sh
+```
+
+Validate latest demo dataset:
+
+```bash
+bash scripts/demo-health-check.sh
+```
+
+Cleanup by tag (dry-run first):
+
+```bash
+bash scripts/demo-cleanup-data.sh --tag demo-20260303 --dry-run
+bash scripts/demo-cleanup-data.sh --tag demo-20260303
+```
+
+For full demo flow and screen-recording guidance, see `docs/16-demo-runbook.md`.
+
+## 10. Troubleshooting
+
+### 10.1 Discovery job run fails
 
 - Check `source_type` and `scope` format first.
 - For `zabbix_hosts`, confirm:
@@ -615,21 +648,21 @@ bash scripts/test-oidc-dev.sh
 - Query recent events:
   - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/events?limit=20"`
 
-### 8.2 Candidate approve fails
+### 10.2 Candidate approve fails
 
 - Common reason: candidate already reviewed (not `pending`).
 - Verify candidate state:
   - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates?limit=50"`
 - If merge/create conflicts happen, retry after checking duplicated assets (`hostname + ip`).
 
-### 8.3 Notification not delivered
+### 10.3 Notification not delivered
 
 - Verify channel/template/subscription all enabled.
 - Check delivery logs:
   - `curl "http://127.0.0.1:8080/api/v1/cmdb/discovery/notification-deliveries?limit=50"`
 - For webhook channels, inspect `status`, `attempts`, `response_code`, and `last_error`.
 
-## 10. Integration Smoke Test
+## 11. Integration Smoke Test
 
 Run end-to-end CMDB loop smoke test (relations + discovery + candidate review + notification dispatch):
 

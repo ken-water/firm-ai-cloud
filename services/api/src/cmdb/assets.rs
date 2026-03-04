@@ -25,6 +25,7 @@ use super::monitoring_sync::enqueue_monitoring_sync_job;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/assets", get(list_assets).post(create_asset))
+        .route("/assets/stats", get(get_asset_stats))
         .route("/assets/by-code/{code}", get(get_asset_by_code))
         .route("/assets/{asset_id}", get(get_asset).patch(update_asset))
 }
@@ -61,6 +62,13 @@ struct ScanModeQuery {
     mode: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct AssetStatsQuery {
+    site: Option<String>,
+    status: Option<String>,
+    class: Option<String>,
+}
+
 #[derive(Debug)]
 struct AssetFilters {
     limit: i64,
@@ -70,12 +78,62 @@ struct AssetFilters {
     keyword: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct AssetStatsFilters {
+    site: Option<String>,
+    status: Option<String>,
+    class: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct ListAssetsResponse {
     items: Vec<Asset>,
     total: i64,
     limit: u32,
     offset: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct AssetStatsScope {
+    site: Option<String>,
+    status: Option<String>,
+    asset_class: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AssetStatsResponse {
+    generated_at: DateTime<Utc>,
+    scope: AssetStatsScope,
+    total_assets: i64,
+    status_buckets: Vec<AssetStatsBucket>,
+    department_buckets: Vec<AssetStatsBucket>,
+    business_service_buckets: Vec<AssetStatsBucket>,
+    unbound: AssetStatsUnboundSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct AssetStatsBucket {
+    key: String,
+    label: String,
+    asset_total: i64,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct AssetStatsUnboundSummary {
+    department_assets: i64,
+    business_service_assets: i64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct AssetStatsBucketRow {
+    bucket: String,
+    asset_total: i64,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct AssetStatsUnboundRow {
+    department_assets: i64,
+    business_service_assets: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -254,6 +312,139 @@ async fn create_asset(
     }
 
     Ok(Json(asset))
+}
+
+async fn get_asset_stats(
+    State(state): State<AppState>,
+    Query(query): Query<AssetStatsQuery>,
+) -> AppResult<Json<AssetStatsResponse>> {
+    let filters = parse_asset_stats_filters(query)?;
+
+    let mut total_builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT COUNT(*) FROM assets a WHERE 1=1");
+    append_asset_scope_filters(&mut total_builder, &filters, "a");
+    let total_assets: i64 = total_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    let mut status_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT a.status AS bucket, COUNT(*)::BIGINT AS asset_total
+         FROM assets a
+         WHERE 1=1",
+    );
+    append_asset_scope_filters(&mut status_builder, &filters, "a");
+    status_builder.push(
+        " GROUP BY a.status
+          ORDER BY COUNT(*) DESC, a.status ASC",
+    );
+    let status_rows: Vec<AssetStatsBucketRow> =
+        status_builder.build_query_as().fetch_all(&state.db).await?;
+
+    let mut department_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "WITH scoped_assets AS (
+             SELECT a.id, a.department
+             FROM assets a
+             WHERE 1=1",
+    );
+    append_asset_scope_filters(&mut department_builder, &filters, "a");
+    department_builder.push(
+        "
+         ),
+         normalized_department AS (
+             SELECT b.asset_id, b.department
+             FROM asset_department_bindings b
+             INNER JOIN scoped_assets a ON a.id = b.asset_id
+             UNION ALL
+             SELECT a.id AS asset_id, a.department
+             FROM scoped_assets a
+             WHERE NOT EXISTS (
+                 SELECT 1
+                 FROM asset_department_bindings b
+                 WHERE b.asset_id = a.id
+             )
+             AND NULLIF(BTRIM(a.department), '') IS NOT NULL
+         )
+         SELECT department AS bucket, COUNT(*)::BIGINT AS asset_total
+         FROM normalized_department
+         GROUP BY department
+         ORDER BY COUNT(*) DESC, department ASC",
+    );
+    let department_rows: Vec<AssetStatsBucketRow> = department_builder
+        .build_query_as()
+        .fetch_all(&state.db)
+        .await?;
+
+    let mut business_service_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "WITH scoped_assets AS (
+             SELECT a.id
+             FROM assets a
+             WHERE 1=1",
+    );
+    append_asset_scope_filters(&mut business_service_builder, &filters, "a");
+    business_service_builder.push(
+        "
+         )
+         SELECT b.business_service AS bucket, COUNT(*)::BIGINT AS asset_total
+         FROM asset_business_service_bindings b
+         INNER JOIN scoped_assets a ON a.id = b.asset_id
+         GROUP BY b.business_service
+         ORDER BY COUNT(*) DESC, b.business_service ASC",
+    );
+    let business_service_rows: Vec<AssetStatsBucketRow> = business_service_builder
+        .build_query_as()
+        .fetch_all(&state.db)
+        .await?;
+
+    let mut unbound_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "WITH scoped_assets AS (
+             SELECT a.id, a.department
+             FROM assets a
+             WHERE 1=1",
+    );
+    append_asset_scope_filters(&mut unbound_builder, &filters, "a");
+    unbound_builder.push(
+        "
+         )
+         SELECT
+             COUNT(*) FILTER (
+                 WHERE NOT EXISTS (
+                     SELECT 1
+                     FROM asset_department_bindings d
+                     WHERE d.asset_id = a.id
+                 )
+                 AND NULLIF(BTRIM(a.department), '') IS NULL
+             )::BIGINT AS department_assets,
+             COUNT(*) FILTER (
+                 WHERE NOT EXISTS (
+                     SELECT 1
+                     FROM asset_business_service_bindings b
+                     WHERE b.asset_id = a.id
+                 )
+             )::BIGINT AS business_service_assets
+         FROM scoped_assets a",
+    );
+    let unbound: AssetStatsUnboundRow = unbound_builder
+        .build_query_as()
+        .fetch_one(&state.db)
+        .await?;
+
+    Ok(Json(AssetStatsResponse {
+        generated_at: Utc::now(),
+        scope: AssetStatsScope {
+            site: filters.site.clone(),
+            status: filters.status.clone(),
+            asset_class: filters.class.clone(),
+        },
+        total_assets,
+        status_buckets: map_stats_buckets(status_rows),
+        department_buckets: map_stats_buckets(department_rows),
+        business_service_buckets: map_stats_buckets(business_service_rows),
+        unbound: AssetStatsUnboundSummary {
+            department_assets: unbound.department_assets,
+            business_service_assets: unbound.business_service_assets,
+        },
+    }))
 }
 
 async fn get_asset(
@@ -473,6 +664,18 @@ fn parse_filters(query: ListAssetsQuery) -> AssetFilters {
     }
 }
 
+fn parse_asset_stats_filters(query: AssetStatsQuery) -> AppResult<AssetStatsFilters> {
+    let site = normalize_stats_filter(query.site, "site", 128)?;
+    let status = normalize_stats_filter(query.status, "status", 32)?;
+    let class = normalize_stats_filter(query.class, "class", 64)?;
+
+    Ok(AssetStatsFilters {
+        site,
+        status,
+        class,
+    })
+}
+
 fn append_asset_filters(builder: &mut QueryBuilder<Postgres>, filters: &AssetFilters) {
     if let Some(status) = &filters.status {
         builder.push(" AND status = ").push_bind(status.clone());
@@ -499,6 +702,63 @@ fn append_asset_filters(builder: &mut QueryBuilder<Postgres>, filters: &AssetFil
             .push_bind(like)
             .push(")");
     }
+}
+
+fn append_asset_scope_filters(
+    builder: &mut QueryBuilder<Postgres>,
+    filters: &AssetStatsFilters,
+    alias: &str,
+) {
+    if let Some(site) = &filters.site {
+        builder
+            .push(format!(" AND {alias}.site = "))
+            .push_bind(site.clone());
+    }
+
+    if let Some(status) = &filters.status {
+        builder
+            .push(format!(" AND {alias}.status = "))
+            .push_bind(status.clone());
+    }
+
+    if let Some(asset_class) = &filters.class {
+        builder
+            .push(format!(" AND {alias}.asset_class = "))
+            .push_bind(asset_class.clone());
+    }
+}
+
+fn map_stats_buckets(rows: Vec<AssetStatsBucketRow>) -> Vec<AssetStatsBucket> {
+    rows.into_iter()
+        .map(|row| AssetStatsBucket {
+            key: row.bucket.to_ascii_lowercase(),
+            label: row.bucket,
+            asset_total: row.asset_total,
+        })
+        .collect()
+}
+
+fn normalize_stats_filter(
+    value: Option<String>,
+    field: &str,
+    max_length: usize,
+) -> AppResult<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    if trimmed.len() > max_length {
+        return Err(AppError::Validation(format!(
+            "{field} exceeds max length {max_length}"
+        )));
+    }
+
+    Ok(Some(trimmed.to_string()))
 }
 
 fn parse_scan_mode(mode: Option<String>) -> AppResult<ScanMode> {

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 export type NavigationItem = {
   href: string;
   label: string;
+  active?: boolean;
 };
 
 type AuthGateProps = {
@@ -75,7 +76,12 @@ export function AppShell(props: AppShellProps) {
         </div>
         <nav className="sidebar-nav">
           {navigationItems.map((item) => (
-            <a key={item.href} href={item.href}>
+            <a
+              key={item.href}
+              href={item.href}
+              className={item.active ? "is-active" : undefined}
+              aria-current={item.active ? "page" : undefined}
+            >
               {item.label}
             </a>
           ))}

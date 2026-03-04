@@ -1,13 +1,17 @@
-use std::time::Duration;
+use std::{env, time::Duration};
 
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{
+        HeaderMap,
+        header::{AUTHORIZATION, HeaderValue},
+    },
     routing::get,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
 use sqlx::{Postgres, QueryBuilder};
 
 use crate::{
@@ -20,6 +24,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/overview", get(get_monitoring_overview))
         .route("/layers/{layer}", get(get_monitoring_layer))
+        .route("/metrics", get(get_monitoring_metrics))
         .route(
             "/sources",
             get(list_monitoring_sources).post(create_monitoring_source),
@@ -94,6 +99,12 @@ struct MonitoringLayerQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct MonitoringMetricsQuery {
+    asset_id: Option<i64>,
+    window_minutes: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 struct MonitoringScope {
     site: Option<String>,
@@ -162,6 +173,42 @@ struct MonitoringLayerResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct MonitoringMetricsResponse {
+    generated_at: DateTime<Utc>,
+    asset_id: i64,
+    asset_name: String,
+    host_id: String,
+    window_minutes: u32,
+    source: MonitoringMetricsSource,
+    series: Vec<MonitoringMetricSeries>,
+}
+
+#[derive(Debug, Serialize)]
+struct MonitoringMetricsSource {
+    id: i64,
+    name: String,
+    endpoint: String,
+    auth_type: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MonitoringMetricSeries {
+    metric: String,
+    label: String,
+    unit: String,
+    item_key: Option<String>,
+    note: Option<String>,
+    latest: Option<MonitoringMetricPoint>,
+    points: Vec<MonitoringMetricPoint>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct MonitoringMetricPoint {
+    timestamp: DateTime<Utc>,
+    value: f64,
+}
+
+#[derive(Debug, Serialize)]
 struct MonitoringLayerSummary {
     asset_total: i64,
     monitored_asset_total: i64,
@@ -205,6 +252,12 @@ struct MonitoringOverviewAssetRow {
 }
 
 #[derive(Debug, sqlx::FromRow)]
+struct MonitoringLayerSummaryRow {
+    monitoring_status: Option<String>,
+    latest_job_status: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
 struct MonitoringLayerItemRow {
     asset_id: i64,
     asset_class: String,
@@ -220,6 +273,43 @@ struct MonitoringLayerItemRow {
     latest_job_max_attempts: Option<i32>,
     latest_job_requested_at: Option<DateTime<Utc>>,
     latest_job_last_error: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct MonitoringMetricsAssetContextRow {
+    asset_id: i64,
+    asset_name: String,
+    hostname: Option<String>,
+    site: Option<String>,
+    department: Option<String>,
+    source_id: Option<i64>,
+    external_host_id: Option<String>,
+}
+
+#[derive(Debug)]
+struct ZabbixSession {
+    client: reqwest::Client,
+    endpoint: String,
+    auth_token: Option<String>,
+    bearer_token: Option<String>,
+}
+
+#[derive(Debug)]
+struct ZabbixMetricItem {
+    item_id: String,
+    key: String,
+    value_type: i32,
+    units: Option<String>,
+    last_value: Option<String>,
+    last_clock: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MetricSpec {
+    metric: &'static str,
+    label: &'static str,
+    default_unit: &'static str,
+    key_patterns: &'static [&'static str],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -251,6 +341,43 @@ const MONITORING_LAYER_CASE_SQL: &str = "CASE
     WHEN LOWER(a.asset_class) IN ('business_service', 'team', 'business_process', 'application_service') THEN 'business'
     ELSE 'service'
 END";
+
+const MONITORING_METRIC_SPECS: [MetricSpec; 5] = [
+    MetricSpec {
+        metric: "cpu",
+        label: "CPU Usage",
+        default_unit: "%",
+        key_patterns: &["system.cpu.util", "system.cpu.util["],
+    },
+    MetricSpec {
+        metric: "load",
+        label: "Load Average",
+        default_unit: "",
+        key_patterns: &["system.cpu.load[all,avg1]", "system.cpu.load["],
+    },
+    MetricSpec {
+        metric: "network_in",
+        label: "Network In",
+        default_unit: "bps",
+        key_patterns: &["net.if.in[", "net.if.in"],
+    },
+    MetricSpec {
+        metric: "network_out",
+        label: "Network Out",
+        default_unit: "bps",
+        key_patterns: &["net.if.out[", "net.if.out"],
+    },
+    MetricSpec {
+        metric: "disk_used",
+        label: "Disk Used",
+        default_unit: "%",
+        key_patterns: &[
+            "vfs.fs.size[/,pused]",
+            "vfs.fs.size[/,used]",
+            "vfs.fs.size[",
+        ],
+    },
+];
 
 async fn get_monitoring_overview(
     State(state): State<AppState>,
@@ -389,6 +516,100 @@ async fn get_monitoring_layer(
     }))
 }
 
+async fn get_monitoring_metrics(
+    State(state): State<AppState>,
+    Query(query): Query<MonitoringMetricsQuery>,
+) -> AppResult<Json<MonitoringMetricsResponse>> {
+    let (asset_id, window_minutes) = parse_monitoring_metrics_query(query)?;
+    let context = load_monitoring_metrics_asset_context(&state.db, asset_id).await?;
+    let source = resolve_monitoring_source_for_asset(
+        &state.db,
+        context.source_id,
+        context.site.as_deref(),
+        context.department.as_deref(),
+    )
+    .await?;
+
+    let session = create_zabbix_session(&source).await?;
+    let host_id = resolve_metric_host_id(&session, &context).await?;
+
+    let now = Utc::now();
+    let time_till = now.timestamp();
+    let time_from = now
+        .checked_sub_signed(chrono::Duration::minutes(window_minutes as i64))
+        .map(|value| value.timestamp())
+        .unwrap_or(time_till.saturating_sub((window_minutes as i64) * 60));
+
+    let mut series = Vec::new();
+    for spec in MONITORING_METRIC_SPECS {
+        let item = lookup_metric_item(&session, host_id.as_str(), spec.key_patterns).await?;
+        let mut chart = MonitoringMetricSeries {
+            metric: spec.metric.to_string(),
+            label: spec.label.to_string(),
+            unit: spec.default_unit.to_string(),
+            item_key: None,
+            note: None,
+            latest: None,
+            points: Vec::new(),
+        };
+
+        let Some(item) = item else {
+            chart.note = Some("no matching Zabbix item found".to_string());
+            series.push(chart);
+            continue;
+        };
+
+        chart.item_key = Some(item.key.clone());
+        if let Some(units) = item
+            .units
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            chart.unit = units.to_string();
+        }
+
+        let points = fetch_metric_history(
+            &session,
+            item.item_id.as_str(),
+            item.value_type,
+            time_from,
+            time_till,
+            720,
+        )
+        .await?;
+
+        let latest = if let Some(last) = points.last() {
+            Some(last.clone())
+        } else {
+            parse_metric_latest(item.last_clock, item.last_value.as_deref())
+        };
+
+        if points.is_empty() {
+            chart.note = Some("item found but no history points in selected window".to_string());
+        }
+
+        chart.latest = latest;
+        chart.points = points;
+        series.push(chart);
+    }
+
+    Ok(Json(MonitoringMetricsResponse {
+        generated_at: now,
+        asset_id: context.asset_id,
+        asset_name: context.asset_name,
+        host_id,
+        window_minutes,
+        source: MonitoringMetricsSource {
+            id: source.id,
+            name: source.name,
+            endpoint: source.endpoint,
+            auth_type: source.auth_type,
+        },
+        series,
+    }))
+}
+
 fn to_layer_overview(
     layer: MonitoringLayer,
     stats: MonitoringLayerStats,
@@ -501,7 +722,7 @@ async fn summarize_layer_assets(
     append_asset_scope_filters(&mut qb, site, department);
     append_layer_filter(&mut qb, layer);
 
-    let rows: Vec<MonitoringOverviewAssetRow> = qb
+    let rows: Vec<MonitoringLayerSummaryRow> = qb
         .build_query_as()
         .fetch_all(db)
         .await
@@ -569,6 +790,111 @@ async fn fetch_layer_items(
         .fetch_all(db)
         .await
         .map_err(AppError::from)
+}
+
+fn parse_monitoring_metrics_query(query: MonitoringMetricsQuery) -> AppResult<(i64, u32)> {
+    let asset_id = query
+        .asset_id
+        .ok_or_else(|| AppError::Validation("asset_id is required".to_string()))?;
+    if asset_id <= 0 {
+        return Err(AppError::Validation(
+            "asset_id must be a positive integer".to_string(),
+        ));
+    }
+
+    let window_minutes = query.window_minutes.unwrap_or(60).clamp(5, 1440);
+    Ok((asset_id, window_minutes))
+}
+
+async fn load_monitoring_metrics_asset_context(
+    db: &sqlx::PgPool,
+    asset_id: i64,
+) -> AppResult<MonitoringMetricsAssetContextRow> {
+    let item: Option<MonitoringMetricsAssetContextRow> = sqlx::query_as(
+        "SELECT
+            a.id AS asset_id,
+            a.name AS asset_name,
+            a.hostname,
+            a.site,
+            a.department,
+            b.source_id,
+            b.external_host_id
+         FROM assets a
+         LEFT JOIN cmdb_monitoring_bindings b ON b.asset_id = a.id
+         WHERE a.id = $1",
+    )
+    .bind(asset_id)
+    .fetch_optional(db)
+    .await?;
+
+    item.ok_or_else(|| AppError::NotFound(format!("asset {asset_id} not found")))
+}
+
+async fn resolve_monitoring_source_for_asset(
+    db: &sqlx::PgPool,
+    source_id: Option<i64>,
+    site: Option<&str>,
+    department: Option<&str>,
+) -> AppResult<MonitoringSource> {
+    if let Some(source_id) = source_id {
+        let source = get_monitoring_source(db, source_id).await?;
+        if !source.is_enabled {
+            return Err(AppError::Validation(format!(
+                "monitoring source {} is disabled",
+                source.id
+            )));
+        }
+        return Ok(source);
+    }
+
+    let fallback: Option<MonitoringSource> = sqlx::query_as(
+        "SELECT
+            id,
+            name,
+            source_type,
+            endpoint,
+            proxy_endpoint,
+            auth_type,
+            username,
+            secret_ref,
+            site,
+            department,
+            is_enabled,
+            last_probe_at,
+            last_probe_status,
+            last_probe_message,
+            created_at,
+            updated_at
+         FROM monitoring_sources
+         WHERE is_enabled = TRUE
+           AND ($1::TEXT IS NULL OR site = $1 OR site IS NULL)
+           AND ($2::TEXT IS NULL OR department = $2 OR department IS NULL)
+         ORDER BY
+           CASE
+             WHEN $1::TEXT IS NULL THEN CASE WHEN site IS NULL THEN 0 ELSE 1 END
+             WHEN site = $1 THEN 0
+             WHEN site IS NULL THEN 1
+             ELSE 2
+           END,
+           CASE
+             WHEN $2::TEXT IS NULL THEN CASE WHEN department IS NULL THEN 0 ELSE 1 END
+             WHEN department = $2 THEN 0
+             WHEN department IS NULL THEN 1
+             ELSE 2
+           END,
+           id ASC
+         LIMIT 1",
+    )
+    .bind(site)
+    .bind(department)
+    .fetch_optional(db)
+    .await?;
+
+    fallback.ok_or_else(|| {
+        AppError::Validation(
+            "no enabled monitoring source available for current asset scope".to_string(),
+        )
+    })
 }
 
 fn append_source_scope_filters<'a>(
@@ -931,6 +1257,434 @@ async fn probe_endpoint(endpoint: &str) -> ProbeResult {
             status_code: None,
             message: format!("probe request failed: {err}"),
         },
+    }
+}
+
+async fn create_zabbix_session(source: &MonitoringSource) -> AppResult<ZabbixSession> {
+    let endpoint = normalize_zabbix_rpc_endpoint(source.endpoint.as_str())?;
+    let client = reqwest::Client::new();
+    let secret = resolve_secret_ref(source.secret_ref.as_str())?;
+
+    match source.auth_type.as_str() {
+        "token" => Ok(ZabbixSession {
+            client,
+            endpoint,
+            auth_token: None,
+            bearer_token: Some(secret),
+        }),
+        "basic" => {
+            let username = source.username.as_deref().ok_or_else(|| {
+                AppError::Validation("monitoring source basic auth missing username".to_string())
+            })?;
+            let result = rpc_call_zabbix_raw(
+                &client,
+                endpoint.as_str(),
+                None,
+                None,
+                "user.login",
+                json!({
+                    "username": username,
+                    "password": secret
+                }),
+            )
+            .await?;
+            let auth_token = result.as_str().map(ToString::to_string).ok_or_else(|| {
+                AppError::Validation("zabbix user.login returned non-string token".to_string())
+            })?;
+
+            Ok(ZabbixSession {
+                client,
+                endpoint,
+                auth_token: Some(auth_token),
+                bearer_token: None,
+            })
+        }
+        other => Err(AppError::Validation(format!(
+            "unsupported monitoring auth_type '{}'",
+            other
+        ))),
+    }
+}
+
+async fn resolve_metric_host_id(
+    session: &ZabbixSession,
+    context: &MonitoringMetricsAssetContextRow,
+) -> AppResult<String> {
+    if let Some(host_id) = context
+        .external_host_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let exists = lookup_host_by_id(session, host_id).await?;
+        if exists {
+            return Ok(host_id.to_string());
+        }
+    }
+
+    let host_key_candidates = {
+        let mut values = Vec::new();
+        if let Some(hostname) = context
+            .hostname
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            values.push(sanitize_host_key(hostname));
+        }
+        values.push(format!("asset-{}", context.asset_id));
+        values
+    };
+
+    for host_key in host_key_candidates {
+        if let Some(host_id) = lookup_host_by_key(session, host_key.as_str()).await? {
+            return Ok(host_id);
+        }
+    }
+
+    Err(AppError::Validation(format!(
+        "no zabbix host found for asset {} (id={})",
+        context.asset_name, context.asset_id
+    )))
+}
+
+async fn lookup_host_by_key(session: &ZabbixSession, host_key: &str) -> AppResult<Option<String>> {
+    let result = rpc_call_zabbix(
+        session,
+        "host.get",
+        json!({
+            "output": ["hostid", "host"],
+            "filter": { "host": [host_key] }
+        }),
+    )
+    .await?;
+
+    let host_id = result
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("hostid"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    Ok(host_id)
+}
+
+async fn lookup_host_by_id(session: &ZabbixSession, host_id: &str) -> AppResult<bool> {
+    let result = rpc_call_zabbix(
+        session,
+        "host.get",
+        json!({
+            "output": ["hostid"],
+            "hostids": [host_id]
+        }),
+    )
+    .await?;
+
+    Ok(result
+        .as_array()
+        .map(|items| !items.is_empty())
+        .unwrap_or(false))
+}
+
+async fn lookup_metric_item(
+    session: &ZabbixSession,
+    host_id: &str,
+    patterns: &[&str],
+) -> AppResult<Option<ZabbixMetricItem>> {
+    for pattern in patterns {
+        let result = rpc_call_zabbix(
+            session,
+            "item.get",
+            json!({
+                "output": ["itemid", "name", "key_", "value_type", "units", "lastvalue", "lastclock"],
+                "hostids": [host_id],
+                "search": {
+                    "key_": pattern
+                },
+                "searchWildcardsEnabled": true,
+                "sortfield": "name",
+                "sortorder": "ASC",
+                "limit": 20
+            }),
+        )
+        .await?;
+
+        let Some(items) = result.as_array() else {
+            continue;
+        };
+
+        for item in items {
+            let Some(item_id) = item.get("itemid").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(key) = item.get("key_").and_then(Value::as_str) else {
+                continue;
+            };
+
+            let value_type = item
+                .get("value_type")
+                .and_then(Value::as_str)
+                .and_then(|value| value.parse::<i32>().ok())
+                .or_else(|| {
+                    item.get("value_type")
+                        .and_then(Value::as_i64)
+                        .map(|v| v as i32)
+                })
+                .unwrap_or(0);
+
+            if value_type != 0 && value_type != 3 {
+                continue;
+            }
+
+            return Ok(Some(ZabbixMetricItem {
+                item_id: item_id.to_string(),
+                key: key.to_string(),
+                value_type,
+                units: item
+                    .get("units")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                last_value: item
+                    .get("lastvalue")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                last_clock: item
+                    .get("lastclock")
+                    .and_then(Value::as_str)
+                    .and_then(|value| value.parse::<i64>().ok()),
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn fetch_metric_history(
+    session: &ZabbixSession,
+    item_id: &str,
+    value_type: i32,
+    time_from: i64,
+    time_till: i64,
+    limit: usize,
+) -> AppResult<Vec<MonitoringMetricPoint>> {
+    let history_type = match value_type {
+        0 => 0,
+        3 => 3,
+        _ => {
+            return Ok(Vec::new());
+        }
+    };
+
+    let result = rpc_call_zabbix(
+        session,
+        "history.get",
+        json!({
+            "output": ["clock", "value"],
+            "history": history_type,
+            "itemids": [item_id],
+            "sortfield": "clock",
+            "sortorder": "ASC",
+            "time_from": time_from,
+            "time_till": time_till,
+            "limit": limit
+        }),
+    )
+    .await?;
+
+    let mut points = Vec::new();
+    let Some(items) = result.as_array() else {
+        return Ok(points);
+    };
+
+    for item in items {
+        let Some(clock) = item
+            .get("clock")
+            .and_then(Value::as_str)
+            .and_then(|value| value.parse::<i64>().ok())
+        else {
+            continue;
+        };
+        let Some(value) = item
+            .get("value")
+            .and_then(Value::as_str)
+            .and_then(|value| value.parse::<f64>().ok())
+        else {
+            continue;
+        };
+        let Some(timestamp) = DateTime::<Utc>::from_timestamp(clock, 0) else {
+            continue;
+        };
+        points.push(MonitoringMetricPoint { timestamp, value });
+    }
+
+    Ok(points)
+}
+
+fn parse_metric_latest(clock: Option<i64>, value: Option<&str>) -> Option<MonitoringMetricPoint> {
+    let clock = clock?;
+    if clock <= 0 {
+        return None;
+    }
+    let value = value?.trim().parse::<f64>().ok()?;
+    let timestamp = DateTime::<Utc>::from_timestamp(clock, 0)?;
+    Some(MonitoringMetricPoint { timestamp, value })
+}
+
+async fn rpc_call_zabbix(session: &ZabbixSession, method: &str, params: Value) -> AppResult<Value> {
+    rpc_call_zabbix_raw(
+        &session.client,
+        session.endpoint.as_str(),
+        session.auth_token.as_deref(),
+        session.bearer_token.as_deref(),
+        method,
+        params,
+    )
+    .await
+}
+
+async fn rpc_call_zabbix_raw(
+    client: &reqwest::Client,
+    endpoint: &str,
+    auth_token: Option<&str>,
+    bearer_token: Option<&str>,
+    method: &str,
+    params: Value,
+) -> AppResult<Value> {
+    let mut body = Map::new();
+    body.insert("jsonrpc".to_string(), Value::String("2.0".to_string()));
+    body.insert("method".to_string(), Value::String(method.to_string()));
+    body.insert("params".to_string(), params);
+    body.insert("id".to_string(), Value::Number(1.into()));
+    if let Some(auth_token) = auth_token {
+        body.insert("auth".to_string(), Value::String(auth_token.to_string()));
+    }
+
+    let mut headers = HeaderMap::new();
+    if let Some(bearer) = bearer_token {
+        let value = format!("Bearer {bearer}");
+        let header = HeaderValue::from_str(value.as_str())
+            .map_err(|_| AppError::Validation("invalid bearer token header value".to_string()))?;
+        headers.insert(AUTHORIZATION, header);
+    }
+
+    let response = client
+        .post(endpoint)
+        .headers(headers)
+        .json(&Value::Object(body))
+        .send()
+        .await
+        .map_err(|err| AppError::Validation(format!("zabbix request failed: {err}")))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AppError::Validation(format!(
+            "zabbix returned HTTP {}: {}",
+            status,
+            truncate_message(body.as_str())
+        )));
+    }
+
+    let payload: Value = response
+        .json()
+        .await
+        .map_err(|err| AppError::Validation(format!("zabbix response decode failed: {err}")))?;
+    if let Some(error) = payload.get("error") {
+        return Err(AppError::Validation(format!(
+            "zabbix api error: {}",
+            truncate_message(error.to_string().as_str())
+        )));
+    }
+
+    payload
+        .get("result")
+        .cloned()
+        .ok_or_else(|| AppError::Validation("zabbix response missing result field".to_string()))
+}
+
+fn normalize_zabbix_rpc_endpoint(value: &str) -> AppResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(
+            "monitoring source endpoint is empty".to_string(),
+        ));
+    }
+
+    let mut endpoint = reqwest::Url::parse(trimmed).map_err(|_| {
+        AppError::Validation("monitoring source endpoint must be a valid URL".to_string())
+    })?;
+    if endpoint.path() == "/" || endpoint.path().is_empty() {
+        endpoint.set_path("/api_jsonrpc.php");
+    }
+    Ok(endpoint.to_string())
+}
+
+fn resolve_secret_ref(secret_ref: &str) -> AppResult<String> {
+    let secret_ref = secret_ref.trim();
+    if let Some(key) = secret_ref.strip_prefix("env:") {
+        let key = key.trim();
+        if key.is_empty() {
+            return Err(AppError::Validation(
+                "secret_ref env key is empty".to_string(),
+            ));
+        }
+        let value = env::var(key).map_err(|_| {
+            AppError::Validation(format!("secret_ref env key '{}' is not set", key))
+        })?;
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(AppError::Validation(format!(
+                "secret_ref env key '{}' resolved to empty value",
+                key
+            )));
+        }
+        return Ok(value.to_string());
+    }
+
+    if let Some(value) = secret_ref.strip_prefix("plain:") {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(AppError::Validation(
+                "secret_ref plain value is empty".to_string(),
+            ));
+        }
+        return Ok(value.to_string());
+    }
+
+    if secret_ref.is_empty() {
+        return Err(AppError::Validation("secret_ref is empty".to_string()));
+    }
+    Ok(secret_ref.to_string())
+}
+
+fn sanitize_host_key(value: &str) -> String {
+    let mut key = value.trim().to_ascii_lowercase();
+    if key.is_empty() {
+        return "asset-unknown".to_string();
+    }
+
+    key = key
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    while key.contains("--") {
+        key = key.replace("--", "-");
+    }
+    key.trim_matches('-').to_string()
+}
+
+fn truncate_message(message: &str) -> String {
+    const MAX: usize = 1024;
+    if message.len() <= MAX {
+        message.to_string()
+    } else {
+        format!("{}...", &message[..MAX])
     }
 }
 

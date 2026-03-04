@@ -164,6 +164,12 @@ a {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.sidebar-nav a.is-active {
+  border-color: rgba(125, 211, 252, 0.55);
+  background: rgba(56, 189, 248, 0.2);
+  color: #f0f9ff;
+}
+
 .app-main {
   padding: var(--space-4) var(--space-4) var(--space-5);
   overflow-x: hidden;

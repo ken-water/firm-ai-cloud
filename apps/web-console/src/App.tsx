@@ -27,6 +27,33 @@ type AssetListResponse = {
   offset: number;
 };
 
+type AssetStatsBucket = {
+  key: string;
+  label: string;
+  asset_total: number;
+};
+
+type AssetStatsUnbound = {
+  department_assets: number;
+  business_service_assets: number;
+};
+
+type AssetStatsScope = {
+  site: string | null;
+  status: string | null;
+  asset_class: string | null;
+};
+
+type AssetStatsResponse = {
+  generated_at: string;
+  scope: AssetStatsScope;
+  total_assets: number;
+  status_buckets: AssetStatsBucket[];
+  department_buckets: AssetStatsBucket[];
+  business_service_buckets: AssetStatsBucket[];
+  unbound: AssetStatsUnbound;
+};
+
 type FieldDefinition = {
   id: number;
   field_key: string;
@@ -225,6 +252,138 @@ type MonitoringSource = {
   updated_at: string;
 };
 
+type MonitoringOverviewSummary = {
+  source_total: number;
+  source_enabled_total: number;
+  source_reachable_total: number;
+  source_unreachable_total: number;
+  source_unknown_probe_total: number;
+  asset_total: number;
+  monitored_asset_total: number;
+};
+
+type MonitoringOverviewHealthSummary = {
+  healthy: number;
+  warning: number;
+  critical: number;
+  unknown: number;
+};
+
+type MonitoringOverviewLayer = {
+  layer: string;
+  asset_total: number;
+  monitored_asset_total: number;
+  health: MonitoringOverviewHealthSummary;
+};
+
+type MonitoringOverviewResponse = {
+  generated_at: string;
+  scope: {
+    site: string | null;
+    department: string | null;
+  };
+  summary: MonitoringOverviewSummary;
+  layers: MonitoringOverviewLayer[];
+  empty: boolean;
+};
+
+type MonitoringMetricPoint = {
+  timestamp: string;
+  value: number;
+};
+
+type MonitoringMetricSeries = {
+  metric: string;
+  label: string;
+  unit: string;
+  item_key: string | null;
+  note: string | null;
+  latest: MonitoringMetricPoint | null;
+  points: MonitoringMetricPoint[];
+};
+
+type MonitoringMetricsSource = {
+  id: number;
+  name: string;
+  endpoint: string;
+  auth_type: string;
+};
+
+type MonitoringMetricsResponse = {
+  generated_at: string;
+  asset_id: number;
+  asset_name: string;
+  host_id: string;
+  window_minutes: number;
+  source: MonitoringMetricsSource;
+  series: MonitoringMetricSeries[];
+};
+
+type WorkflowStepKind = "approval" | "script" | "manual";
+
+type WorkflowStepDefinition = {
+  id: string;
+  name: string;
+  kind: WorkflowStepKind;
+  auto_run: boolean;
+  script: string | null;
+  timeout_seconds: number;
+  approver_group: string | null;
+};
+
+type WorkflowDefinition = {
+  steps: WorkflowStepDefinition[];
+};
+
+type WorkflowTemplate = {
+  id: number;
+  name: string;
+  description: string | null;
+  definition: WorkflowDefinition;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type WorkflowRequest = {
+  id: number;
+  template_id: number;
+  template_name: string;
+  title: string;
+  requester: string;
+  status: string;
+  current_step_index: number;
+  payload: Record<string, unknown>;
+  last_error: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  executed_by: string | null;
+  executed_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type WorkflowExecutionLog = {
+  id: number;
+  request_id: number;
+  step_index: number;
+  step_id: string;
+  step_name: string;
+  step_kind: string;
+  status: string;
+  executor: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  exit_code: number | null;
+  output: string | null;
+  error: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
 type NewFieldForm = {
   field_key: string;
   name: string;
@@ -280,6 +439,46 @@ type MonitoringSourceFilterForm = {
   department: string;
   is_enabled: "all" | "true" | "false";
 };
+
+type NewWorkflowTemplateStepForm = {
+  id: string;
+  name: string;
+  kind: WorkflowStepKind;
+  auto_run: boolean;
+  script: string;
+  timeout_seconds: string;
+  approver_group: string;
+};
+
+type NewWorkflowRequestForm = {
+  template_id: string;
+  title: string;
+  payload_json: string;
+};
+
+type WorkflowDailyTrendPoint = {
+  day_key: string;
+  day_label: string;
+  total: number;
+  completed: number;
+  failed: number;
+  active: number;
+};
+
+type WorkflowTrendRankRow = {
+  key: string;
+  label: string;
+  week_current: number;
+  week_previous: number;
+  week_delta: number;
+  month_current: number;
+  month_previous: number;
+  month_delta: number;
+};
+
+type MenuAxis = "function" | "department" | "business" | "screen";
+type FunctionWorkspace = "full" | "cmdb" | "monitoring" | "workflow";
+type ConsolePage = "overview" | "cmdb" | "monitoring" | "workflow" | "admin";
 
 type AssetSortMode = "updated_desc" | "name_asc" | "id_asc";
 type LifecycleStatus = "idle" | "onboarding" | "operational" | "maintenance" | "retired";
@@ -379,6 +578,22 @@ const defaultMonitoringSourceFilters: MonitoringSourceFilterForm = {
   is_enabled: "all"
 };
 
+const defaultWorkflowStepForm: NewWorkflowTemplateStepForm = {
+  id: "",
+  name: "",
+  kind: "script",
+  auto_run: true,
+  script: "echo 'workflow step executed'",
+  timeout_seconds: "300",
+  approver_group: ""
+};
+
+const defaultWorkflowRequestForm: NewWorkflowRequestForm = {
+  template_id: "",
+  title: "",
+  payload_json: "{}"
+};
+
 const lifecycleStatuses: LifecycleStatus[] = [
   "idle",
   "onboarding",
@@ -386,6 +601,50 @@ const lifecycleStatuses: LifecycleStatus[] = [
   "maintenance",
   "retired"
 ];
+
+const defaultImpactRelationTypes = ["contains", "depends_on", "runs_service", "owned_by"];
+const defaultConsolePage: ConsolePage = "overview";
+
+const consolePageSections: Record<ConsolePage, string[]> = {
+  overview: ["section-cockpit", "section-monitoring-metrics", "section-topology", "section-asset-stats"],
+  cmdb: [
+    "section-scan",
+    "section-fields",
+    "section-relations",
+    "section-readiness",
+    "section-topology",
+    "section-asset-stats",
+    "section-assets"
+  ],
+  monitoring: ["section-cockpit", "section-monitoring-sources", "section-monitoring-metrics", "section-topology"],
+  workflow: [
+    "section-workflow-cockpit",
+    "section-workflow-reports",
+    "section-workflow",
+    "section-discovery",
+    "section-notifications"
+  ],
+  admin: ["section-admin"]
+};
+
+const legacySectionToPage: Record<string, ConsolePage> = {
+  "section-admin": "admin",
+  "section-workflow-cockpit": "workflow",
+  "section-workflow-reports": "workflow",
+  "section-workflow": "workflow",
+  "section-discovery": "workflow",
+  "section-notifications": "workflow",
+  "section-monitoring-sources": "monitoring",
+  "section-monitoring-metrics": "monitoring",
+  "section-scan": "cmdb",
+  "section-fields": "cmdb",
+  "section-relations": "cmdb",
+  "section-readiness": "cmdb",
+  "section-assets": "cmdb",
+  "section-cockpit": "overview",
+  "section-topology": "overview",
+  "section-asset-stats": "overview"
+};
 
 export function App() {
   const { t } = useTranslation();
@@ -402,8 +661,10 @@ export function App() {
     runtimeAuthSession?.mode === "bearer" ? runtimeAuthSession.token ?? "" : API_AUTH_TOKEN
   );
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [assetStats, setAssetStats] = useState<AssetStatsResponse | null>(null);
   const [fieldDefinitions, setFieldDefinitions] = useState<FieldDefinition[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
+  const [loadingAssetStats, setLoadingAssetStats] = useState(false);
   const [loadingFields, setLoadingFields] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [creatingSample, setCreatingSample] = useState(false);
@@ -440,9 +701,11 @@ export function App() {
   const [monitoringNotice, setMonitoringNotice] = useState<string | null>(null);
   const [impactDirection, setImpactDirection] = useState<ImpactDirection>("downstream");
   const [impactDepth, setImpactDepth] = useState("4");
+  const [impactRelationTypesInput, setImpactRelationTypesInput] = useState(defaultImpactRelationTypes.join(","));
   const [assetImpact, setAssetImpact] = useState<AssetImpactResponse | null>(null);
   const [loadingAssetImpact, setLoadingAssetImpact] = useState(false);
   const [impactNotice, setImpactNotice] = useState<string | null>(null);
+  const [selectedTopologyEdgeKey, setSelectedTopologyEdgeKey] = useState<string | null>(null);
   const [discoveryJobs, setDiscoveryJobs] = useState<DiscoveryJob[]>([]);
   const [discoveryCandidates, setDiscoveryCandidates] = useState<DiscoveryCandidate[]>([]);
   const [loadingDiscoveryJobs, setLoadingDiscoveryJobs] = useState(false);
@@ -460,11 +723,42 @@ export function App() {
   const [creatingNotificationTemplate, setCreatingNotificationTemplate] = useState(false);
   const [creatingNotificationSubscription, setCreatingNotificationSubscription] = useState(false);
   const [notificationNotice, setNotificationNotice] = useState<string | null>(null);
+  const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowTemplate[]>([]);
+  const [workflowRequests, setWorkflowRequests] = useState<WorkflowRequest[]>([]);
+  const [workflowLogs, setWorkflowLogs] = useState<WorkflowExecutionLog[]>([]);
+  const [loadingWorkflowTemplates, setLoadingWorkflowTemplates] = useState(false);
+  const [loadingWorkflowRequests, setLoadingWorkflowRequests] = useState(false);
+  const [loadingWorkflowLogs, setLoadingWorkflowLogs] = useState(false);
+  const [creatingWorkflowTemplate, setCreatingWorkflowTemplate] = useState(false);
+  const [creatingWorkflowRequest, setCreatingWorkflowRequest] = useState(false);
+  const [executingWorkflowRequestId, setExecutingWorkflowRequestId] = useState<number | null>(null);
+  const [approvingWorkflowRequestId, setApprovingWorkflowRequestId] = useState<number | null>(null);
+  const [rejectingWorkflowRequestId, setRejectingWorkflowRequestId] = useState<number | null>(null);
+  const [manualCompletingWorkflowRequestId, setManualCompletingWorkflowRequestId] = useState<number | null>(null);
+  const [selectedWorkflowRequestId, setSelectedWorkflowRequestId] = useState<string>("");
+  const [workflowNotice, setWorkflowNotice] = useState<string | null>(null);
+  const [workflowReportRangeDays, setWorkflowReportRangeDays] = useState("30");
+  const [workflowReportStatusFilter, setWorkflowReportStatusFilter] = useState("all");
+  const [workflowReportTemplateFilter, setWorkflowReportTemplateFilter] = useState("all");
+  const [workflowReportRequesterFilter, setWorkflowReportRequesterFilter] = useState("");
   const [monitoringSources, setMonitoringSources] = useState<MonitoringSource[]>([]);
   const [loadingMonitoringSources, setLoadingMonitoringSources] = useState(false);
   const [creatingMonitoringSource, setCreatingMonitoringSource] = useState(false);
   const [probingMonitoringSourceId, setProbingMonitoringSourceId] = useState<number | null>(null);
   const [monitoringSourceNotice, setMonitoringSourceNotice] = useState<string | null>(null);
+  const [monitoringMetrics, setMonitoringMetrics] = useState<MonitoringMetricsResponse | null>(null);
+  const [loadingMonitoringMetrics, setLoadingMonitoringMetrics] = useState(false);
+  const [monitoringMetricsWindowMinutes, setMonitoringMetricsWindowMinutes] = useState("60");
+  const [monitoringMetricsError, setMonitoringMetricsError] = useState<string | null>(null);
+  const [monitoringOverview, setMonitoringOverview] = useState<MonitoringOverviewResponse | null>(null);
+  const [loadingMonitoringOverview, setLoadingMonitoringOverview] = useState(false);
+  const [activePage, setActivePage] = useState<ConsolePage>(() =>
+    resolveConsolePageFromHash(typeof window !== "undefined" ? window.location.hash : "", true)
+  );
+  const [menuAxis, setMenuAxis] = useState<MenuAxis>("screen");
+  const [functionWorkspace, setFunctionWorkspace] = useState<FunctionWorkspace>("cmdb");
+  const [departmentWorkspace, setDepartmentWorkspace] = useState("all");
+  const [businessWorkspace, setBusinessWorkspace] = useState("all");
   const [newMonitoringSource, setNewMonitoringSource] =
     useState<NewMonitoringSourceForm>(defaultMonitoringSourceForm);
   const [monitoringSourceFilters, setMonitoringSourceFilters] =
@@ -475,10 +769,37 @@ export function App() {
     useState<NewNotificationTemplateForm>(defaultNotificationTemplateForm);
   const [newNotificationSubscription, setNewNotificationSubscription] =
     useState<NewNotificationSubscriptionForm>(defaultNotificationSubscriptionForm);
+  const [newWorkflowStep, setNewWorkflowStep] =
+    useState<NewWorkflowTemplateStepForm>(defaultWorkflowStepForm);
+  const [newWorkflowTemplateName, setNewWorkflowTemplateName] = useState("");
+  const [newWorkflowTemplateDescription, setNewWorkflowTemplateDescription] = useState("");
+  const [newWorkflowTemplateSteps, setNewWorkflowTemplateSteps] = useState<NewWorkflowTemplateStepForm[]>([]);
+  const [newWorkflowRequest, setNewWorkflowRequest] =
+    useState<NewWorkflowRequestForm>(defaultWorkflowRequestForm);
   const roleSet = useMemo(() => new Set(authIdentity?.roles ?? []), [authIdentity?.roles]);
   const canWriteCmdb = roleSet.has("admin") || roleSet.has("operator");
   const canAccessAdmin = roleSet.has("admin");
   const roleText = useMemo(() => (authIdentity?.roles.length ? authIdentity.roles.join(", ") : "-"), [authIdentity]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const syncFromHash = () => {
+      const canReadAdminPage = canAccessAdmin || !authIdentity;
+      const page = resolveConsolePageFromHash(window.location.hash, canReadAdminPage);
+      setActivePage(page);
+      const canonicalHash = buildConsolePageHash(page);
+      if (window.location.hash !== canonicalHash) {
+        window.history.replaceState(window.history.state, "", canonicalHash);
+      }
+    };
+
+    syncFromHash();
+    window.addEventListener("hashchange", syncFromHash);
+    return () => window.removeEventListener("hashchange", syncFromHash);
+  }, [authIdentity, canAccessAdmin]);
 
   const applyAuthSession = useCallback((session: AuthSession | null) => {
     runtimeAuthSession = session;
@@ -615,6 +936,24 @@ export function App() {
     }
   }, []);
 
+  const loadAssetStats = useCallback(async () => {
+    setLoadingAssetStats(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets/stats`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AssetStatsResponse = await response.json();
+      setAssetStats(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setAssetStats(null);
+    } finally {
+      setLoadingAssetStats(false);
+    }
+  }, []);
+
   const loadFieldDefinitions = useCallback(async () => {
     setLoadingFields(true);
     setError(null);
@@ -697,7 +1036,12 @@ export function App() {
     }
   }, []);
 
-  const loadAssetImpact = useCallback(async (assetId: number, direction: ImpactDirection, depth: number) => {
+  const loadAssetImpact = useCallback(async (
+    assetId: number,
+    direction: ImpactDirection,
+    depth: number,
+    relationTypes: string[]
+  ) => {
     setLoadingAssetImpact(true);
     setError(null);
     try {
@@ -705,6 +1049,9 @@ export function App() {
         direction,
         depth: String(depth)
       });
+      if (relationTypes.length > 0) {
+        params.set("relation_types", relationTypes.join(","));
+      }
       const response = await apiFetch(`${API_BASE_URL}/api/v1/cmdb/assets/${assetId}/impact?${params.toString()}`);
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
@@ -806,6 +1153,71 @@ export function App() {
     }
   }, []);
 
+  const loadWorkflowTemplates = useCallback(async () => {
+    setLoadingWorkflowTemplates(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/templates`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: WorkflowTemplate[] = await response.json();
+      setWorkflowTemplates(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setWorkflowTemplates([]);
+      return [];
+    } finally {
+      setLoadingWorkflowTemplates(false);
+    }
+  }, []);
+
+  const loadWorkflowRequests = useCallback(async () => {
+    setLoadingWorkflowRequests(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/requests?limit=100`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: WorkflowRequest[] = await response.json();
+      setWorkflowRequests(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setWorkflowRequests([]);
+      return [];
+    } finally {
+      setLoadingWorkflowRequests(false);
+    }
+  }, []);
+
+  const loadWorkflowLogs = useCallback(async (requestId: number) => {
+    if (!Number.isFinite(requestId) || requestId <= 0) {
+      setWorkflowLogs([]);
+      return [];
+    }
+
+    setLoadingWorkflowLogs(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/requests/${requestId}/logs`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: WorkflowExecutionLog[] = await response.json();
+      setWorkflowLogs(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setWorkflowLogs([]);
+      return [];
+    } finally {
+      setLoadingWorkflowLogs(false);
+    }
+  }, []);
+
   const loadMonitoringSources = useCallback(
     async (filters: MonitoringSourceFilterForm = defaultMonitoringSourceFilters) => {
       const activeFilters = filters;
@@ -840,6 +1252,57 @@ export function App() {
     },
     []
   );
+
+  const loadMonitoringOverview = useCallback(async (department?: string) => {
+    setLoadingMonitoringOverview(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (department && department !== "all") {
+        params.set("department", department);
+      }
+      const query = params.toString();
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/monitoring/overview${query ? `?${query}` : ""}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: MonitoringOverviewResponse = await response.json();
+      setMonitoringOverview(payload);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setMonitoringOverview(null);
+    } finally {
+      setLoadingMonitoringOverview(false);
+    }
+  }, []);
+
+  const loadMonitoringMetrics = useCallback(async (assetId: number, windowMinutes: number) => {
+    if (!Number.isFinite(assetId) || assetId <= 0) {
+      setMonitoringMetrics(null);
+      setMonitoringMetricsError(null);
+      return;
+    }
+
+    setLoadingMonitoringMetrics(true);
+    setMonitoringMetricsError(null);
+    try {
+      const params = new URLSearchParams({
+        asset_id: String(assetId),
+        window_minutes: String(windowMinutes)
+      });
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/monitoring/metrics?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: MonitoringMetricsResponse = await response.json();
+      setMonitoringMetrics(payload);
+    } catch (err) {
+      setMonitoringMetricsError(err instanceof Error ? err.message : "unknown error");
+      setMonitoringMetrics(null);
+    } finally {
+      setLoadingMonitoringMetrics(false);
+    }
+  }, []);
 
   const createSampleAsset = useCallback(async () => {
     if (!canWriteCmdb) {
@@ -882,13 +1345,13 @@ export function App() {
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
-      await loadAssets();
+      await Promise.all([loadAssets(), loadAssetStats()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setCreatingSample(false);
     }
-  }, [canWriteCmdb, fieldDefinitions, loadAssets, t]);
+  }, [canWriteCmdb, fieldDefinitions, loadAssetStats, loadAssets, t]);
 
   const createFieldDefinition = useCallback(async () => {
     if (!canWriteCmdb) {
@@ -1152,13 +1615,14 @@ export function App() {
             }
           : prev
       );
+      await loadAssetStats();
       setLifecycleNotice(t("cmdb.assetDetail.messages.lifecycleChanged", { status: payload.status }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setTransitioningLifecycleStatus(null);
     }
-  }, [canWriteCmdb, selectedAssetId, t]);
+  }, [canWriteCmdb, loadAssetStats, selectedAssetId, t]);
 
   const triggerAssetMonitoringSync = useCallback(async () => {
     if (!canWriteCmdb) {
@@ -1211,8 +1675,9 @@ export function App() {
       return;
     }
 
+    const relationTypes = parseImpactRelationTypesInput(impactRelationTypesInput);
     setImpactNotice(null);
-    const payload = await loadAssetImpact(assetId, impactDirection, depth);
+    const payload = await loadAssetImpact(assetId, impactDirection, depth, relationTypes);
     if (payload) {
       setImpactNotice(
         t("cmdb.assetDetail.impact.messages.loaded", {
@@ -1221,7 +1686,7 @@ export function App() {
         })
       );
     }
-  }, [impactDepth, impactDirection, loadAssetImpact, selectedAssetId, t]);
+  }, [impactDepth, impactDirection, impactRelationTypesInput, loadAssetImpact, selectedAssetId, t]);
 
   const runDiscoveryJob = useCallback(async (jobId: number) => {
     if (!canWriteCmdb) {
@@ -1239,14 +1704,14 @@ export function App() {
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
-      await Promise.all([loadDiscoveryJobs(), loadDiscoveryCandidates(), loadAssets()]);
+      await Promise.all([loadDiscoveryJobs(), loadDiscoveryCandidates(), loadAssets(), loadAssetStats()]);
       setDiscoveryNotice(t("cmdb.discovery.messages.jobRunTriggered", { id: jobId }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setRunningDiscoveryJobId(null);
     }
-  }, [canWriteCmdb, loadAssets, loadDiscoveryCandidates, loadDiscoveryJobs, t]);
+  }, [canWriteCmdb, loadAssetStats, loadAssets, loadDiscoveryCandidates, loadDiscoveryJobs, t]);
 
   const reviewDiscoveryCandidate = useCallback(
     async (candidateId: number, action: "approve" | "reject") => {
@@ -1269,7 +1734,7 @@ export function App() {
         if (!response.ok) {
           throw new Error(await readErrorMessage(response));
         }
-        await Promise.all([loadDiscoveryCandidates(), loadAssets()]);
+        await Promise.all([loadDiscoveryCandidates(), loadAssets(), loadAssetStats()]);
         setDiscoveryNotice(
           action === "approve"
             ? t("cmdb.discovery.messages.candidateApproved", { id: candidateId })
@@ -1281,7 +1746,7 @@ export function App() {
         setReviewingCandidateId(null);
       }
     },
-    [canWriteCmdb, loadAssets, loadDiscoveryCandidates, t]
+    [canWriteCmdb, loadAssetStats, loadAssets, loadDiscoveryCandidates, t]
   );
 
   const createNotificationChannel = useCallback(async () => {
@@ -1442,6 +1907,305 @@ export function App() {
     }
   }, [canWriteCmdb, loadNotificationSubscriptions, newNotificationSubscription, t]);
 
+  const addWorkflowStepToDraft = useCallback(() => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const stepId = newWorkflowStep.id.trim().toLowerCase();
+    const stepName = newWorkflowStep.name.trim();
+    if (!stepId || !/^[a-z0-9_-]+$/.test(stepId)) {
+      setError(t("cmdb.workflow.validation.stepIdRequired"));
+      return;
+    }
+    if (!stepName) {
+      setError(t("cmdb.workflow.validation.stepNameRequired"));
+      return;
+    }
+    if (newWorkflowTemplateSteps.some((item) => item.id === stepId)) {
+      setError(t("cmdb.workflow.validation.stepIdDuplicate", { id: stepId }));
+      return;
+    }
+    if (newWorkflowStep.kind === "script" && newWorkflowStep.script.trim().length === 0) {
+      setError(t("cmdb.workflow.validation.stepScriptRequired"));
+      return;
+    }
+
+    const parsedTimeout = Number.parseInt(newWorkflowStep.timeout_seconds.trim(), 10);
+    const timeoutSeconds = Number.isFinite(parsedTimeout) && parsedTimeout > 0
+      ? Math.min(parsedTimeout, 3600)
+      : 300;
+
+    const normalizedStep: NewWorkflowTemplateStepForm = {
+      id: stepId,
+      name: stepName,
+      kind: newWorkflowStep.kind,
+      auto_run: newWorkflowStep.kind === "script" ? newWorkflowStep.auto_run : false,
+      script: newWorkflowStep.kind === "script" ? newWorkflowStep.script.trim() : "",
+      timeout_seconds: String(timeoutSeconds),
+      approver_group: newWorkflowStep.approver_group.trim()
+    };
+
+    setError(null);
+    setWorkflowNotice(null);
+    setNewWorkflowTemplateSteps((prev) => [...prev, normalizedStep]);
+    setNewWorkflowStep({
+      ...defaultWorkflowStepForm,
+      kind: normalizedStep.kind
+    });
+  }, [canWriteCmdb, newWorkflowStep, newWorkflowTemplateSteps, t]);
+
+  const removeWorkflowStepFromDraft = useCallback((stepId: string) => {
+    setNewWorkflowTemplateSteps((prev) => prev.filter((item) => item.id !== stepId));
+  }, []);
+
+  const createWorkflowTemplate = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const name = newWorkflowTemplateName.trim();
+    if (!name) {
+      setError(t("cmdb.workflow.validation.templateNameRequired"));
+      return;
+    }
+    if (newWorkflowTemplateSteps.length === 0) {
+      setError(t("cmdb.workflow.validation.templateStepsRequired"));
+      return;
+    }
+
+    setCreatingWorkflowTemplate(true);
+    setWorkflowNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/templates`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          name,
+          description: trimToNull(newWorkflowTemplateDescription),
+          definition: {
+            steps: newWorkflowTemplateSteps.map((step) => ({
+              id: step.id,
+              name: step.name,
+              kind: step.kind,
+              auto_run: step.auto_run,
+              script: step.kind === "script" ? step.script : null,
+              timeout_seconds: Number.parseInt(step.timeout_seconds, 10) || 300,
+              approver_group: step.approver_group.trim().length > 0 ? step.approver_group.trim() : null
+            }))
+          }
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      setNewWorkflowTemplateName("");
+      setNewWorkflowTemplateDescription("");
+      setNewWorkflowTemplateSteps([]);
+      setNewWorkflowStep(defaultWorkflowStepForm);
+      await loadWorkflowTemplates();
+      setWorkflowNotice(t("cmdb.workflow.messages.templateCreated", { name }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setCreatingWorkflowTemplate(false);
+    }
+  }, [
+    canWriteCmdb,
+    loadWorkflowTemplates,
+    newWorkflowTemplateDescription,
+    newWorkflowTemplateName,
+    newWorkflowTemplateSteps,
+    t
+  ]);
+
+  const createWorkflowRequest = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const templateId = Number.parseInt(newWorkflowRequest.template_id, 10);
+    const title = newWorkflowRequest.title.trim();
+    if (!Number.isFinite(templateId) || templateId <= 0) {
+      setError(t("cmdb.workflow.validation.templateRequired"));
+      return;
+    }
+    if (!title) {
+      setError(t("cmdb.workflow.validation.requestTitleRequired"));
+      return;
+    }
+
+    let payloadJson: Record<string, unknown> = {};
+    const payloadRaw = newWorkflowRequest.payload_json.trim();
+    if (payloadRaw.length > 0) {
+      try {
+        const parsed = JSON.parse(payloadRaw) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setError(t("cmdb.workflow.validation.payloadMustBeObject"));
+          return;
+        }
+        payloadJson = parsed as Record<string, unknown>;
+      } catch {
+        setError(t("cmdb.workflow.validation.payloadInvalidJson"));
+        return;
+      }
+    }
+
+    setCreatingWorkflowRequest(true);
+    setWorkflowNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/requests`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          template_id: templateId,
+          title,
+          payload: payloadJson
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: WorkflowRequest = await response.json();
+      setNewWorkflowRequest((prev) => ({
+        ...prev,
+        title: "",
+        payload_json: "{}"
+      }));
+      setSelectedWorkflowRequestId(String(payload.id));
+      await Promise.all([loadWorkflowRequests(), loadWorkflowLogs(payload.id)]);
+      setWorkflowNotice(t("cmdb.workflow.messages.requestCreated", { id: payload.id }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setCreatingWorkflowRequest(false);
+    }
+  }, [canWriteCmdb, loadWorkflowLogs, loadWorkflowRequests, newWorkflowRequest, t]);
+
+  const approveWorkflowRequest = useCallback(async (requestId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    setApprovingWorkflowRequestId(requestId);
+    setWorkflowNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/approvals/${requestId}/approve`, {
+        method: "POST"
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await loadWorkflowRequests();
+      setWorkflowNotice(t("cmdb.workflow.messages.requestApproved", { id: requestId }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setApprovingWorkflowRequestId(null);
+    }
+  }, [canWriteCmdb, loadWorkflowRequests, t]);
+
+  const rejectWorkflowRequest = useCallback(async (requestId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    setRejectingWorkflowRequestId(requestId);
+    setWorkflowNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/approvals/${requestId}/reject`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          reason: "rejected by operator from web console"
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await loadWorkflowRequests();
+      setWorkflowNotice(t("cmdb.workflow.messages.requestRejected", { id: requestId }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setRejectingWorkflowRequestId(null);
+    }
+  }, [canWriteCmdb, loadWorkflowRequests, t]);
+
+  const executeWorkflowRequest = useCallback(async (requestId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    setExecutingWorkflowRequestId(requestId);
+    setWorkflowNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/requests/${requestId}/execute`, {
+        method: "POST"
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await Promise.all([loadWorkflowRequests(), loadWorkflowLogs(requestId)]);
+      setSelectedWorkflowRequestId(String(requestId));
+      setWorkflowNotice(t("cmdb.workflow.messages.requestExecuted", { id: requestId }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setExecutingWorkflowRequestId(null);
+    }
+  }, [canWriteCmdb, loadWorkflowLogs, loadWorkflowRequests, t]);
+
+  const completeWorkflowManualStep = useCallback(async (requestId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    setManualCompletingWorkflowRequestId(requestId);
+    setWorkflowNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/requests/${requestId}/manual-complete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          note: "manual step completed from web console"
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await Promise.all([loadWorkflowRequests(), loadWorkflowLogs(requestId)]);
+      setSelectedWorkflowRequestId(String(requestId));
+      setWorkflowNotice(t("cmdb.workflow.messages.manualCompleted", { id: requestId }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setManualCompletingWorkflowRequestId(null);
+    }
+  }, [canWriteCmdb, loadWorkflowLogs, loadWorkflowRequests, t]);
+
   const createMonitoringSource = useCallback(async () => {
     if (!canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
@@ -1578,23 +2342,17 @@ export function App() {
     }
     void Promise.all([
       loadAssets(),
+      loadAssetStats(),
       loadFieldDefinitions(),
-      loadDiscoveryJobs(),
-      loadDiscoveryCandidates(),
       loadMonitoringSources(defaultMonitoringSourceFilters),
-      loadNotificationChannels(),
-      loadNotificationTemplates(),
-      loadNotificationSubscriptions()
+      loadMonitoringOverview(),
     ]);
   }, [
+    loadAssetStats,
     loadAssets,
     loadFieldDefinitions,
-    loadDiscoveryCandidates,
-    loadDiscoveryJobs,
+    loadMonitoringOverview,
     loadMonitoringSources,
-    loadNotificationChannels,
-    loadNotificationTemplates,
-    loadNotificationSubscriptions,
     authIdentity
   ]);
 
@@ -1607,11 +2365,19 @@ export function App() {
   }, [assets, selectedAssetId]);
 
   useEffect(() => {
+    if (workflowRequests.length === 0 || selectedWorkflowRequestId) {
+      return;
+    }
+    setSelectedWorkflowRequestId(String(workflowRequests[0].id));
+  }, [selectedWorkflowRequestId, workflowRequests]);
+
+  useEffect(() => {
     setRelationNotice(null);
     setBindingNotice(null);
     setLifecycleNotice(null);
     setMonitoringNotice(null);
     setImpactNotice(null);
+    setSelectedTopologyEdgeKey(null);
   }, [selectedAssetId]);
 
   useEffect(() => {
@@ -1634,12 +2400,47 @@ export function App() {
     }
 
     const depth = parseImpactDepth(impactDepth) ?? 4;
+    const relationTypes = parseImpactRelationTypesInput(impactRelationTypesInput);
     void Promise.all([
       loadAssetBindings(assetId),
       loadAssetMonitoring(assetId),
-      loadAssetImpact(assetId, impactDirection, depth)
+      loadAssetImpact(assetId, impactDirection, depth, relationTypes)
     ]);
   }, [loadAssetBindings, loadAssetImpact, loadAssetMonitoring, selectedAssetId]);
+
+  useEffect(() => {
+    if (!authIdentity) {
+      return;
+    }
+    const assetId = Number.parseInt(selectedAssetId, 10);
+    const windowMinutes = parseMonitoringWindowMinutes(monitoringMetricsWindowMinutes) ?? 60;
+    if (!Number.isFinite(assetId) || assetId <= 0) {
+      setMonitoringMetrics(null);
+      setMonitoringMetricsError(null);
+      return;
+    }
+    void loadMonitoringMetrics(assetId, windowMinutes);
+  }, [authIdentity, loadMonitoringMetrics, monitoringMetricsWindowMinutes, selectedAssetId]);
+
+  useEffect(() => {
+    if (!authIdentity) {
+      return;
+    }
+    const scopedDepartment = menuAxis === "department" ? departmentWorkspace : undefined;
+    void loadMonitoringOverview(scopedDepartment);
+  }, [authIdentity, departmentWorkspace, loadMonitoringOverview, menuAxis]);
+
+  useEffect(() => {
+    if (!authIdentity) {
+      return;
+    }
+    const requestId = Number.parseInt(selectedWorkflowRequestId, 10);
+    if (!Number.isFinite(requestId) || requestId <= 0) {
+      setWorkflowLogs([]);
+      return;
+    }
+    void loadWorkflowLogs(requestId);
+  }, [authIdentity, loadWorkflowLogs, selectedWorkflowRequestId]);
 
   const emptyState = useMemo(() => assets.length === 0, [assets]);
   const assetNameById = useMemo(() => {
@@ -1663,7 +2464,400 @@ export function App() {
     }
     return map;
   }, [notificationChannels]);
+  const selectedWorkflowRequestNumericId = useMemo(
+    () => Number.parseInt(selectedWorkflowRequestId, 10),
+    [selectedWorkflowRequestId]
+  );
+  const selectedWorkflowRequest = useMemo(
+    () => workflowRequests.find((item) => item.id === selectedWorkflowRequestNumericId) ?? null,
+    [selectedWorkflowRequestNumericId, workflowRequests]
+  );
+  const workflowStatusBuckets = useMemo(() => {
+    const counters = new Map<string, number>();
+    for (const request of workflowRequests) {
+      const normalized = normalizeWorkflowStatus(request.status);
+      counters.set(normalized, (counters.get(normalized) ?? 0) + 1);
+    }
+    return Array.from(counters.entries())
+      .map(([key, count]) => ({ key, label: key, asset_total: count }))
+      .sort((left, right) => right.asset_total - left.asset_total || left.label.localeCompare(right.label));
+  }, [workflowRequests]);
+  const workflowStatusMax = useMemo(() => maxBucketAssetTotal(workflowStatusBuckets), [workflowStatusBuckets]);
+  const workflowTemplateUsageBuckets = useMemo(() => {
+    const counters = new Map<string, number>();
+    for (const request of workflowRequests) {
+      const label = request.template_name.trim().length > 0 ? request.template_name : `#${request.template_id}`;
+      counters.set(label, (counters.get(label) ?? 0) + 1);
+    }
+    return Array.from(counters.entries())
+      .map(([key, count]) => ({ key, label: key, asset_total: count }))
+      .sort((left, right) => right.asset_total - left.asset_total || left.label.localeCompare(right.label));
+  }, [workflowRequests]);
+  const workflowTemplateUsageMax = useMemo(
+    () => maxBucketAssetTotal(workflowTemplateUsageBuckets),
+    [workflowTemplateUsageBuckets]
+  );
+  const workflowRequesterBuckets = useMemo(() => {
+    const counters = new Map<string, number>();
+    for (const request of workflowRequests) {
+      const label = request.requester.trim().length > 0 ? request.requester : "unknown";
+      counters.set(label, (counters.get(label) ?? 0) + 1);
+    }
+    return Array.from(counters.entries())
+      .map(([key, count]) => ({ key, label: key, asset_total: count }))
+      .sort((left, right) => right.asset_total - left.asset_total || left.label.localeCompare(right.label));
+  }, [workflowRequests]);
+  const workflowRequesterMax = useMemo(() => maxBucketAssetTotal(workflowRequesterBuckets), [workflowRequesterBuckets]);
+  const workflowDailyTrend = useMemo(() => {
+    const points: WorkflowDailyTrendPoint[] = [];
+    const byDay = new Map<string, WorkflowDailyTrendPoint>();
+    const now = new Date();
+    for (let offset = 6; offset >= 0; offset -= 1) {
+      const day = new Date(now);
+      day.setDate(now.getDate() - offset);
+      const key = formatLocalDateKey(day);
+      const point: WorkflowDailyTrendPoint = {
+        day_key: key,
+        day_label: `${day.getMonth() + 1}/${day.getDate()}`,
+        total: 0,
+        completed: 0,
+        failed: 0,
+        active: 0
+      };
+      points.push(point);
+      byDay.set(key, point);
+    }
+
+    for (const request of workflowRequests) {
+      const createdAt = new Date(request.created_at);
+      if (Number.isNaN(createdAt.getTime())) {
+        continue;
+      }
+
+      const point = byDay.get(formatLocalDateKey(createdAt));
+      if (!point) {
+        continue;
+      }
+
+      point.total += 1;
+      const normalized = normalizeWorkflowStatus(request.status);
+      if (isWorkflowSuccessStatus(normalized)) {
+        point.completed += 1;
+      } else if (isWorkflowFailureStatus(normalized)) {
+        point.failed += 1;
+      } else {
+        point.active += 1;
+      }
+    }
+
+    return points;
+  }, [workflowRequests]);
+  const workflowDailyTrendMax = useMemo(
+    () => workflowDailyTrend.reduce((maxValue, point) => Math.max(maxValue, point.total), 0),
+    [workflowDailyTrend]
+  );
+  const workflowKpis = useMemo(() => {
+    let activeRequests = 0;
+    let completedRequests = 0;
+    let failedRequests = 0;
+    let approvalQueue = 0;
+    let manualQueue = 0;
+
+    for (const request of workflowRequests) {
+      const normalized = normalizeWorkflowStatus(request.status);
+      if (normalized === "pending_approval") {
+        approvalQueue += 1;
+      }
+      if (normalized === "waiting_manual") {
+        manualQueue += 1;
+      }
+      if (isWorkflowSuccessStatus(normalized)) {
+        completedRequests += 1;
+      } else if (isWorkflowFailureStatus(normalized)) {
+        failedRequests += 1;
+      } else {
+        activeRequests += 1;
+      }
+    }
+
+    let automatedLogSteps = 0;
+    let logDurationTotalMs = 0;
+    let logDurationCount = 0;
+    let executionSuccess = 0;
+    let executionFailure = 0;
+
+    for (const log of workflowLogs) {
+      if (log.step_kind === "script") {
+        automatedLogSteps += 1;
+      }
+      if (typeof log.duration_ms === "number" && Number.isFinite(log.duration_ms) && log.duration_ms >= 0) {
+        logDurationTotalMs += log.duration_ms;
+        logDurationCount += 1;
+      }
+
+      const normalized = normalizeWorkflowStatus(log.status);
+      if (isWorkflowSuccessStatus(normalized)) {
+        executionSuccess += 1;
+      } else if (isWorkflowFailureStatus(normalized)) {
+        executionFailure += 1;
+      }
+    }
+
+    const totalRequests = workflowRequests.length;
+    const completionRate = totalRequests > 0 ? Math.round((completedRequests / totalRequests) * 100) : 0;
+    const failureRate = totalRequests > 0 ? Math.round((failedRequests / totalRequests) * 100) : 0;
+    const automationShare = workflowLogs.length > 0 ? Math.round((automatedLogSteps / workflowLogs.length) * 100) : 0;
+    const averageExecutionMs = logDurationCount > 0 ? Math.round(logDurationTotalMs / logDurationCount) : 0;
+    const executionSampleSize = executionSuccess + executionFailure;
+    const executionSuccessRate = executionSampleSize > 0 ? Math.round((executionSuccess / executionSampleSize) * 100) : 0;
+
+    return {
+      totalRequests,
+      activeRequests,
+      completedRequests,
+      failedRequests,
+      approvalQueue,
+      manualQueue,
+      completionRate,
+      failureRate,
+      automationShare,
+      averageExecutionMs,
+      executionSuccessRate,
+      executionSampleSize
+    };
+  }, [workflowLogs, workflowRequests]);
+  const workflowReportRangeValue = useMemo(
+    () => parseWorkflowReportRangeDays(workflowReportRangeDays),
+    [workflowReportRangeDays]
+  );
+  const workflowReportRows = useMemo(() => {
+    const requesterQuery = workflowReportRequesterFilter.trim().toLowerCase();
+    const now = Date.now();
+    const cutoff = now - (workflowReportRangeValue - 1) * 24 * 60 * 60 * 1000;
+
+    return workflowRequests
+      .filter((request) => {
+        const createdAtMs = parseDateMs(request.created_at);
+        if (createdAtMs === null || createdAtMs < cutoff) {
+          return false;
+        }
+
+        const normalizedStatus = normalizeWorkflowStatus(request.status);
+        if (workflowReportStatusFilter !== "all" && normalizedStatus !== workflowReportStatusFilter) {
+          return false;
+        }
+
+        const templateLabel = workflowTemplateDisplayName(request);
+        if (workflowReportTemplateFilter !== "all" && templateLabel !== workflowReportTemplateFilter) {
+          return false;
+        }
+
+        if (requesterQuery.length > 0 && !request.requester.toLowerCase().includes(requesterQuery)) {
+          return false;
+        }
+
+        return true;
+      })
+      .slice()
+      .sort((left, right) => {
+        const leftTs = parseDateMs(left.updated_at) ?? parseDateMs(left.created_at) ?? 0;
+        const rightTs = parseDateMs(right.updated_at) ?? parseDateMs(right.created_at) ?? 0;
+        return rightTs - leftTs;
+      });
+  }, [
+    workflowReportRangeValue,
+    workflowReportRequesterFilter,
+    workflowReportStatusFilter,
+    workflowReportTemplateFilter,
+    workflowRequests
+  ]);
+  const workflowReportStatusOptions = useMemo(
+    () =>
+      Array.from(new Set(workflowRequests.map((item) => normalizeWorkflowStatus(item.status))))
+        .filter((item) => item.length > 0)
+        .sort(),
+    [workflowRequests]
+  );
+  const workflowReportTemplateOptions = useMemo(
+    () => workflowTemplateUsageBuckets.map((item) => item.label),
+    [workflowTemplateUsageBuckets]
+  );
+  const workflowReportStatusBuckets = useMemo(() => {
+    const counters = new Map<string, number>();
+    for (const request of workflowReportRows) {
+      const status = normalizeWorkflowStatus(request.status);
+      counters.set(status, (counters.get(status) ?? 0) + 1);
+    }
+    return Array.from(counters.entries())
+      .map(([key, count]) => ({ key, label: key, asset_total: count }))
+      .sort((left, right) => right.asset_total - left.asset_total || left.label.localeCompare(right.label));
+  }, [workflowReportRows]);
+  const workflowReportStatusMax = useMemo(
+    () => maxBucketAssetTotal(workflowReportStatusBuckets),
+    [workflowReportStatusBuckets]
+  );
+  const workflowReportTemplateBuckets = useMemo(() => {
+    const counters = new Map<string, number>();
+    for (const request of workflowReportRows) {
+      const label = workflowTemplateDisplayName(request);
+      counters.set(label, (counters.get(label) ?? 0) + 1);
+    }
+    return Array.from(counters.entries())
+      .map(([key, count]) => ({ key, label: key, asset_total: count }))
+      .sort((left, right) => right.asset_total - left.asset_total || left.label.localeCompare(right.label));
+  }, [workflowReportRows]);
+  const workflowReportTemplateMax = useMemo(
+    () => maxBucketAssetTotal(workflowReportTemplateBuckets),
+    [workflowReportTemplateBuckets]
+  );
+  const workflowReportDailyTrend = useMemo(
+    () => buildWorkflowDailyTrend(workflowReportRows, workflowReportRangeValue),
+    [workflowReportRangeValue, workflowReportRows]
+  );
+  const workflowReportDailyTrendMax = useMemo(
+    () => workflowReportDailyTrend.reduce((maxValue, item) => Math.max(maxValue, item.total), 0),
+    [workflowReportDailyTrend]
+  );
+  const workflowReportExecutionStats = useMemo(() => {
+    const requestIds = new Set(workflowReportRows.map((item) => item.id));
+    let durationTotal = 0;
+    let durationCount = 0;
+    let successCount = 0;
+    let failureCount = 0;
+    let automatedCount = 0;
+
+    for (const log of workflowLogs) {
+      if (!requestIds.has(log.request_id)) {
+        continue;
+      }
+
+      if (typeof log.duration_ms === "number" && Number.isFinite(log.duration_ms) && log.duration_ms >= 0) {
+        durationTotal += log.duration_ms;
+        durationCount += 1;
+      }
+      if (log.step_kind === "script") {
+        automatedCount += 1;
+      }
+
+      const normalized = normalizeWorkflowStatus(log.status);
+      if (isWorkflowSuccessStatus(normalized)) {
+        successCount += 1;
+      } else if (isWorkflowFailureStatus(normalized)) {
+        failureCount += 1;
+      }
+    }
+
+    const sampleSize = successCount + failureCount;
+    const successRate = sampleSize > 0 ? Math.round((successCount / sampleSize) * 100) : 0;
+    const averageDurationMs = durationCount > 0 ? Math.round(durationTotal / durationCount) : 0;
+    const automationShare = workflowLogs.length > 0 ? Math.round((automatedCount / workflowLogs.length) * 100) : 0;
+
+    return {
+      successRate,
+      averageDurationMs,
+      sampleSize,
+      automationShare
+    };
+  }, [workflowLogs, workflowReportRows]);
+  const workflowReportSummary = useMemo(() => {
+    let completed = 0;
+    let failed = 0;
+    let active = 0;
+    let approvalQueue = 0;
+    let manualQueue = 0;
+
+    for (const item of workflowReportRows) {
+      const normalized = normalizeWorkflowStatus(item.status);
+      if (normalized === "pending_approval") {
+        approvalQueue += 1;
+      }
+      if (normalized === "waiting_manual") {
+        manualQueue += 1;
+      }
+      if (isWorkflowSuccessStatus(normalized)) {
+        completed += 1;
+      } else if (isWorkflowFailureStatus(normalized)) {
+        failed += 1;
+      } else {
+        active += 1;
+      }
+    }
+
+    const total = workflowReportRows.length;
+    const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const failureRate = total > 0 ? Math.round((failed / total) * 100) : 0;
+
+    return {
+      total,
+      completed,
+      failed,
+      active,
+      approvalQueue,
+      manualQueue,
+      completionRate,
+      failureRate
+    };
+  }, [workflowReportRows]);
+  const workflowTemplateTrendRanks = useMemo(
+    () => buildWorkflowTrendRankRows(workflowRequests, (request) => workflowTemplateDisplayName(request)),
+    [workflowRequests]
+  );
+  const workflowRequesterTrendRanks = useMemo(
+    () =>
+      buildWorkflowTrendRankRows(workflowRequests, (request) =>
+        request.requester.trim().length > 0 ? request.requester.trim() : "unknown"
+      ),
+    [workflowRequests]
+  );
+  const exportWorkflowReportCsv = useCallback(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const headers = [
+      "id",
+      "template_id",
+      "template_name",
+      "title",
+      "status",
+      "requester",
+      "current_step_index",
+      "created_at",
+      "updated_at",
+      "last_error"
+    ];
+    const lines = workflowReportRows.map((item) =>
+      [
+        String(item.id),
+        String(item.template_id),
+        workflowTemplateDisplayName(item),
+        item.title,
+        normalizeWorkflowStatus(item.status),
+        item.requester,
+        String(item.current_step_index),
+        item.created_at,
+        item.updated_at,
+        item.last_error ?? ""
+      ]
+        .map(escapeCsvCell)
+        .join(",")
+    );
+    const csv = [headers.join(","), ...lines].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `workflow-report-${workflowReportRangeValue}d-${formatLocalDateKey(new Date())}.csv`;
+    anchor.click();
+    window.URL.revokeObjectURL(url);
+
+    setWorkflowNotice(t("cmdb.workflow.reports.messages.exported", { count: workflowReportRows.length }));
+  }, [t, workflowReportRangeValue, workflowReportRows]);
   const selectedAssetNumericId = useMemo(() => Number.parseInt(selectedAssetId, 10), [selectedAssetId]);
+  const monitoringMetricsWindowValue = useMemo(
+    () => parseMonitoringWindowMinutes(monitoringMetricsWindowMinutes) ?? 60,
+    [monitoringMetricsWindowMinutes]
+  );
   const selectedAsset = useMemo(
     () => assets.find((item) => item.id === selectedAssetNumericId) ?? null,
     [assets, selectedAssetNumericId]
@@ -1692,6 +2886,31 @@ export function App() {
     () => (assetImpact?.edges ?? []).filter((edge) => edge.relation_type === "contains").slice(0, 10),
     [assetImpact?.edges]
   );
+  const impactRelationTypes = useMemo(
+    () => parseImpactRelationTypesInput(impactRelationTypesInput),
+    [impactRelationTypesInput]
+  );
+  const topologyNodePositions = useMemo(
+    () =>
+      buildTopologyNodePositions(
+        assetImpact?.nodes ?? [],
+        assetImpact?.root_asset_id ?? selectedAssetNumericId,
+        980,
+        540,
+        38
+      ),
+    [assetImpact?.nodes, assetImpact?.root_asset_id, selectedAssetNumericId]
+  );
+  const topologyEdgeRenderMeta = useMemo(
+    () => buildParallelEdgeMeta(assetImpact?.edges ?? []),
+    [assetImpact?.edges]
+  );
+  const selectedTopologyEdge = useMemo(() => {
+    if (!selectedTopologyEdgeKey) {
+      return null;
+    }
+    return (assetImpact?.edges ?? []).find((edge) => topologyEdgeKey(edge) === selectedTopologyEdgeKey) ?? null;
+  }, [assetImpact?.edges, selectedTopologyEdgeKey]);
   const monitoringSourceStats = useMemo(() => {
     let enabled = 0;
     let reachable = 0;
@@ -1714,6 +2933,105 @@ export function App() {
       unreachable
     };
   }, [monitoringSources]);
+  const assetStatsStatusBuckets = useMemo(() => assetStats?.status_buckets ?? [], [assetStats]);
+  const assetStatsDepartmentBuckets = useMemo(() => assetStats?.department_buckets ?? [], [assetStats]);
+  const assetStatsBusinessServiceBuckets = useMemo(
+    () => assetStats?.business_service_buckets ?? [],
+    [assetStats]
+  );
+  const assetStatsStatusMax = useMemo(() => maxBucketAssetTotal(assetStatsStatusBuckets), [assetStatsStatusBuckets]);
+  const assetStatsDepartmentMax = useMemo(
+    () => maxBucketAssetTotal(assetStatsDepartmentBuckets),
+    [assetStatsDepartmentBuckets]
+  );
+  const assetStatsBusinessServiceMax = useMemo(
+    () => maxBucketAssetTotal(assetStatsBusinessServiceBuckets),
+    [assetStatsBusinessServiceBuckets]
+  );
+  const departmentWorkspaceOptions = useMemo(
+    () => ["all", ...assetStatsDepartmentBuckets.map((bucket) => bucket.label)],
+    [assetStatsDepartmentBuckets]
+  );
+  const businessWorkspaceOptions = useMemo(
+    () => ["all", ...assetStatsBusinessServiceBuckets.map((bucket) => bucket.label)],
+    [assetStatsBusinessServiceBuckets]
+  );
+  const selectedDepartmentAssetCount = useMemo(() => {
+    if (departmentWorkspace === "all") {
+      return assetStats?.total_assets ?? assets.length;
+    }
+    return assetStatsDepartmentBuckets.find((bucket) => bucket.label === departmentWorkspace)?.asset_total ?? 0;
+  }, [assetStats?.total_assets, assetStatsDepartmentBuckets, assets.length, departmentWorkspace]);
+  const selectedBusinessAssetCount = useMemo(() => {
+    if (businessWorkspace === "all") {
+      return assetStats?.total_assets ?? assets.length;
+    }
+    return assetStatsBusinessServiceBuckets.find((bucket) => bucket.label === businessWorkspace)?.asset_total ?? 0;
+  }, [assetStats?.total_assets, assetStatsBusinessServiceBuckets, assets.length, businessWorkspace]);
+  const perspectiveScopeLabel = useMemo(() => {
+    if (menuAxis === "department") {
+      return departmentWorkspace === "all" ? t("cmdb.cockpit.scope.departmentAll") : departmentWorkspace;
+    }
+    if (menuAxis === "business") {
+      return businessWorkspace === "all" ? t("cmdb.cockpit.scope.businessAll") : businessWorkspace;
+    }
+    if (menuAxis === "screen") {
+      return t("cmdb.cockpit.scope.screen");
+    }
+    return functionWorkspace;
+  }, [businessWorkspace, departmentWorkspace, functionWorkspace, menuAxis, t]);
+  const cockpitOperationalAssets = useMemo(
+    () => assetStatsStatusBuckets.find((bucket) => bucket.label === "operational")?.asset_total ?? 0,
+    [assetStatsStatusBuckets]
+  );
+  const cockpitCriticalAssets = useMemo(
+    () => (monitoringOverview?.layers ?? []).reduce((sum, layer) => sum + (layer.health.critical ?? 0), 0),
+    [monitoringOverview?.layers]
+  );
+  const visibleSections = useMemo(() => {
+    if (activePage === "admin" && !canAccessAdmin) {
+      return new Set<string>(consolePageSections.overview);
+    }
+    return new Set<string>(consolePageSections[activePage]);
+  }, [activePage, canAccessAdmin]);
+  useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-discovery")) {
+      return;
+    }
+    void Promise.all([loadDiscoveryJobs(), loadDiscoveryCandidates()]);
+  }, [authIdentity, loadDiscoveryCandidates, loadDiscoveryJobs, visibleSections]);
+  useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-notifications")) {
+      return;
+    }
+    void Promise.all([
+      loadNotificationChannels(),
+      loadNotificationTemplates(),
+      loadNotificationSubscriptions()
+    ]);
+  }, [
+    authIdentity,
+    loadNotificationChannels,
+    loadNotificationSubscriptions,
+    loadNotificationTemplates,
+    visibleSections
+  ]);
+  useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-workflow")) {
+      return;
+    }
+    void Promise.all([loadWorkflowTemplates(), loadWorkflowRequests()]);
+  }, [authIdentity, loadWorkflowRequests, loadWorkflowTemplates, visibleSections]);
+  useEffect(() => {
+    if (!departmentWorkspaceOptions.includes(departmentWorkspace)) {
+      setDepartmentWorkspace("all");
+    }
+  }, [departmentWorkspace, departmentWorkspaceOptions]);
+  useEffect(() => {
+    if (!businessWorkspaceOptions.includes(businessWorkspace)) {
+      setBusinessWorkspace("all");
+    }
+  }, [businessWorkspace, businessWorkspaceOptions]);
   const hasMonitoringSourceFilter = useMemo(
     () =>
       monitoringSourceFilters.source_type.trim().length > 0
@@ -1734,9 +3052,18 @@ export function App() {
     () => Array.from(new Set(assets.map((item) => item.site ?? "").filter((item) => item.trim().length > 0))).sort(),
     [assets]
   );
+  const activeDepartmentScope = useMemo(() => {
+    if (menuAxis !== "department" || departmentWorkspace === "all") {
+      return null;
+    }
+    return departmentWorkspace;
+  }, [departmentWorkspace, menuAxis]);
   const filteredAssets = useMemo(() => {
     const normalizedQuery = assetSearch.trim().toLowerCase();
     const filtered = assets.filter((asset) => {
+      if (activeDepartmentScope && (asset.department ?? "") !== activeDepartmentScope) {
+        return false;
+      }
       if (assetStatusFilter && asset.status !== assetStatusFilter) {
         return false;
       }
@@ -1776,7 +3103,7 @@ export function App() {
     });
 
     return filtered;
-  }, [assetClassFilter, assetSearch, assetSiteFilter, assetSortMode, assetStatusFilter, assets]);
+  }, [activeDepartmentScope, assetClassFilter, assetSearch, assetSiteFilter, assetSortMode, assetStatusFilter, assets]);
   const hasAssetFilter = useMemo(
     () =>
       assetSearch.trim().length > 0
@@ -1793,20 +3120,24 @@ export function App() {
     setAssetSiteFilter("");
     setAssetSortMode("updated_desc");
   }, []);
-  const navigationItems = useMemo(
-    () => [
-      { href: "#section-scan", label: t("auth.navigation.scan") },
-      { href: "#section-discovery", label: t("auth.navigation.discovery") },
-      { href: "#section-monitoring-sources", label: t("auth.navigation.monitoringSources") },
-      { href: "#section-notifications", label: t("auth.navigation.notifications") },
-      { href: "#section-fields", label: t("auth.navigation.fields") },
-      { href: "#section-relations", label: t("auth.navigation.relations") },
-      { href: "#section-readiness", label: t("auth.navigation.readiness") },
-      { href: "#section-assets", label: t("auth.navigation.assets") },
-      ...(canAccessAdmin ? [{ href: "#section-admin", label: t("auth.navigation.admin") }] : [])
-    ],
-    [canAccessAdmin, t]
-  );
+  const navigationItems = useMemo(() => {
+    const items: Array<{ page: ConsolePage; label: string }> = [
+      { page: "overview", label: t("auth.navigation.overview") },
+      { page: "cmdb", label: t("auth.navigation.cmdb") },
+      { page: "monitoring", label: t("auth.navigation.monitoring") },
+      { page: "workflow", label: t("auth.navigation.workflow") }
+    ];
+
+    if (canAccessAdmin) {
+      items.push({ page: "admin", label: t("auth.navigation.admin") });
+    }
+
+    return items.map((item) => ({
+      href: buildConsolePageHash(item.page),
+      label: item.label,
+      active: item.page === activePage
+    }));
+  }, [activePage, canAccessAdmin, t]);
 
   if (!authSession || !authIdentity) {
     return (
@@ -1862,7 +3193,7 @@ export function App() {
       title={t("app.title")}
       subtitle={t("app.subtitle")}
       statusText={t("auth.status", { username: authIdentity.user.username, roles: roleText })}
-      modeText={t("auth.statusMode", { mode: authSession.mode })}
+      modeText={t("auth.statusMode", { mode: `${authSession.mode} | ${t(`auth.navigation.${activePage}`)}` })}
       signOutLabel={t("auth.signOut")}
       onSignOut={() => void signOut()}
       navigationItems={navigationItems}
@@ -1872,52 +3203,1166 @@ export function App() {
     >
 
       {canAccessAdmin && (
-        <SectionCard id="section-admin" title={t("auth.adminPanel.title")}>
-          <p style={{ marginTop: 0 }}>{t("auth.adminPanel.description")}</p>
+        <>
+          {visibleSections.has("section-admin") && (
+            <SectionCard id="section-admin" title={t("auth.adminPanel.title")}>
+              <p style={{ marginTop: 0 }}>{t("auth.adminPanel.description")}</p>
+            </SectionCard>
+          )}
+        </>
+      )}
+
+      {activePage !== "admin" && (
+        <SectionCard>
+          <div className="toolbar-row">
+            <button onClick={() => void Promise.all([loadAssets(), loadAssetStats()])} disabled={loadingAssets || loadingAssetStats}>
+              {loadingAssets || loadingAssetStats ? t("cmdb.actions.loading") : t("cmdb.actions.refreshAssets")}
+            </button>
+            <button onClick={() => void loadFieldDefinitions()} disabled={loadingFields}>
+              {loadingFields ? t("cmdb.actions.loading") : t("cmdb.actions.refreshFields")}
+            </button>
+            {canWriteCmdb && (
+              <button onClick={() => void createSampleAsset()} disabled={creatingSample}>
+                {creatingSample ? t("cmdb.actions.creating") : t("cmdb.actions.createSample")}
+              </button>
+            )}
+          </div>
         </SectionCard>
       )}
 
-      <SectionCard>
-        <div className="toolbar-row">
-          <button onClick={() => void loadAssets()} disabled={loadingAssets}>
-            {loadingAssets ? t("cmdb.actions.loading") : t("cmdb.actions.refreshAssets")}
-          </button>
-          <button onClick={() => void loadFieldDefinitions()} disabled={loadingFields}>
-            {loadingFields ? t("cmdb.actions.loading") : t("cmdb.actions.refreshFields")}
-          </button>
-          {canWriteCmdb && (
-            <button onClick={() => void createSampleAsset()} disabled={creatingSample}>
-              {creatingSample ? t("cmdb.actions.creating") : t("cmdb.actions.createSample")}
-            </button>
+      {activePage === "overview" && (
+      <SectionCard id="section-perspective" title={t("cmdb.perspective.title")}>
+        <div className="filter-grid">
+          <label className="control-field">
+            <span>{t("cmdb.perspective.menuAxis")}</span>
+            <select value={menuAxis} onChange={(event) => setMenuAxis(event.target.value as MenuAxis)}>
+              <option value="function">{t("cmdb.perspective.menuAxisOptions.function")}</option>
+              <option value="department">{t("cmdb.perspective.menuAxisOptions.department")}</option>
+              <option value="business">{t("cmdb.perspective.menuAxisOptions.business")}</option>
+              <option value="screen">{t("cmdb.perspective.menuAxisOptions.screen")}</option>
+            </select>
+          </label>
+          {menuAxis === "function" && (
+            <label className="control-field">
+              <span>{t("cmdb.perspective.functionWorkspace")}</span>
+              <select
+                value={functionWorkspace}
+                onChange={(event) => setFunctionWorkspace(event.target.value as FunctionWorkspace)}
+              >
+                <option value="full">{t("cmdb.perspective.functionWorkspaceOptions.full")}</option>
+                <option value="cmdb">{t("cmdb.perspective.functionWorkspaceOptions.cmdb")}</option>
+                <option value="monitoring">{t("cmdb.perspective.functionWorkspaceOptions.monitoring")}</option>
+                <option value="workflow">{t("cmdb.perspective.functionWorkspaceOptions.workflow")}</option>
+              </select>
+            </label>
+          )}
+          {menuAxis === "department" && (
+            <label className="control-field">
+              <span>{t("cmdb.perspective.departmentWorkspace")}</span>
+              <select value={departmentWorkspace} onChange={(event) => setDepartmentWorkspace(event.target.value)}>
+                {departmentWorkspaceOptions.map((item) => (
+                  <option key={`dept-workspace-${item}`} value={item}>
+                    {item === "all" ? t("cmdb.perspective.workspaceAll") : item}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {menuAxis === "business" && (
+            <label className="control-field">
+              <span>{t("cmdb.perspective.businessWorkspace")}</span>
+              <select value={businessWorkspace} onChange={(event) => setBusinessWorkspace(event.target.value)}>
+                {businessWorkspaceOptions.map((item) => (
+                  <option key={`biz-workspace-${item}`} value={item}>
+                    {item === "all" ? t("cmdb.perspective.workspaceAll") : item}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
         </div>
+        <p className="section-note">
+          {t("cmdb.perspective.summary", {
+            axis: menuAxis,
+            scope: perspectiveScopeLabel
+          })}
+        </p>
       </SectionCard>
+      )}
 
-      <SectionCard id="section-scan" title={t("cmdb.scan.title")}>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
-          <input
-            value={scanCode}
-            onChange={(event) => setScanCode(event.target.value)}
-            placeholder={t("cmdb.scan.placeholder")}
-            style={{ minWidth: "220px" }}
-          />
-          <select value={scanMode} onChange={(event) => setScanMode(event.target.value as "auto" | "qr" | "barcode")}>
-            <option value="auto">{t("cmdb.scan.modes.auto")}</option>
-            <option value="qr">{t("cmdb.scan.modes.qr")}</option>
-            <option value="barcode">{t("cmdb.scan.modes.barcode")}</option>
-          </select>
-          <button onClick={() => void findAssetByCode()} disabled={scanning}>
-            {scanning ? t("cmdb.actions.loading") : t("cmdb.scan.find")}
-          </button>
-        </div>
-        {scanResult && (
-          <p style={{ marginTop: "0.5rem" }}>
-            {t("cmdb.scan.hit")}: #{scanResult.id} {scanResult.name} ({scanResult.asset_class})
+      {visibleSections.has("section-cockpit") && (
+        <SectionCard id="section-cockpit" title={t("cmdb.cockpit.title")}>
+          <div className="detail-grid">
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.cards.assetTotal")}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{assetStats?.total_assets ?? assets.length}</p>
+              <p className="section-note">{t("cmdb.cockpit.scopeLabel", { value: perspectiveScopeLabel })}</p>
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.cards.operational")}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{cockpitOperationalAssets}</p>
+              <p className="section-note">{t("cmdb.cockpit.cards.monitored", { value: monitoringOverview?.summary.monitored_asset_total ?? 0 })}</p>
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.cards.critical")}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{cockpitCriticalAssets}</p>
+              <p className="section-note">{t("cmdb.cockpit.cards.sources", { value: monitoringOverview?.summary.source_total ?? monitoringSources.length })}</p>
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.cards.responsibility")}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>
+                {menuAxis === "department" ? selectedDepartmentAssetCount : selectedBusinessAssetCount}
+              </p>
+              <p className="section-note">
+                {menuAxis === "department"
+                  ? t("cmdb.cockpit.cards.departmentAssets")
+                  : menuAxis === "business"
+                    ? t("cmdb.cockpit.cards.businessAssets")
+                    : t("cmdb.cockpit.cards.globalAssets")}
+              </p>
+            </div>
+          </div>
+
+          <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.charts.status")}</h3>
+              {assetStatsStatusBuckets.length === 0 ? (
+                <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
+              ) : (
+                assetStatsStatusBuckets.slice(0, 6).map((bucket) => (
+                  <div key={`cockpit-status-${bucket.key}`} style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", gap: "0.5rem", marginBottom: "0.35rem", alignItems: "center" }}>
+                    <span>{bucket.label}</span>
+                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
+                      <div style={{ width: bucketBarWidth(bucket.asset_total, assetStatsStatusMax), height: "100%", background: "#1d4ed8" }} />
+                    </div>
+                    <span>{bucket.asset_total}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.charts.department")}</h3>
+              {assetStatsDepartmentBuckets.length === 0 ? (
+                <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
+              ) : (
+                assetStatsDepartmentBuckets.slice(0, 6).map((bucket) => (
+                  <div key={`cockpit-dept-${bucket.key}`} style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", gap: "0.5rem", marginBottom: "0.35rem", alignItems: "center" }}>
+                    <span>{bucket.label}</span>
+                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
+                      <div style={{ width: bucketBarWidth(bucket.asset_total, assetStatsDepartmentMax), height: "100%", background: "#0f766e" }} />
+                    </div>
+                    <span>{bucket.asset_total}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.charts.business")}</h3>
+              {assetStatsBusinessServiceBuckets.length === 0 ? (
+                <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
+              ) : (
+                assetStatsBusinessServiceBuckets.slice(0, 6).map((bucket) => (
+                  <div key={`cockpit-biz-${bucket.key}`} style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", gap: "0.5rem", marginBottom: "0.35rem", alignItems: "center" }}>
+                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bucket.label}</span>
+                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
+                      <div style={{ width: bucketBarWidth(bucket.asset_total, assetStatsBusinessServiceMax), height: "100%", background: "#be123c" }} />
+                    </div>
+                    <span>{bucket.asset_total}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+          {loadingMonitoringOverview && <p className="inline-note">{t("cmdb.cockpit.messages.loadingOverview")}</p>}
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-workflow-cockpit") && (
+        <SectionCard id="section-workflow-cockpit" title={t("cmdb.workflow.cockpit.title")}>
+          <p className="section-note">
+            {t("cmdb.workflow.cockpit.summary", {
+              requests: workflowKpis.totalRequests,
+              active: workflowKpis.activeRequests,
+              completed: workflowKpis.completedRequests,
+              failed: workflowKpis.failedRequests
+            })}
           </p>
-        )}
-      </SectionCard>
 
-      <SectionCard id="section-discovery" title={t("cmdb.discovery.title")}>
+          <div className="detail-grid">
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.totalRequests")}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.totalRequests}</p>
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.activeRequests")}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.activeRequests}</p>
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.approvalQueue")}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.approvalQueue}</p>
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.manualQueue")}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.manualQueue}</p>
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.completionRate")}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.completionRate}%</p>
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.automationShare")}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.automationShare}%</p>
+            </div>
+          </div>
+
+          <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.charts.status")}</h3>
+              {workflowStatusBuckets.length === 0 ? (
+                <p>{t("cmdb.workflow.messages.noRequests")}</p>
+              ) : (
+                workflowStatusBuckets.slice(0, 8).map((bucket) => (
+                  <div
+                    key={`workflow-status-${bucket.key}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "160px 1fr auto",
+                      gap: "0.5rem",
+                      marginBottom: "0.35rem",
+                      alignItems: "center"
+                    }}
+                  >
+                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {bucket.label}
+                    </span>
+                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
+                      <div style={{ width: bucketBarWidth(bucket.asset_total, workflowStatusMax), height: "100%", background: "#1d4ed8" }} />
+                    </div>
+                    <span>{bucket.asset_total}</span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.charts.templateUsage")}</h3>
+              {workflowTemplateUsageBuckets.length === 0 ? (
+                <p>{t("cmdb.workflow.messages.noRequests")}</p>
+              ) : (
+                workflowTemplateUsageBuckets.slice(0, 8).map((bucket) => (
+                  <div
+                    key={`workflow-template-usage-${bucket.key}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "180px 1fr auto",
+                      gap: "0.5rem",
+                      marginBottom: "0.35rem",
+                      alignItems: "center"
+                    }}
+                  >
+                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {bucket.label}
+                    </span>
+                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
+                      <div style={{ width: bucketBarWidth(bucket.asset_total, workflowTemplateUsageMax), height: "100%", background: "#0f766e" }} />
+                    </div>
+                    <span>{bucket.asset_total}</span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.charts.requesterLoad")}</h3>
+              {workflowRequesterBuckets.length === 0 ? (
+                <p>{t("cmdb.workflow.messages.noRequests")}</p>
+              ) : (
+                workflowRequesterBuckets.slice(0, 8).map((bucket) => (
+                  <div
+                    key={`workflow-requester-${bucket.key}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "160px 1fr auto",
+                      gap: "0.5rem",
+                      marginBottom: "0.35rem",
+                      alignItems: "center"
+                    }}
+                  >
+                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {bucket.label}
+                    </span>
+                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
+                      <div style={{ width: bucketBarWidth(bucket.asset_total, workflowRequesterMax), height: "100%", background: "#be123c" }} />
+                    </div>
+                    <span>{bucket.asset_total}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.charts.dailyTrend")}</h3>
+              {workflowDailyTrendMax <= 0 ? (
+                <p>{t("cmdb.workflow.cockpit.labels.noRecentData")}</p>
+              ) : (
+                <div style={{ display: "flex", gap: "0.45rem", alignItems: "end", minHeight: "168px" }}>
+                  {workflowDailyTrend.map((point) => (
+                    <div
+                      key={point.day_key}
+                      style={{ flex: "1 1 0", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.3rem" }}
+                      title={t("cmdb.workflow.cockpit.trendTooltip", {
+                        day: point.day_label,
+                        total: point.total,
+                        completed: point.completed,
+                        failed: point.failed,
+                        active: point.active
+                      })}
+                    >
+                      <div
+                        style={{
+                          position: "relative",
+                          width: "100%",
+                          maxWidth: "38px",
+                          height: "118px",
+                          background: "#e2e8f0",
+                          borderRadius: "10px",
+                          overflow: "hidden"
+                        }}
+                      >
+                        <div
+                          style={{
+                            position: "absolute",
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            height: bucketBarWidth(point.total, workflowDailyTrendMax),
+                            background: "linear-gradient(180deg, #38bdf8 0%, #1d4ed8 100%)"
+                          }}
+                        />
+                      </div>
+                      <span style={{ fontSize: "0.78rem", color: "#4f6478" }}>{point.day_label}</span>
+                      <span style={{ fontSize: "0.8rem", fontWeight: 600 }}>{point.total}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.charts.executionQuality")}</h3>
+              <p className="section-note">
+                {t("cmdb.workflow.cockpit.executionSummary", {
+                  avgExecution: workflowKpis.averageExecutionMs,
+                  successRate: workflowKpis.executionSuccessRate,
+                  sampleSize: workflowKpis.executionSampleSize
+                })}
+              </p>
+              <div className="toolbar-row">
+                <span className="status-chip status-chip-success">
+                  {t("cmdb.workflow.cockpit.labels.completed")}: {workflowKpis.completedRequests}
+                </span>
+                <span className="status-chip status-chip-danger">
+                  {t("cmdb.workflow.cockpit.labels.failed")}: {workflowKpis.failedRequests}
+                </span>
+                <span className="status-chip">
+                  {t("cmdb.workflow.cockpit.labels.active")}: {workflowKpis.activeRequests}
+                </span>
+              </div>
+              <div className="toolbar-row" style={{ marginTop: "0.35rem" }}>
+                <span className="status-chip">
+                  {t("cmdb.workflow.cockpit.labels.avgExecution")}: {workflowKpis.averageExecutionMs} ms
+                </span>
+                <span className="status-chip">
+                  {t("cmdb.workflow.cockpit.labels.executionSuccessRate")}: {workflowKpis.executionSuccessRate}%
+                </span>
+                <span className="status-chip">
+                  {t("cmdb.workflow.cockpit.labels.sampleSize")}: {workflowKpis.executionSampleSize}
+                </span>
+              </div>
+            </div>
+          </div>
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-workflow-reports") && (
+        <SectionCard
+          id="section-workflow-reports"
+          title={t("cmdb.workflow.reports.title")}
+          actions={(
+            <div className="toolbar-row">
+              <button onClick={() => exportWorkflowReportCsv()}>{t("cmdb.workflow.reports.actions.exportCsv")}</button>
+              <button
+                onClick={() => {
+                  setWorkflowReportRangeDays("30");
+                  setWorkflowReportStatusFilter("all");
+                  setWorkflowReportTemplateFilter("all");
+                  setWorkflowReportRequesterFilter("");
+                }}
+              >
+                {t("cmdb.workflow.reports.actions.resetFilters")}
+              </button>
+            </div>
+          )}
+        >
+          <div className="filter-grid">
+            <label className="control-field">
+              <span>{t("cmdb.workflow.reports.filters.rangeDaysLabel")}</span>
+              <select value={workflowReportRangeDays} onChange={(event) => setWorkflowReportRangeDays(event.target.value)}>
+                <option value="7">{t("cmdb.workflow.reports.filters.rangeOptions.7")}</option>
+                <option value="30">{t("cmdb.workflow.reports.filters.rangeOptions.30")}</option>
+                <option value="90">{t("cmdb.workflow.reports.filters.rangeOptions.90")}</option>
+              </select>
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.workflow.reports.filters.statusLabel")}</span>
+              <select
+                value={workflowReportStatusFilter}
+                onChange={(event) => setWorkflowReportStatusFilter(event.target.value)}
+              >
+                <option value="all">{t("cmdb.workflow.reports.filters.statusAll")}</option>
+                {workflowReportStatusOptions.map((status) => (
+                  <option key={`workflow-report-status-${status}`} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.workflow.reports.filters.templateLabel")}</span>
+              <select
+                value={workflowReportTemplateFilter}
+                onChange={(event) => setWorkflowReportTemplateFilter(event.target.value)}
+              >
+                <option value="all">{t("cmdb.workflow.reports.filters.templateAll")}</option>
+                {workflowReportTemplateOptions.map((templateName) => (
+                  <option key={`workflow-report-template-${templateName}`} value={templateName}>
+                    {templateName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.workflow.reports.filters.requesterLabel")}</span>
+              <input
+                value={workflowReportRequesterFilter}
+                onChange={(event) => setWorkflowReportRequesterFilter(event.target.value)}
+                placeholder={t("cmdb.workflow.reports.filters.requesterPlaceholder")}
+              />
+            </label>
+          </div>
+
+          <p className="section-note">
+            {t("cmdb.workflow.reports.summary", {
+              total: workflowReportSummary.total,
+              completed: workflowReportSummary.completed,
+              failed: workflowReportSummary.failed,
+              active: workflowReportSummary.active,
+              completionRate: workflowReportSummary.completionRate,
+              failureRate: workflowReportSummary.failureRate
+            })}
+          </p>
+
+          <div className="detail-grid">
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.reports.charts.statusDistribution")}</h3>
+              {workflowReportStatusBuckets.length === 0 ? (
+                <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
+              ) : (
+                workflowReportStatusBuckets.map((bucket) => (
+                  <div
+                    key={`workflow-report-status-${bucket.key}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "160px 1fr auto",
+                      gap: "0.5rem",
+                      marginBottom: "0.35rem",
+                      alignItems: "center"
+                    }}
+                  >
+                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {bucket.label}
+                    </span>
+                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
+                      <div style={{ width: bucketBarWidth(bucket.asset_total, workflowReportStatusMax), height: "100%", background: "#0f766e" }} />
+                    </div>
+                    <span>{bucket.asset_total}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.reports.charts.templateDistribution")}</h3>
+              {workflowReportTemplateBuckets.length === 0 ? (
+                <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
+              ) : (
+                workflowReportTemplateBuckets.slice(0, 10).map((bucket) => (
+                  <div
+                    key={`workflow-report-template-${bucket.key}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "180px 1fr auto",
+                      gap: "0.5rem",
+                      marginBottom: "0.35rem",
+                      alignItems: "center"
+                    }}
+                  >
+                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {bucket.label}
+                    </span>
+                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
+                      <div style={{ width: bucketBarWidth(bucket.asset_total, workflowReportTemplateMax), height: "100%", background: "#1d4ed8" }} />
+                    </div>
+                    <span>{bucket.asset_total}</span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.reports.charts.dailyTrend")}</h3>
+              {workflowReportDailyTrendMax <= 0 ? (
+                <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
+              ) : (
+                <div style={{ display: "flex", gap: "0.45rem", alignItems: "end", minHeight: "176px", overflowX: "auto", paddingBottom: "0.35rem" }}>
+                  {workflowReportDailyTrend.map((point) => (
+                    <div
+                      key={`workflow-report-trend-${point.day_key}`}
+                      style={{ flex: "0 0 34px", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.3rem" }}
+                      title={t("cmdb.workflow.cockpit.trendTooltip", {
+                        day: point.day_label,
+                        total: point.total,
+                        completed: point.completed,
+                        failed: point.failed,
+                        active: point.active
+                      })}
+                    >
+                      <div
+                        style={{
+                          position: "relative",
+                          width: "100%",
+                          height: "120px",
+                          background: "#e2e8f0",
+                          borderRadius: "8px",
+                          overflow: "hidden"
+                        }}
+                      >
+                        <div
+                          style={{
+                            position: "absolute",
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            height: bucketBarWidth(point.total, workflowReportDailyTrendMax),
+                            background: "linear-gradient(180deg, #7dd3fc 0%, #1d4ed8 100%)"
+                          }}
+                        />
+                        {point.total > 0 && (
+                          <>
+                            <div
+                              style={{
+                                position: "absolute",
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                height: `${(point.failed / point.total) * Number.parseFloat(bucketBarWidth(point.total, workflowReportDailyTrendMax))}%`,
+                                background: "rgba(190, 24, 93, 0.75)"
+                              }}
+                            />
+                            <div
+                              style={{
+                                position: "absolute",
+                                left: 0,
+                                right: 0,
+                                bottom: `${(point.failed / point.total) * Number.parseFloat(bucketBarWidth(point.total, workflowReportDailyTrendMax))}%`,
+                                height: `${(point.completed / point.total) * Number.parseFloat(bucketBarWidth(point.total, workflowReportDailyTrendMax))}%`,
+                                background: "rgba(15, 118, 110, 0.78)"
+                              }}
+                            />
+                          </>
+                        )}
+                      </div>
+                      <span style={{ fontSize: "0.72rem", color: "#4f6478" }}>{point.day_label}</span>
+                      <span style={{ fontSize: "0.75rem", fontWeight: 600 }}>{point.total}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="inline-note">
+                {t("cmdb.workflow.reports.executionSummary", {
+                  avgExecution: workflowReportExecutionStats.averageDurationMs,
+                  successRate: workflowReportExecutionStats.successRate,
+                  sampleSize: workflowReportExecutionStats.sampleSize,
+                  automationShare: workflowReportExecutionStats.automationShare
+                })}
+              </p>
+            </div>
+          </div>
+
+          <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.reports.charts.templateRanking")}</h3>
+              {workflowTemplateTrendRanks.length === 0 ? (
+                <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", minWidth: "920px", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.name")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.thisWeek")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.lastWeek")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.weekDelta")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.thisMonth")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.lastMonth")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.monthDelta")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {workflowTemplateTrendRanks.slice(0, 8).map((item) => (
+                        <tr key={`workflow-rank-template-${item.key}`}>
+                          <td style={cellStyle}>{item.label}</td>
+                          <td style={cellStyle}>{item.week_current}</td>
+                          <td style={cellStyle}>{item.week_previous}</td>
+                          <td style={cellStyle}>{formatSignedDelta(item.week_delta)}</td>
+                          <td style={cellStyle}>{item.month_current}</td>
+                          <td style={cellStyle}>{item.month_previous}</td>
+                          <td style={cellStyle}>{formatSignedDelta(item.month_delta)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="detail-panel">
+              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.reports.charts.requesterRanking")}</h3>
+              {workflowRequesterTrendRanks.length === 0 ? (
+                <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", minWidth: "920px", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.name")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.thisWeek")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.lastWeek")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.weekDelta")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.thisMonth")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.lastMonth")}</th>
+                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.monthDelta")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {workflowRequesterTrendRanks.slice(0, 8).map((item) => (
+                        <tr key={`workflow-rank-requester-${item.key}`}>
+                          <td style={cellStyle}>{item.label}</td>
+                          <td style={cellStyle}>{item.week_current}</td>
+                          <td style={cellStyle}>{item.week_previous}</td>
+                          <td style={cellStyle}>{formatSignedDelta(item.week_delta)}</td>
+                          <td style={cellStyle}>{item.month_current}</td>
+                          <td style={cellStyle}>{item.month_previous}</td>
+                          <td style={cellStyle}>{formatSignedDelta(item.month_delta)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <h3 style={{ ...subSectionTitleStyle, marginTop: "0.9rem" }}>{t("cmdb.workflow.reports.table.title")}</h3>
+          {workflowReportRows.length === 0 ? (
+            <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "1180px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.id")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.template")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.requester")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.status")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.createdAt")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.updatedAt")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.lastError")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workflowReportRows.slice(0, 200).map((item) => (
+                    <tr key={`workflow-report-row-${item.id}`}>
+                      <td style={cellStyle}>#{item.id}</td>
+                      <td style={cellStyle}>{workflowTemplateDisplayName(item)}</td>
+                      <td style={cellStyle}>{item.requester}</td>
+                      <td style={cellStyle}>
+                        <span className={statusChipClass(item.status)}>{item.status}</span>
+                      </td>
+                      <td style={cellStyle}>{new Date(item.created_at).toLocaleString()}</td>
+                      <td style={cellStyle}>{new Date(item.updated_at).toLocaleString()}</td>
+                      <td style={cellStyle}>{item.last_error ?? "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-workflow") && (
+        <SectionCard id="section-workflow" title={t("cmdb.workflow.title")}>
+          <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
+            <button onClick={() => void loadWorkflowTemplates()} disabled={loadingWorkflowTemplates}>
+              {loadingWorkflowTemplates ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.refreshTemplates")}
+            </button>
+            <button onClick={() => void loadWorkflowRequests()} disabled={loadingWorkflowRequests}>
+              {loadingWorkflowRequests ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.refreshRequests")}
+            </button>
+            {selectedWorkflowRequest && (
+              <button
+                onClick={() => void loadWorkflowLogs(selectedWorkflowRequest.id)}
+                disabled={loadingWorkflowLogs}
+              >
+                {loadingWorkflowLogs ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.refreshLogs")}
+              </button>
+            )}
+          </div>
+
+          {workflowNotice && <p className="banner banner-success">{workflowNotice}</p>}
+          <p className="section-note">
+            {t("cmdb.workflow.summary", {
+              templates: workflowTemplates.length,
+              requests: workflowRequests.length
+            })}
+          </p>
+          {!canWriteCmdb && <p className="inline-note">{t("cmdb.workflow.messages.readOnlyHint")}</p>}
+
+          <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.templatesTitle")}</h3>
+          {canWriteCmdb && (
+            <>
+              <div className="form-grid" style={{ marginBottom: "0.75rem" }}>
+                <label className="control-field">
+                  <span>{t("cmdb.workflow.form.templateName")}</span>
+                  <input
+                    value={newWorkflowTemplateName}
+                    onChange={(event) => setNewWorkflowTemplateName(event.target.value)}
+                    placeholder={t("cmdb.workflow.form.templateNamePlaceholder")}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.workflow.form.templateDescription")}</span>
+                  <input
+                    value={newWorkflowTemplateDescription}
+                    onChange={(event) => setNewWorkflowTemplateDescription(event.target.value)}
+                    placeholder={t("cmdb.workflow.form.templateDescriptionPlaceholder")}
+                  />
+                </label>
+              </div>
+
+              <div className="form-grid" style={{ marginBottom: "0.75rem" }}>
+                <label className="control-field">
+                  <span>{t("cmdb.workflow.form.stepId")}</span>
+                  <input
+                    value={newWorkflowStep.id}
+                    onChange={(event) =>
+                      setNewWorkflowStep((prev) => ({
+                        ...prev,
+                        id: event.target.value
+                      }))
+                    }
+                    placeholder="apply-patch"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.workflow.form.stepName")}</span>
+                  <input
+                    value={newWorkflowStep.name}
+                    onChange={(event) =>
+                      setNewWorkflowStep((prev) => ({
+                        ...prev,
+                        name: event.target.value
+                      }))
+                    }
+                    placeholder={t("cmdb.workflow.form.stepNamePlaceholder")}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.workflow.form.stepKind")}</span>
+                  <select
+                    value={newWorkflowStep.kind}
+                    onChange={(event) =>
+                      setNewWorkflowStep((prev) => ({
+                        ...prev,
+                        kind: event.target.value as WorkflowStepKind
+                      }))
+                    }
+                  >
+                    <option value="script">script</option>
+                    <option value="manual">manual</option>
+                    <option value="approval">approval</option>
+                  </select>
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.workflow.form.timeoutSeconds")}</span>
+                  <input
+                    value={newWorkflowStep.timeout_seconds}
+                    onChange={(event) =>
+                      setNewWorkflowStep((prev) => ({
+                        ...prev,
+                        timeout_seconds: event.target.value
+                      }))
+                    }
+                    placeholder="300"
+                    disabled={newWorkflowStep.kind !== "script"}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.workflow.form.approverGroup")}</span>
+                  <input
+                    value={newWorkflowStep.approver_group}
+                    onChange={(event) =>
+                      setNewWorkflowStep((prev) => ({
+                        ...prev,
+                        approver_group: event.target.value
+                      }))
+                    }
+                    placeholder="ops-lead"
+                    disabled={newWorkflowStep.kind === "script"}
+                  />
+                </label>
+              </div>
+              <div style={{ marginBottom: "0.75rem" }}>
+                <label className="control-field">
+                  <span>{t("cmdb.workflow.form.stepScript")}</span>
+                  <textarea
+                    value={newWorkflowStep.script}
+                    onChange={(event) =>
+                      setNewWorkflowStep((prev) => ({
+                        ...prev,
+                        script: event.target.value
+                      }))
+                    }
+                    rows={4}
+                    style={{ width: "100%" }}
+                    placeholder="echo 'run automation...'"
+                    disabled={newWorkflowStep.kind !== "script"}
+                  />
+                </label>
+              </div>
+              <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={newWorkflowStep.auto_run}
+                    onChange={(event) =>
+                      setNewWorkflowStep((prev) => ({
+                        ...prev,
+                        auto_run: event.target.checked
+                      }))
+                    }
+                    disabled={newWorkflowStep.kind !== "script"}
+                  />{" "}
+                  {t("cmdb.workflow.form.autoRun")}
+                </label>
+                <button onClick={() => addWorkflowStepToDraft()}>
+                  {t("cmdb.workflow.actions.addStep")}
+                </button>
+                <button onClick={() => void createWorkflowTemplate()} disabled={creatingWorkflowTemplate}>
+                  {creatingWorkflowTemplate ? t("cmdb.actions.creating") : t("cmdb.workflow.actions.createTemplate")}
+                </button>
+              </div>
+            </>
+          )}
+
+          {newWorkflowTemplateSteps.length > 0 && (
+            <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.step.id")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.step.name")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.step.kind")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.step.autoRun")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.step.timeout")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.step.script")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.step.approver")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.step.actions")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {newWorkflowTemplateSteps.map((step) => (
+                    <tr key={`draft-step-${step.id}`}>
+                      <td style={cellStyle}>{step.id}</td>
+                      <td style={cellStyle}>{step.name}</td>
+                      <td style={cellStyle}>{step.kind}</td>
+                      <td style={cellStyle}>{step.auto_run ? "Yes" : "No"}</td>
+                      <td style={cellStyle}>{step.timeout_seconds}</td>
+                      <td style={cellStyle}>{step.kind === "script" ? truncateTopologyLabel(step.script, 72) : "-"}</td>
+                      <td style={cellStyle}>{step.approver_group || "-"}</td>
+                      <td style={cellStyle}>
+                        <button onClick={() => removeWorkflowStepFromDraft(step.id)}>
+                          {t("cmdb.workflow.actions.removeStep")}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {loadingWorkflowTemplates && workflowTemplates.length === 0 ? (
+            <p>{t("cmdb.workflow.messages.loadingTemplates")}</p>
+          ) : workflowTemplates.length === 0 ? (
+            <p>{t("cmdb.workflow.messages.noTemplates")}</p>
+          ) : (
+            <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "1100px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.template.id")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.template.name")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.template.steps")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.template.enabled")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.template.updatedAt")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workflowTemplates.map((template) => (
+                    <tr key={template.id}>
+                      <td style={cellStyle}>{template.id}</td>
+                      <td style={cellStyle}>{template.name}</td>
+                      <td style={cellStyle}>{template.definition.steps.length}</td>
+                      <td style={cellStyle}>{template.is_enabled ? "Yes" : "No"}</td>
+                      <td style={cellStyle}>{new Date(template.updated_at).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.requestsTitle")}</h3>
+          {canWriteCmdb && (
+            <div className="form-grid" style={{ marginBottom: "0.75rem" }}>
+              <label className="control-field">
+                <span>{t("cmdb.workflow.form.requestTemplate")}</span>
+                <select
+                  value={newWorkflowRequest.template_id}
+                  onChange={(event) =>
+                    setNewWorkflowRequest((prev) => ({
+                      ...prev,
+                      template_id: event.target.value
+                    }))
+                  }
+                >
+                  <option value="">{t("cmdb.workflow.form.selectTemplate")}</option>
+                  {workflowTemplates.map((template) => (
+                    <option key={`workflow-template-${template.id}`} value={template.id}>
+                      #{template.id} {template.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="control-field">
+                <span>{t("cmdb.workflow.form.requestTitle")}</span>
+                <input
+                  value={newWorkflowRequest.title}
+                  onChange={(event) =>
+                    setNewWorkflowRequest((prev) => ({
+                      ...prev,
+                      title: event.target.value
+                    }))
+                  }
+                  placeholder={t("cmdb.workflow.form.requestTitlePlaceholder")}
+                />
+              </label>
+              <label className="control-field">
+                <span>{t("cmdb.workflow.form.requestPayload")}</span>
+                <input
+                  value={newWorkflowRequest.payload_json}
+                  onChange={(event) =>
+                    setNewWorkflowRequest((prev) => ({
+                      ...prev,
+                      payload_json: event.target.value
+                    }))
+                  }
+                  placeholder='{"asset_id": 101}'
+                />
+              </label>
+              <div className="toolbar-row" style={{ alignSelf: "end" }}>
+                <button onClick={() => void createWorkflowRequest()} disabled={creatingWorkflowRequest}>
+                  {creatingWorkflowRequest ? t("cmdb.actions.creating") : t("cmdb.workflow.actions.createRequest")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {loadingWorkflowRequests && workflowRequests.length === 0 ? (
+            <p>{t("cmdb.workflow.messages.loadingRequests")}</p>
+          ) : workflowRequests.length === 0 ? (
+            <p>{t("cmdb.workflow.messages.noRequests")}</p>
+          ) : (
+            <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "1380px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.request.id")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.request.template")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.request.title")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.request.status")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.request.stepIndex")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.request.requester")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.request.lastError")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.request.updatedAt")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.request.actions")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workflowRequests.map((request) => (
+                    <tr key={request.id}>
+                      <td style={cellStyle}>{request.id}</td>
+                      <td style={cellStyle}>#{request.template_id} {request.template_name}</td>
+                      <td style={cellStyle}>{request.title}</td>
+                      <td style={cellStyle}>
+                        <span className={statusChipClass(request.status)}>{request.status}</span>
+                      </td>
+                      <td style={cellStyle}>{request.current_step_index}</td>
+                      <td style={cellStyle}>{request.requester}</td>
+                      <td style={cellStyle}>{request.last_error ?? "-"}</td>
+                      <td style={cellStyle}>{new Date(request.updated_at).toLocaleString()}</td>
+                      <td style={cellStyle}>
+                        <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+                          <button
+                            onClick={() => {
+                              setSelectedWorkflowRequestId(String(request.id));
+                              void loadWorkflowLogs(request.id);
+                            }}
+                          >
+                            {t("cmdb.workflow.actions.viewLogs")}
+                          </button>
+                          <button
+                            onClick={() => void approveWorkflowRequest(request.id)}
+                            disabled={approvingWorkflowRequestId === request.id || request.status !== "pending_approval"}
+                          >
+                            {approvingWorkflowRequestId === request.id ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.approve")}
+                          </button>
+                          <button
+                            onClick={() => void rejectWorkflowRequest(request.id)}
+                            disabled={rejectingWorkflowRequestId === request.id || request.status !== "pending_approval"}
+                          >
+                            {rejectingWorkflowRequestId === request.id ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.reject")}
+                          </button>
+                          <button
+                            onClick={() => void executeWorkflowRequest(request.id)}
+                            disabled={
+                              executingWorkflowRequestId === request.id
+                              || (request.status !== "approved" && request.status !== "running")
+                            }
+                          >
+                            {executingWorkflowRequestId === request.id ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.execute")}
+                          </button>
+                          <button
+                            onClick={() => void completeWorkflowManualStep(request.id)}
+                            disabled={manualCompletingWorkflowRequestId === request.id || request.status !== "waiting_manual"}
+                          >
+                            {manualCompletingWorkflowRequestId === request.id
+                              ? t("cmdb.actions.loading")
+                              : t("cmdb.workflow.actions.completeManual")}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.logsTitle")}</h3>
+          {!selectedWorkflowRequest ? (
+            <p>{t("cmdb.workflow.messages.selectRequest")}</p>
+          ) : loadingWorkflowLogs && workflowLogs.length === 0 ? (
+            <p>{t("cmdb.workflow.messages.loadingLogs")}</p>
+          ) : workflowLogs.length === 0 ? (
+            <p>{t("cmdb.workflow.messages.noLogs")}</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "1350px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.log.id")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.log.step")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.log.kind")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.log.status")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.log.executor")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.log.exitCode")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.log.duration")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.log.output")}</th>
+                    <th style={cellStyle}>{t("cmdb.workflow.table.log.time")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workflowLogs.map((log) => (
+                    <tr key={`workflow-log-${log.id}`}>
+                      <td style={cellStyle}>{log.id}</td>
+                      <td style={cellStyle}>
+                        #{log.step_index} {log.step_id} / {log.step_name}
+                      </td>
+                      <td style={cellStyle}>{log.step_kind}</td>
+                      <td style={cellStyle}>
+                        <span className={statusChipClass(log.status)}>{log.status}</span>
+                      </td>
+                      <td style={cellStyle}>{log.executor ?? "-"}</td>
+                      <td style={cellStyle}>{log.exit_code ?? "-"}</td>
+                      <td style={cellStyle}>{log.duration_ms ?? "-"}</td>
+                      <td style={cellStyle}>
+                        <pre style={{ margin: 0, maxWidth: "420px", maxHeight: "120px", overflow: "auto", whiteSpace: "pre-wrap" }}>
+                          {truncateTopologyLabel(log.output ?? log.error ?? "-", 3000)}
+                        </pre>
+                      </td>
+                      <td style={cellStyle}>
+                        {log.finished_at ? new Date(log.finished_at).toLocaleString() : (log.created_at ? new Date(log.created_at).toLocaleString() : "-")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-scan") && (
+        <SectionCard id="section-scan" title={t("cmdb.scan.title")}>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              value={scanCode}
+              onChange={(event) => setScanCode(event.target.value)}
+              placeholder={t("cmdb.scan.placeholder")}
+              style={{ minWidth: "220px" }}
+            />
+            <select value={scanMode} onChange={(event) => setScanMode(event.target.value as "auto" | "qr" | "barcode")}>
+              <option value="auto">{t("cmdb.scan.modes.auto")}</option>
+              <option value="qr">{t("cmdb.scan.modes.qr")}</option>
+              <option value="barcode">{t("cmdb.scan.modes.barcode")}</option>
+            </select>
+            <button onClick={() => void findAssetByCode()} disabled={scanning}>
+              {scanning ? t("cmdb.actions.loading") : t("cmdb.scan.find")}
+            </button>
+          </div>
+          {scanResult && (
+            <p style={{ marginTop: "0.5rem" }}>
+              {t("cmdb.scan.hit")}: #{scanResult.id} {scanResult.name} ({scanResult.asset_class})
+            </p>
+          )}
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-discovery") && (
+        <SectionCard id="section-discovery" title={t("cmdb.discovery.title")}>
         <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
           <button onClick={() => void loadDiscoveryJobs()} disabled={loadingDiscoveryJobs}>
             {loadingDiscoveryJobs ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.refreshJobs")}
@@ -2039,9 +4484,11 @@ export function App() {
             </table>
           </div>
         )}
-      </SectionCard>
+        </SectionCard>
+      )}
 
-      <SectionCard id="section-monitoring-sources" title={t("cmdb.monitoringSources.title")}>
+      {visibleSections.has("section-monitoring-sources") && (
+        <SectionCard id="section-monitoring-sources" title={t("cmdb.monitoringSources.title")}>
         <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
           <button onClick={() => void loadMonitoringSources(monitoringSourceFilters)} disabled={loadingMonitoringSources}>
             {loadingMonitoringSources
@@ -2364,9 +4811,107 @@ export function App() {
             </table>
           </div>
         )}
-      </SectionCard>
+        </SectionCard>
+      )}
 
-      <SectionCard id="section-notifications" title={t("cmdb.notifications.title")}>
+      {visibleSections.has("section-monitoring-metrics") && (
+        <SectionCard id="section-monitoring-metrics" title={t("cmdb.monitoringMetrics.title")}>
+        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "flex-end", marginBottom: "0.75rem" }}>
+          <label className="control-field" style={{ minWidth: "220px" }}>
+            <span>{t("cmdb.monitoringMetrics.filters.assetLabel")}</span>
+            <select value={selectedAssetId} onChange={(event) => setSelectedAssetId(event.target.value)}>
+              <option value="">{t("cmdb.monitoringMetrics.filters.selectAsset")}</option>
+              {assets.map((asset) => (
+                <option key={asset.id} value={asset.id}>
+                  #{asset.id} {asset.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="control-field" style={{ minWidth: "170px" }}>
+            <span>{t("cmdb.monitoringMetrics.filters.windowLabel")}</span>
+            <select
+              value={monitoringMetricsWindowMinutes}
+              onChange={(event) => setMonitoringMetricsWindowMinutes(event.target.value)}
+            >
+              <option value="30">30m</option>
+              <option value="60">60m</option>
+              <option value="180">180m</option>
+              <option value="360">360m</option>
+            </select>
+          </label>
+          <button
+            onClick={() => {
+              const assetId = Number.parseInt(selectedAssetId, 10);
+              if (!Number.isFinite(assetId) || assetId <= 0) {
+                return;
+              }
+              void loadMonitoringMetrics(assetId, monitoringMetricsWindowValue);
+            }}
+            disabled={loadingMonitoringMetrics || !selectedAssetId}
+          >
+            {loadingMonitoringMetrics ? t("cmdb.actions.loading") : t("cmdb.monitoringMetrics.actions.refresh")}
+          </button>
+        </div>
+
+        {!selectedAssetId ? (
+          <p>{t("cmdb.monitoringMetrics.messages.selectAsset")}</p>
+        ) : loadingMonitoringMetrics && !monitoringMetrics ? (
+          <p>{t("cmdb.monitoringMetrics.messages.loading")}</p>
+        ) : monitoringMetricsError ? (
+          <p className="inline-note">
+            {t("cmdb.monitoringMetrics.messages.error", { error: monitoringMetricsError })}
+          </p>
+        ) : !monitoringMetrics ? (
+          <p>{t("cmdb.monitoringMetrics.messages.noData")}</p>
+        ) : (
+          <>
+            <p className="section-note">
+              {t("cmdb.monitoringMetrics.summary", {
+                asset: monitoringMetrics.asset_name,
+                host: monitoringMetrics.host_id,
+                source: monitoringMetrics.source.name,
+                window: monitoringMetrics.window_minutes
+              })}
+            </p>
+
+            <div className="detail-grid">
+              {monitoringMetrics.series.map((series) => (
+                <div key={series.metric} className="detail-panel">
+                  <h3 style={subSectionTitleStyle}>{series.label}</h3>
+                  <p className="section-note">
+                    {t("cmdb.monitoringMetrics.latest", {
+                      value: series.latest ? formatMetricValue(series.latest.value, series.unit) : "-",
+                      time: series.latest ? new Date(series.latest.timestamp).toLocaleString() : "-"
+                    })}
+                  </p>
+                  {series.note && <p className="inline-note">{series.note}</p>}
+                  {series.points.length === 0 ? (
+                    <p>{t("cmdb.monitoringMetrics.messages.emptySeries")}</p>
+                  ) : (
+                    <div style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.35rem" }}>
+                      <svg viewBox="0 0 320 120" style={{ width: "100%", height: "120px", display: "block" }} aria-label={series.label}>
+                        <line x1="12" y1="12" x2="12" y2="108" stroke="#cbd5e1" strokeWidth="1" />
+                        <line x1="12" y1="108" x2="308" y2="108" stroke="#cbd5e1" strokeWidth="1" />
+                        <polyline
+                          fill="none"
+                          stroke="#2563eb"
+                          strokeWidth="2"
+                          points={buildMetricPolylinePoints(series.points, 320, 120, 12)}
+                        />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-notifications") && (
+        <SectionCard id="section-notifications" title={t("cmdb.notifications.title")}>
         <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
           <button onClick={() => void loadNotificationChannels()} disabled={loadingNotificationChannels}>
             {loadingNotificationChannels ? t("cmdb.actions.loading") : t("cmdb.notifications.actions.refreshChannels")}
@@ -2648,9 +5193,11 @@ export function App() {
             </table>
           </div>
         )}
-      </SectionCard>
+        </SectionCard>
+      )}
 
-      <SectionCard id="section-fields" title={t("cmdb.fields.title")}>
+      {visibleSections.has("section-fields") && (
+        <SectionCard id="section-fields" title={t("cmdb.fields.title")}>
         {canWriteCmdb ? (
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
             <input
@@ -2747,21 +5294,23 @@ export function App() {
             </table>
           </div>
         )}
-      </SectionCard>
+        </SectionCard>
+      )}
 
-      <SectionCard
-        id="section-relations"
-        title={t("cmdb.relations.title")}
-        actions={
-          selectedAsset
-            ? (
-              <span className="section-meta">
-                {t("cmdb.relations.selectedAsset", { id: selectedAsset.id, name: selectedAsset.name })}
-              </span>
-            )
-            : undefined
-        }
-      >
+      {visibleSections.has("section-relations") && (
+        <SectionCard
+          id="section-relations"
+          title={t("cmdb.relations.title")}
+          actions={
+            selectedAsset
+              ? (
+                <span className="section-meta">
+                  {t("cmdb.relations.selectedAsset", { id: selectedAsset.id, name: selectedAsset.name })}
+                </span>
+              )
+              : undefined
+          }
+        >
         {emptyState ? (
           <p>{t("cmdb.relations.messages.noAssets")}</p>
         ) : (
@@ -2898,13 +5447,15 @@ export function App() {
             )}
           </>
         )}
-      </SectionCard>
+        </SectionCard>
+      )}
 
-      <SectionCard
-        id="section-readiness"
-        title={t("cmdb.assetDetail.title")}
-        actions={selectedAsset ? <span className="section-meta">#{selectedAsset.id} {selectedAsset.name}</span> : undefined}
-      >
+      {visibleSections.has("section-readiness") && (
+        <SectionCard
+          id="section-readiness"
+          title={t("cmdb.assetDetail.title")}
+          actions={selectedAsset ? <span className="section-meta">#{selectedAsset.id} {selectedAsset.name}</span> : undefined}
+        >
         {emptyState ? (
           <p>{t("cmdb.assetDetail.messages.noAssets")}</p>
         ) : !selectedAsset ? (
@@ -2919,10 +5470,11 @@ export function App() {
                     return;
                   }
                   const depth = parseImpactDepth(impactDepth) ?? 4;
+                  const relationTypes = parseImpactRelationTypesInput(impactRelationTypesInput);
                   void Promise.all([
                     loadAssetBindings(assetId),
                     loadAssetMonitoring(assetId),
-                    loadAssetImpact(assetId, impactDirection, depth)
+                    loadAssetImpact(assetId, impactDirection, depth, relationTypes)
                   ]);
                 }}
                 disabled={loadingAssetBindings || loadingAssetMonitoring || loadingAssetImpact}
@@ -3198,17 +5750,335 @@ export function App() {
             </div>
           </>
         )}
-      </SectionCard>
+        </SectionCard>
+      )}
 
-      <SectionCard
-        id="section-assets"
-        title={t("cmdb.assets.title")}
-        actions={(
-          <button onClick={resetAssetFilters} disabled={!hasAssetFilter}>
-            {t("cmdb.assets.actions.resetFilters")}
-          </button>
+      {visibleSections.has("section-topology") && (
+        <SectionCard id="section-topology" title={t("cmdb.topology.title")}>
+        {emptyState ? (
+          <p>{t("cmdb.topology.messages.noAssets")}</p>
+        ) : (
+          <>
+            <div className="filter-grid" style={{ marginBottom: "0.75rem" }}>
+              <label className="control-field">
+                <span>{t("cmdb.topology.filters.asset")}</span>
+                <select value={selectedAssetId} onChange={(event) => setSelectedAssetId(event.target.value)}>
+                  <option value="">{t("cmdb.topology.filters.selectAsset")}</option>
+                  {assets.map((asset) => (
+                    <option key={asset.id} value={asset.id}>
+                      #{asset.id} {asset.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="control-field">
+                <span>{t("cmdb.topology.filters.direction")}</span>
+                <select value={impactDirection} onChange={(event) => setImpactDirection(event.target.value as ImpactDirection)}>
+                  <option value="downstream">downstream</option>
+                  <option value="upstream">upstream</option>
+                  <option value="both">both</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>{t("cmdb.topology.filters.depth")}</span>
+                <input value={impactDepth} onChange={(event) => setImpactDepth(event.target.value)} />
+              </label>
+              <label className="control-field">
+                <span>{t("cmdb.topology.filters.relationTypes")}</span>
+                <input
+                  value={impactRelationTypesInput}
+                  onChange={(event) => setImpactRelationTypesInput(event.target.value)}
+                  placeholder="contains,depends_on,runs_service,owned_by"
+                />
+              </label>
+            </div>
+            <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
+              <button onClick={() => void refreshImpact()} disabled={loadingAssetImpact || !selectedAssetId}>
+                {loadingAssetImpact ? t("cmdb.actions.loading") : t("cmdb.topology.actions.refresh")}
+              </button>
+              {assetImpact && (
+                <span className="section-meta">
+                  {t("cmdb.topology.summary", {
+                    root: `${assetImpact.root_asset_id}`,
+                    nodes: assetImpact.nodes.length,
+                    edges: assetImpact.edges.length,
+                    depth: assetImpact.depth_limit,
+                    direction: assetImpact.direction
+                  })}
+                </span>
+              )}
+            </div>
+            <p className="section-note">
+              {t("cmdb.topology.filters.activeRelationTypes", {
+                value: impactRelationTypes.join(", ")
+              })}
+            </p>
+
+            {!selectedAssetId ? (
+              <p>{t("cmdb.topology.messages.selectAsset")}</p>
+            ) : loadingAssetImpact && !assetImpact ? (
+              <p>{t("cmdb.topology.messages.loading")}</p>
+            ) : !assetImpact ? (
+              <p>{t("cmdb.topology.messages.noData")}</p>
+            ) : (
+              <>
+                <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.5rem" }}>
+                  <svg viewBox="0 0 980 540" style={{ width: "100%", minWidth: "780px", height: "540px", display: "block", background: "linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)", borderRadius: "8px" }}>
+                    {assetImpact.edges.map((edge) => {
+                      const src = topologyNodePositions.get(edge.src_asset_id);
+                      const dst = topologyNodePositions.get(edge.dst_asset_id);
+                      if (!src || !dst) {
+                        return null;
+                      }
+                      const meta = topologyEdgeRenderMeta.get(topologyEdgeKey(edge)) ?? { index: 0, total: 1 };
+                      const path = buildTopologyEdgePath(src, dst, meta.index, meta.total);
+                      const selected = selectedTopologyEdgeKey === topologyEdgeKey(edge);
+                      const stroke = relationTypeColor(edge.relation_type);
+
+                      return (
+                        <path
+                          key={topologyEdgeKey(edge)}
+                          d={path}
+                          fill="none"
+                          stroke={stroke}
+                          strokeWidth={selected ? 3.2 : 1.8}
+                          opacity={selected ? 1 : 0.75}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => setSelectedTopologyEdgeKey(topologyEdgeKey(edge))}
+                        />
+                      );
+                    })}
+
+                    {assetImpact.nodes.map((node) => {
+                      const pos = topologyNodePositions.get(node.id);
+                      if (!pos) {
+                        return null;
+                      }
+
+                      const isRoot = node.id === assetImpact.root_asset_id;
+                      const selected = node.id === selectedAssetNumericId;
+                      return (
+                        <g
+                          key={`topology-node-${node.id}`}
+                          style={{ cursor: "pointer" }}
+                          onClick={() => setSelectedAssetId(String(node.id))}
+                        >
+                          <circle
+                            cx={pos.x}
+                            cy={pos.y}
+                            r={isRoot ? 19 : 15}
+                            fill={topologyNodeFill(node.status, isRoot)}
+                            stroke={selected ? "#1d4ed8" : "#0f172a"}
+                            strokeWidth={selected ? 3 : 1.5}
+                          />
+                          <text
+                            x={pos.x}
+                            y={pos.y + 4}
+                            textAnchor="middle"
+                            fill="#ffffff"
+                            style={{ fontSize: "10px", fontWeight: 600 }}
+                          >
+                            {node.id}
+                          </text>
+                          <text
+                            x={pos.x}
+                            y={pos.y + (isRoot ? 34 : 30)}
+                            textAnchor="middle"
+                            fill="#0f172a"
+                            style={{ fontSize: "11px", fontWeight: isRoot ? 700 : 500 }}
+                          >
+                            {truncateTopologyLabel(node.name, 24)}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+
+                <div className="toolbar-row" style={{ marginTop: "0.75rem" }}>
+                  {assetImpact.relation_types.map((relationType) => (
+                    <span key={relationType} className="status-chip" style={{ borderColor: relationTypeColor(relationType), color: relationTypeColor(relationType) }}>
+                      {relationType}
+                    </span>
+                  ))}
+                </div>
+                <p className="inline-note">{t("cmdb.topology.messages.nodeHint")}</p>
+
+                {selectedTopologyEdge ? (
+                  <div className="detail-panel" style={{ marginTop: "0.75rem" }}>
+                    <h3 style={subSectionTitleStyle}>{t("cmdb.topology.edgeDetail.title")}</h3>
+                    <p className="section-note">
+                      {t("cmdb.topology.edgeDetail.summary", {
+                        id: selectedTopologyEdge.id,
+                        src: `${selectedTopologyEdge.src_asset_id}`,
+                        dst: `${selectedTopologyEdge.dst_asset_id}`,
+                        relationType: selectedTopologyEdge.relation_type,
+                        direction: selectedTopologyEdge.direction,
+                        depth: selectedTopologyEdge.depth,
+                        source: selectedTopologyEdge.source
+                      })}
+                    </p>
+                    <div className="toolbar-row">
+                      <button onClick={() => setSelectedAssetId(String(selectedTopologyEdge.src_asset_id))}>
+                        {t("cmdb.topology.edgeDetail.focusSource")}
+                      </button>
+                      <button onClick={() => setSelectedAssetId(String(selectedTopologyEdge.dst_asset_id))}>
+                        {t("cmdb.topology.edgeDetail.focusTarget")}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="inline-note">{t("cmdb.topology.messages.selectEdge")}</p>
+                )}
+              </>
+            )}
+          </>
         )}
-      >
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-asset-stats") && (
+        <SectionCard
+          id="section-asset-stats"
+          title={t("cmdb.assetStats.title")}
+          actions={(
+            <button onClick={() => void loadAssetStats()} disabled={loadingAssetStats}>
+              {loadingAssetStats ? t("cmdb.actions.loading") : t("cmdb.assetStats.actions.refresh")}
+            </button>
+          )}
+        >
+        {loadingAssetStats && !assetStats ? (
+          <p>{t("cmdb.assetStats.messages.loading")}</p>
+        ) : !assetStats || assetStats.total_assets === 0 ? (
+          <p>{t("cmdb.assetStats.messages.noData")}</p>
+        ) : (
+          <>
+            <p className="section-note">
+              {t("cmdb.assetStats.summary", {
+                total: assetStats.total_assets,
+                departmentUnbound: assetStats.unbound.department_assets,
+                businessUnbound: assetStats.unbound.business_service_assets
+              })}
+            </p>
+
+            <div className="detail-grid">
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.assetStats.groups.status")}</h3>
+                {assetStatsStatusBuckets.length === 0 ? (
+                  <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
+                ) : (
+                  <div>
+                    {assetStatsStatusBuckets.map((bucket) => (
+                      <div
+                        key={`status-${bucket.key}`}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "minmax(140px, 180px) 1fr auto",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                          marginBottom: "0.4rem"
+                        }}
+                      >
+                        <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {bucket.label}
+                        </span>
+                        <div style={{ background: "#e2e8f0", borderRadius: "999px", overflow: "hidden", minWidth: "140px", height: "10px" }}>
+                          <div style={{ width: bucketBarWidth(bucket.asset_total, assetStatsStatusMax), height: "100%", background: "#2563eb" }} />
+                        </div>
+                        <span>{bucket.asset_total}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.assetStats.groups.department")}</h3>
+                {assetStatsDepartmentBuckets.length === 0 ? (
+                  <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
+                ) : (
+                  <div>
+                    {assetStatsDepartmentBuckets.map((bucket) => (
+                      <div
+                        key={`department-${bucket.key}`}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "minmax(140px, 180px) 1fr auto",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                          marginBottom: "0.4rem"
+                        }}
+                      >
+                        <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {bucket.label}
+                        </span>
+                        <div style={{ background: "#e2e8f0", borderRadius: "999px", overflow: "hidden", minWidth: "140px", height: "10px" }}>
+                          <div
+                            style={{
+                              width: bucketBarWidth(bucket.asset_total, assetStatsDepartmentMax),
+                              height: "100%",
+                              background: "#0f766e"
+                            }}
+                          />
+                        </div>
+                        <span>{bucket.asset_total}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.assetStats.groups.businessService")}</h3>
+                {assetStatsBusinessServiceBuckets.length === 0 ? (
+                  <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
+                ) : (
+                  <div>
+                    {assetStatsBusinessServiceBuckets.map((bucket) => (
+                      <div
+                        key={`business-service-${bucket.key}`}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "minmax(140px, 180px) 1fr auto",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                          marginBottom: "0.4rem"
+                        }}
+                      >
+                        <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {bucket.label}
+                        </span>
+                        <div style={{ background: "#e2e8f0", borderRadius: "999px", overflow: "hidden", minWidth: "140px", height: "10px" }}>
+                          <div
+                            style={{
+                              width: bucketBarWidth(bucket.asset_total, assetStatsBusinessServiceMax),
+                              height: "100%",
+                              background: "#ea580c"
+                            }}
+                          />
+                        </div>
+                        <span>{bucket.asset_total}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-assets") && (
+        <SectionCard
+          id="section-assets"
+          title={t("cmdb.assets.title")}
+          actions={(
+            <button onClick={resetAssetFilters} disabled={!hasAssetFilter}>
+              {t("cmdb.assets.actions.resetFilters")}
+            </button>
+          )}
+        >
         <div className="filter-grid">
           <label className="control-field">
             <span>{t("cmdb.assets.filters.searchLabel")}</span>
@@ -3316,9 +6186,75 @@ export function App() {
             </table>
           </div>
         )}
-      </SectionCard>
+        </SectionCard>
+      )}
     </AppShell>
   );
+}
+
+function buildConsolePageHash(page: ConsolePage): string {
+  return `#/${page}`;
+}
+
+function resolveConsolePageFromHash(hash: string, canAccessAdmin: boolean): ConsolePage {
+  const normalized = hash.trim().replace(/^#/, "");
+  const primary = normalized.split("?")[0];
+  const candidate = primary.replace(/^\/+/, "").split("/")[0];
+  const directPage = parseConsolePage(candidate);
+  if (directPage) {
+    if (directPage === "admin" && !canAccessAdmin) {
+      return defaultConsolePage;
+    }
+    return directPage;
+  }
+
+  const legacyPage = legacySectionToPage[candidate];
+  if (legacyPage === "admin" && !canAccessAdmin) {
+    return defaultConsolePage;
+  }
+  if (legacyPage) {
+    return legacyPage;
+  }
+
+  return defaultConsolePage;
+}
+
+function parseConsolePage(value: string): ConsolePage | null {
+  switch (value.trim().toLowerCase()) {
+    case "overview":
+    case "cmdb":
+    case "monitoring":
+    case "workflow":
+    case "admin":
+      return value.trim().toLowerCase() as ConsolePage;
+    default:
+      return null;
+  }
+}
+
+function normalizeWorkflowStatus(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isWorkflowSuccessStatus(status: string): boolean {
+  return status === "completed" || status === "succeeded" || status === "success";
+}
+
+function isWorkflowFailureStatus(status: string): boolean {
+  return (
+    status === "failed"
+    || status === "error"
+    || status === "rejected"
+    || status === "cancelled"
+    || status === "timeout"
+  );
+}
+
+function formatLocalDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 async function readErrorMessage(response: Response): Promise<string> {
@@ -3484,6 +6420,394 @@ function parseImpactDepth(value: string): number | null {
     return null;
   }
   return parsed;
+}
+
+function parseImpactRelationTypesInput(value: string): string[] {
+  const normalized = value
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0)
+    .filter((item) => /^[a-z0-9_-]+$/.test(item));
+
+  if (normalized.length === 0) {
+    return [...defaultImpactRelationTypes];
+  }
+
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const item of normalized) {
+    if (!seen.has(item)) {
+      seen.add(item);
+      unique.push(item);
+    }
+  }
+
+  return unique;
+}
+
+function topologyEdgeKey(edge: ImpactEdge): string {
+  return `${edge.id}-${edge.direction}`;
+}
+
+function buildParallelEdgeMeta(edges: ImpactEdge[]): Map<string, { index: number; total: number }> {
+  const groups = new Map<string, ImpactEdge[]>();
+  for (const edge of edges) {
+    const left = Math.min(edge.src_asset_id, edge.dst_asset_id);
+    const right = Math.max(edge.src_asset_id, edge.dst_asset_id);
+    const groupKey = `${left}-${right}`;
+    const group = groups.get(groupKey) ?? [];
+    group.push(edge);
+    groups.set(groupKey, group);
+  }
+
+  const meta = new Map<string, { index: number; total: number }>();
+  for (const group of groups.values()) {
+    group.sort((left, right) => {
+      if (left.relation_type !== right.relation_type) {
+        return left.relation_type.localeCompare(right.relation_type);
+      }
+      if (left.direction !== right.direction) {
+        return left.direction.localeCompare(right.direction);
+      }
+      return left.id - right.id;
+    });
+
+    for (let index = 0; index < group.length; index += 1) {
+      meta.set(topologyEdgeKey(group[index]), {
+        index,
+        total: group.length
+      });
+    }
+  }
+
+  return meta;
+}
+
+function buildTopologyNodePositions(
+  nodes: ImpactNode[],
+  rootId: number,
+  width: number,
+  height: number,
+  padding: number
+): Map<number, { x: number; y: number }> {
+  const positions = new Map<number, { x: number; y: number }>();
+  if (nodes.length === 0) {
+    return positions;
+  }
+
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radiusLimit = Math.max(60, Math.min(width, height) / 2 - padding);
+  const rings = new Map<number, ImpactNode[]>();
+  for (const node of nodes) {
+    const depth = Math.max(0, node.depth);
+    const group = rings.get(depth) ?? [];
+    group.push(node);
+    rings.set(depth, group);
+  }
+
+  const depthLevels = Array.from(rings.keys()).sort((left, right) => left - right);
+  const outerLevels = depthLevels.filter((depth) => depth > 0);
+  const ringStep = outerLevels.length > 0 ? radiusLimit / outerLevels.length : 0;
+
+  positions.set(rootId, { x: centerX, y: centerY });
+  for (const node of nodes) {
+    if (node.id === rootId) {
+      positions.set(node.id, { x: centerX, y: centerY });
+    }
+  }
+
+  for (const depth of depthLevels) {
+    if (depth === 0) {
+      continue;
+    }
+    const ring = rings.get(depth) ?? [];
+    if (ring.length === 0) {
+      continue;
+    }
+
+    const radius = ringStep * depth;
+    for (let index = 0; index < ring.length; index += 1) {
+      const angle = ((Math.PI * 2) / ring.length) * index - Math.PI / 2;
+      positions.set(ring[index].id, {
+        x: centerX + Math.cos(angle) * radius,
+        y: centerY + Math.sin(angle) * radius
+      });
+    }
+  }
+
+  return positions;
+}
+
+function buildTopologyEdgePath(
+  src: { x: number; y: number },
+  dst: { x: number; y: number },
+  index: number,
+  total: number
+): string {
+  const dx = dst.x - src.x;
+  const dy = dst.y - src.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  if (distance <= 1) {
+    const radius = 22 + index * 7;
+    return `M ${src.x} ${src.y} C ${src.x + radius} ${src.y - radius}, ${src.x + radius * 1.4} ${src.y + radius * 0.8}, ${src.x} ${src.y + 0.1}`;
+  }
+
+  const midX = (src.x + dst.x) / 2;
+  const midY = (src.y + dst.y) / 2;
+  const normalX = -dy / distance;
+  const normalY = dx / distance;
+  const centerIndex = (total - 1) / 2;
+  const offset = (index - centerIndex) * 18;
+  const controlX = midX + normalX * offset;
+  const controlY = midY + normalY * offset;
+  return `M ${src.x.toFixed(2)} ${src.y.toFixed(2)} Q ${controlX.toFixed(2)} ${controlY.toFixed(2)} ${dst.x.toFixed(2)} ${dst.y.toFixed(2)}`;
+}
+
+function relationTypeColor(relationType: string): string {
+  switch (relationType) {
+    case "contains":
+      return "#0f766e";
+    case "depends_on":
+      return "#0369a1";
+    case "runs_service":
+      return "#be123c";
+    case "owned_by":
+      return "#b45309";
+    default:
+      return "#475569";
+  }
+}
+
+function topologyNodeFill(status: string, isRoot: boolean): string {
+  if (isRoot) {
+    return "#1d4ed8";
+  }
+
+  const normalized = status.trim().toLowerCase();
+  if (normalized === "operational" || normalized === "active") {
+    return "#059669";
+  }
+  if (normalized === "maintenance") {
+    return "#d97706";
+  }
+  if (normalized === "retired") {
+    return "#6b7280";
+  }
+  return "#0f172a";
+}
+
+function truncateTopologyLabel(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxLength - 1))}...`;
+}
+
+function parseMonitoringWindowMinutes(value: string): number | null {
+  const parsed = Number.parseInt(value.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 5 || parsed > 1440) {
+    return null;
+  }
+  return parsed;
+}
+
+function formatMetricValue(value: number, unit: string): string {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  const normalizedUnit = unit.trim();
+  const text = Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(2);
+  return normalizedUnit ? `${text} ${normalizedUnit}` : text;
+}
+
+function buildMetricPolylinePoints(
+  points: MonitoringMetricPoint[],
+  width: number,
+  height: number,
+  padding: number
+): string {
+  if (points.length === 0) {
+    return "";
+  }
+  if (points.length === 1) {
+    const y = Math.max(padding, height - padding - (height - padding * 2) / 2);
+    return `${padding},${y} ${width - padding},${y}`;
+  }
+
+  const values = points.map((point) => point.value);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const valueRange = maxValue - minValue;
+  const chartWidth = Math.max(1, width - padding * 2);
+  const chartHeight = Math.max(1, height - padding * 2);
+
+  return points
+    .map((point, index) => {
+      const x = padding + (index / (points.length - 1)) * chartWidth;
+      const ratio = valueRange === 0 ? 0.5 : (point.value - minValue) / valueRange;
+      const y = height - padding - ratio * chartHeight;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
+function maxBucketAssetTotal(buckets: AssetStatsBucket[]): number {
+  return buckets.reduce((maxValue, bucket) => Math.max(maxValue, bucket.asset_total), 0);
+}
+
+function bucketBarWidth(value: number, maxValue: number): string {
+  if (value <= 0 || maxValue <= 0) {
+    return "0%";
+  }
+  const percent = Math.round((value / maxValue) * 100);
+  return `${Math.max(percent, 6)}%`;
+}
+
+function parseWorkflowReportRangeDays(value: string): number {
+  const parsed = Number.parseInt(value.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 30;
+  }
+  if (parsed === 7 || parsed === 30 || parsed === 90) {
+    return parsed;
+  }
+  return 30;
+}
+
+function parseDateMs(value: string): number | null {
+  const parsed = new Date(value).getTime();
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+  return parsed;
+}
+
+function workflowTemplateDisplayName(request: WorkflowRequest): string {
+  return request.template_name.trim().length > 0 ? request.template_name.trim() : `#${request.template_id}`;
+}
+
+function buildWorkflowDailyTrend(requests: WorkflowRequest[], rangeDays: number): WorkflowDailyTrendPoint[] {
+  const safeRangeDays = Math.max(1, Math.min(rangeDays, 120));
+  const points: WorkflowDailyTrendPoint[] = [];
+  const byDay = new Map<string, WorkflowDailyTrendPoint>();
+  const now = new Date();
+  for (let offset = safeRangeDays - 1; offset >= 0; offset -= 1) {
+    const day = new Date(now);
+    day.setDate(now.getDate() - offset);
+    const key = formatLocalDateKey(day);
+    const point: WorkflowDailyTrendPoint = {
+      day_key: key,
+      day_label: `${day.getMonth() + 1}/${day.getDate()}`,
+      total: 0,
+      completed: 0,
+      failed: 0,
+      active: 0
+    };
+    points.push(point);
+    byDay.set(key, point);
+  }
+
+  for (const request of requests) {
+    const createdAt = new Date(request.created_at);
+    if (Number.isNaN(createdAt.getTime())) {
+      continue;
+    }
+    const point = byDay.get(formatLocalDateKey(createdAt));
+    if (!point) {
+      continue;
+    }
+
+    point.total += 1;
+    const normalized = normalizeWorkflowStatus(request.status);
+    if (isWorkflowSuccessStatus(normalized)) {
+      point.completed += 1;
+    } else if (isWorkflowFailureStatus(normalized)) {
+      point.failed += 1;
+    } else {
+      point.active += 1;
+    }
+  }
+
+  return points;
+}
+
+function buildWorkflowTrendRankRows(
+  requests: WorkflowRequest[],
+  keySelector: (request: WorkflowRequest) => string
+): WorkflowTrendRankRow[] {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const thisWeekStart = now - 7 * dayMs;
+  const previousWeekStart = now - 14 * dayMs;
+  const thisMonthStart = now - 30 * dayMs;
+  const previousMonthStart = now - 60 * dayMs;
+
+  const counters = new Map<string, WorkflowTrendRankRow>();
+  for (const request of requests) {
+    const labelRaw = keySelector(request).trim();
+    const label = labelRaw.length > 0 ? labelRaw : "unknown";
+    const key = label.toLowerCase();
+    const createdAt = parseDateMs(request.created_at);
+    if (createdAt === null) {
+      continue;
+    }
+
+    const row = counters.get(key) ?? {
+      key,
+      label,
+      week_current: 0,
+      week_previous: 0,
+      week_delta: 0,
+      month_current: 0,
+      month_previous: 0,
+      month_delta: 0
+    };
+
+    if (createdAt >= thisWeekStart) {
+      row.week_current += 1;
+    } else if (createdAt >= previousWeekStart) {
+      row.week_previous += 1;
+    }
+
+    if (createdAt >= thisMonthStart) {
+      row.month_current += 1;
+    } else if (createdAt >= previousMonthStart) {
+      row.month_previous += 1;
+    }
+
+    counters.set(key, row);
+  }
+
+  return Array.from(counters.values())
+    .map((row) => ({
+      ...row,
+      week_delta: row.week_current - row.week_previous,
+      month_delta: row.month_current - row.month_previous
+    }))
+    .filter((row) => row.week_current > 0 || row.week_previous > 0 || row.month_current > 0 || row.month_previous > 0)
+    .sort((left, right) => {
+      if (left.month_current !== right.month_current) {
+        return right.month_current - left.month_current;
+      }
+      if (left.week_current !== right.week_current) {
+        return right.week_current - left.week_current;
+      }
+      return left.label.localeCompare(right.label);
+    });
+}
+
+function formatSignedDelta(value: number): string {
+  if (value > 0) {
+    return `+${value}`;
+  }
+  return String(value);
+}
+
+function escapeCsvCell(value: string): string {
+  const needsQuote = value.includes(",") || value.includes("\"") || value.includes("\n") || value.includes("\r");
+  const escaped = value.replaceAll("\"", "\"\"");
+  return needsQuote ? `"${escaped}"` : escaped;
 }
 
 function deriveDefaultAuthSession(): AuthSession | null {

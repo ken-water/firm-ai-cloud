@@ -21,13 +21,21 @@
     "status": "Signed in as {{username}} (roles: {{roles}})",
     "statusMode": "Mode: {{mode}}",
     "navigation": {
+      "overview": "Overview",
+      "cmdb": "CMDB",
+      "monitoring": "Monitoring",
+      "cockpit": "Cockpit",
+      "workflow": "Workflow",
       "scan": "Scan",
       "discovery": "Discovery",
       "monitoringSources": "Monitoring Sources",
+      "monitoringMetrics": "Monitoring Metrics",
       "notifications": "Notifications",
       "fields": "Fields",
       "relations": "Relations",
       "readiness": "Readiness",
+      "topology": "Topology",
+      "assetStats": "Asset Statistics",
       "assets": "Assets",
       "admin": "System Admin"
     },
@@ -58,6 +66,251 @@
     "messages": {
       "empty": "No assets found. Create one sample asset to get started.",
       "error": "Request failed"
+    },
+    "perspective": {
+      "title": "Workspace Perspective",
+      "menuAxis": "Menu Axis",
+      "menuAxisOptions": {
+        "function": "By Function",
+        "department": "By Department",
+        "business": "By Business",
+        "screen": "Big Screen"
+      },
+      "functionWorkspace": "Function Workspace",
+      "functionWorkspaceOptions": {
+        "full": "Full Platform",
+        "cmdb": "CMDB Focus",
+        "monitoring": "Monitoring Focus",
+        "workflow": "Workflow Focus"
+      },
+      "departmentWorkspace": "Department",
+      "businessWorkspace": "Business Service",
+      "workspaceAll": "All",
+      "summary": "Current perspective: axis={{axis}}, scope={{scope}}."
+    },
+    "cockpit": {
+      "title": "Operations Cockpit",
+      "scopeLabel": "Current scope: {{value}}",
+      "scope": {
+        "departmentAll": "all departments",
+        "businessAll": "all business services",
+        "screen": "big-screen executive view"
+      },
+      "cards": {
+        "assetTotal": "Total Assets",
+        "operational": "Operational Assets",
+        "monitored": "Monitored assets: {{value}}",
+        "critical": "Critical Alerts",
+        "sources": "Monitoring sources: {{value}}",
+        "responsibility": "Responsibility Coverage",
+        "departmentAssets": "Assets under selected department",
+        "businessAssets": "Assets under selected business service",
+        "globalAssets": "Assets in global scope"
+      },
+      "charts": {
+        "status": "Status Distribution",
+        "department": "Department Distribution",
+        "business": "Business Distribution"
+      },
+      "messages": {
+        "loadingOverview": "Loading monitoring overview..."
+      }
+    },
+    "workflow": {
+      "title": "Workflow and Ticket Automation",
+      "summary": "Templates: {{templates}} | Requests: {{requests}}",
+      "templatesTitle": "Workflow Templates",
+      "requestsTitle": "Workflow Requests",
+      "logsTitle": "Execution Logs",
+      "cockpit": {
+        "title": "Workflow Cockpit",
+        "summary": "Requests={{requests}} | Active={{active}} | Completed={{completed}} | Failed={{failed}}",
+        "executionSummary": "Average step duration: {{avgExecution}} ms | Execution success rate: {{successRate}}% (samples: {{sampleSize}})",
+        "cards": {
+          "totalRequests": "Total Requests",
+          "activeRequests": "Active Requests",
+          "approvalQueue": "Approval Queue",
+          "manualQueue": "Manual Queue",
+          "completionRate": "Completion Rate",
+          "automationShare": "Automation Share"
+        },
+        "charts": {
+          "status": "Request Status Distribution",
+          "templateUsage": "Template Usage Distribution",
+          "requesterLoad": "Requester Load Distribution",
+          "dailyTrend": "7-Day Request Trend",
+          "executionQuality": "Execution Quality"
+        },
+        "labels": {
+          "completed": "Completed",
+          "failed": "Failed",
+          "active": "Active",
+          "avgExecution": "Average Duration",
+          "executionSuccessRate": "Execution Success",
+          "sampleSize": "Execution Samples",
+          "noRecentData": "No workflow requests in the last 7 days."
+        },
+        "trendTooltip": "{{day}}: total={{total}}, completed={{completed}}, failed={{failed}}, active={{active}}"
+      },
+      "reports": {
+        "title": "Workflow Report Center",
+        "summary": "Filtered requests={{total}} | Completed={{completed}} | Failed={{failed}} | Active={{active}} | Completion={{completionRate}}% | Failure={{failureRate}}%",
+        "executionSummary": "Execution quality (filtered): avg duration {{avgExecution}} ms | success {{successRate}}% | samples {{sampleSize}} | automation share {{automationShare}}%",
+        "actions": {
+          "exportCsv": "Export CSV",
+          "resetFilters": "Reset Filters"
+        },
+        "filters": {
+          "rangeDaysLabel": "Time Range",
+          "rangeOptions": {
+            "7": "Last 7 days",
+            "30": "Last 30 days",
+            "90": "Last 90 days"
+          },
+          "statusLabel": "Status",
+          "statusAll": "All statuses",
+          "templateLabel": "Template",
+          "templateAll": "All templates",
+          "requesterLabel": "Requester",
+          "requesterPlaceholder": "Search requester..."
+        },
+        "charts": {
+          "statusDistribution": "Filtered Status Distribution",
+          "templateDistribution": "Filtered Template Distribution",
+          "dailyTrend": "Daily Trend in Range",
+          "templateRanking": "Template Ranking (Week/Month Compare)",
+          "requesterRanking": "Requester Ranking (Week/Month Compare)"
+        },
+        "messages": {
+          "noResult": "No requests match current report filters.",
+          "exported": "Workflow report exported (rows: {{count}})."
+        },
+        "ranking": {
+          "columns": {
+            "name": "Name",
+            "thisWeek": "This Week",
+            "lastWeek": "Last Week",
+            "weekDelta": "Week Delta",
+            "thisMonth": "This Month",
+            "lastMonth": "Last Month",
+            "monthDelta": "Month Delta"
+          }
+        },
+        "table": {
+          "title": "Filtered Request Details",
+          "columns": {
+            "id": "Request ID",
+            "template": "Template",
+            "requester": "Requester",
+            "status": "Status",
+            "createdAt": "Created At",
+            "updatedAt": "Updated At",
+            "lastError": "Last Error"
+          }
+        }
+      },
+      "actions": {
+        "refreshTemplates": "Refresh Templates",
+        "refreshRequests": "Refresh Requests",
+        "refreshLogs": "Refresh Logs",
+        "addStep": "Add Step",
+        "removeStep": "Remove Step",
+        "createTemplate": "Create Template",
+        "createRequest": "Create Request",
+        "approve": "Approve",
+        "reject": "Reject",
+        "execute": "Execute",
+        "completeManual": "Manual Complete",
+        "viewLogs": "View Logs"
+      },
+      "messages": {
+        "loadingTemplates": "Loading workflow templates...",
+        "loadingRequests": "Loading workflow requests...",
+        "loadingLogs": "Loading execution logs...",
+        "noTemplates": "No workflow templates yet.",
+        "noRequests": "No workflow requests yet.",
+        "noLogs": "No execution logs for this request yet.",
+        "selectRequest": "Select a request to view execution logs.",
+        "templateCreated": "Workflow template '{{name}}' created.",
+        "requestCreated": "Workflow request #{{id}} created.",
+        "requestApproved": "Workflow request #{{id}} approved.",
+        "requestRejected": "Workflow request #{{id}} rejected.",
+        "requestExecuted": "Workflow request #{{id}} executed.",
+        "manualCompleted": "Manual step for request #{{id}} completed.",
+        "readOnlyHint": "Read-only mode: workflow changes require operator or admin permission."
+      },
+      "validation": {
+        "templateNameRequired": "Template name is required.",
+        "templateStepsRequired": "Template must include at least one step.",
+        "templateRequired": "Please select one workflow template.",
+        "requestTitleRequired": "Request title is required.",
+        "stepIdRequired": "Step ID is required and can only include lowercase letters, numbers, '_' and '-'.",
+        "stepIdDuplicate": "Step ID '{{id}}' already exists in the draft.",
+        "stepNameRequired": "Step name is required.",
+        "stepScriptRequired": "Script content is required for script steps.",
+        "payloadInvalidJson": "Payload must be valid JSON.",
+        "payloadMustBeObject": "Payload JSON must be an object."
+      },
+      "form": {
+        "templateName": "Template Name",
+        "templateNamePlaceholder": "restart-database-service",
+        "templateDescription": "Description",
+        "templateDescriptionPlaceholder": "Approval + script execution + manual verification",
+        "stepId": "Step ID",
+        "stepName": "Step Name",
+        "stepNamePlaceholder": "Run service restart script",
+        "stepKind": "Step Kind",
+        "stepScript": "Script",
+        "timeoutSeconds": "Timeout (seconds)",
+        "approverGroup": "Approver Group",
+        "autoRun": "Auto run script",
+        "requestTemplate": "Template",
+        "selectTemplate": "Select a workflow template",
+        "requestTitle": "Request Title",
+        "requestTitlePlaceholder": "Restart primary PostgreSQL service",
+        "requestPayload": "Request Payload (JSON)"
+      },
+      "table": {
+        "step": {
+          "id": "Step ID",
+          "name": "Step Name",
+          "kind": "Kind",
+          "autoRun": "Auto Run",
+          "timeout": "Timeout",
+          "script": "Script",
+          "approver": "Approver Group",
+          "actions": "Actions"
+        },
+        "template": {
+          "id": "ID",
+          "name": "Name",
+          "steps": "Steps",
+          "enabled": "Enabled",
+          "updatedAt": "Updated At"
+        },
+        "request": {
+          "id": "ID",
+          "template": "Template",
+          "title": "Title",
+          "status": "Status",
+          "stepIndex": "Current Step",
+          "requester": "Requester",
+          "lastError": "Last Error",
+          "updatedAt": "Updated At",
+          "actions": "Actions"
+        },
+        "log": {
+          "id": "Log ID",
+          "step": "Step",
+          "kind": "Kind",
+          "status": "Status",
+          "executor": "Executor",
+          "exitCode": "Exit Code",
+          "duration": "Duration (ms)",
+          "output": "Output",
+          "time": "Finished At"
+        }
+      }
     },
     "scan": {
       "title": "Scan Lookup",
@@ -263,6 +516,26 @@
         "proxyLabel": "Proxy"
       }
     },
+    "monitoringMetrics": {
+      "title": "Monitoring Metrics",
+      "summary": "Asset: {{asset}} | Host: {{host}} | Source: {{source}} | Window: {{window}} minutes",
+      "latest": "Latest: {{value}} at {{time}}",
+      "actions": {
+        "refresh": "Refresh Metrics"
+      },
+      "filters": {
+        "assetLabel": "Asset",
+        "selectAsset": "Select one asset",
+        "windowLabel": "Time Window"
+      },
+      "messages": {
+        "selectAsset": "Select an asset to load CPU/load/network/disk metrics.",
+        "loading": "Loading monitoring metrics...",
+        "error": "Unable to load monitoring metrics: {{error}}",
+        "noData": "Monitoring metrics are unavailable for this asset.",
+        "emptySeries": "No data points in the selected window."
+      }
+    },
     "fields": {
       "title": "Custom Field Definitions",
       "empty": "No custom fields defined yet.",
@@ -399,6 +672,52 @@
           "invalidDepth": "Impact depth must be an integer between 1 and 8.",
           "loaded": "Impact graph loaded: {{nodes}} nodes, {{edges}} edges."
         }
+      }
+    },
+    "topology": {
+      "title": "Network Topology Deep Drill",
+      "summary": "Root #{{root}} | Nodes: {{nodes}} | Edges: {{edges}} | Direction: {{direction}} | Depth: {{depth}}",
+      "actions": {
+        "refresh": "Refresh Topology"
+      },
+      "filters": {
+        "asset": "Focus Asset",
+        "selectAsset": "Select one asset",
+        "direction": "Direction",
+        "depth": "Depth (1-8)",
+        "relationTypes": "Relation Types (comma separated)",
+        "activeRelationTypes": "Active relation types: {{value}}"
+      },
+      "messages": {
+        "noAssets": "No assets available. Create assets first.",
+        "selectAsset": "Select one asset to render topology.",
+        "loading": "Loading topology graph...",
+        "noData": "Topology graph is unavailable for current asset.",
+        "nodeHint": "Click any node to refocus topology around that asset. Click any line to inspect edge details.",
+        "selectEdge": "Select one line in the graph to inspect deep-drill edge details."
+      },
+      "edgeDetail": {
+        "title": "Selected Edge",
+        "summary": "Edge #{{id}}: {{src}} -> {{dst}} | type={{relationType}} | direction={{direction}} | depth={{depth}} | source={{source}}",
+        "focusSource": "Focus Source Asset",
+        "focusTarget": "Focus Target Asset"
+      }
+    },
+    "assetStats": {
+      "title": "Asset Statistics",
+      "summary": "Total assets: {{total}} | Department unbound: {{departmentUnbound}} | Business-service unbound: {{businessUnbound}}",
+      "actions": {
+        "refresh": "Refresh Statistics"
+      },
+      "groups": {
+        "status": "By Status",
+        "department": "By Department",
+        "businessService": "By Business Service"
+      },
+      "messages": {
+        "loading": "Loading asset statistics...",
+        "noData": "No assets found. Add assets or approve discovery candidates first.",
+        "noBuckets": "No aggregated data in this dimension."
       }
     },
     "assets": {

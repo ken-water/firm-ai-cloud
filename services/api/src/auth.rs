@@ -252,13 +252,22 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         || matches_scope(&normalized, "/discovery/notification-subscriptions")
     {
         "cmdb.notifications"
-    } else if matches_scope(&normalized, "/monitoring/sources") {
-        "monitoring.sources"
-    } else if matches_scope(&normalized, "/monitoring/overview")
-        || matches_scope(&normalized, "/monitoring/layers")
+    } else if matches_scope(&normalized, "/monitoring/sources")
+        || matches_scope(&normalized, "/sources")
     {
         "monitoring.sources"
-    } else if matches_scope(&normalized, "/streams/sse") || matches_scope(&normalized, "/streams") {
+    } else if matches_scope(&normalized, "/monitoring/overview")
+        || matches_scope(&normalized, "/overview")
+        || matches_scope(&normalized, "/monitoring/layers")
+        || matches_scope(&normalized, "/layers")
+        || matches_scope(&normalized, "/monitoring/metrics")
+        || matches_scope(&normalized, "/metrics")
+    {
+        "monitoring.sources"
+    } else if matches_scope(&normalized, "/streams/sse")
+        || matches_scope(&normalized, "/streams")
+        || matches_scope(&normalized, "/sse")
+    {
         "monitoring.sources"
     } else if matches_scope(&normalized, "/cmdb/discovery")
         || matches_scope(&normalized, "/discovery")
@@ -278,12 +287,19 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         "cmdb.assets"
     } else if matches_scope(&normalized, "/cmdb/assets") || matches_scope(&normalized, "/assets") {
         "cmdb.assets"
+    } else if matches_scope(&normalized, "/workflow/templates")
+        || matches_scope(&normalized, "/workflows/templates")
+        || matches_scope(&normalized, "/templates")
+    {
+        "workflow.requests"
     } else if matches_scope(&normalized, "/workflow/requests")
         || matches_scope(&normalized, "/workflows/requests")
+        || matches_scope(&normalized, "/requests")
     {
         "workflow.requests"
     } else if matches_scope(&normalized, "/workflow/approvals")
         || matches_scope(&normalized, "/workflows/approvals")
+        || matches_scope(&normalized, "/approvals")
     {
         "workflow.approvals"
     } else {
@@ -417,6 +433,11 @@ mod tests {
         );
         assert_permission(
             Method::GET,
+            "/api/v1/monitoring/metrics",
+            "monitoring.sources.read",
+        );
+        assert_permission(
+            Method::GET,
             "/api/v1/streams/sse",
             "monitoring.sources.read",
         );
@@ -430,6 +451,11 @@ mod tests {
             "/api/v1/monitoring/sources/1/probe",
             "monitoring.sources.write",
         );
+        assert_permission(Method::GET, "/sources", "monitoring.sources.read");
+        assert_permission(Method::GET, "/overview", "monitoring.sources.read");
+        assert_permission(Method::GET, "/layers/hardware", "monitoring.sources.read");
+        assert_permission(Method::GET, "/metrics", "monitoring.sources.read");
+        assert_permission(Method::GET, "/sse", "monitoring.sources.read");
     }
 
     #[test]
@@ -461,6 +487,16 @@ mod tests {
     fn workflow_permission_mapping_ready_for_future_routes() {
         assert_permission(
             Method::GET,
+            "/api/v1/workflow/templates",
+            "workflow.requests.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/workflow/templates",
+            "workflow.requests.write",
+        );
+        assert_permission(
+            Method::GET,
             "/api/v1/workflow/requests",
             "workflow.requests.read",
         );
@@ -479,12 +515,16 @@ mod tests {
             "/api/v1/workflow/approvals",
             "workflow.approvals.write",
         );
+        assert_permission(Method::GET, "/templates", "workflow.requests.read");
+        assert_permission(Method::GET, "/requests", "workflow.requests.read");
+        assert_permission(Method::POST, "/approvals/10/approve", "workflow.approvals.write");
     }
 
     #[test]
     fn permission_matrix_covers_existing_protected_endpoints() {
         let coverage = vec![
             (Method::GET, "/api/v1/cmdb/assets", "cmdb.assets.read"),
+            (Method::GET, "/api/v1/cmdb/assets/stats", "cmdb.assets.read"),
             (
                 Method::GET,
                 "/api/v1/cmdb/assets/by-code/QR-1",
@@ -537,6 +577,21 @@ mod tests {
                 Method::POST,
                 "/api/v1/cmdb/relations",
                 "cmdb.relations.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/workflow/templates",
+                "workflow.requests.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/workflow/requests",
+                "workflow.requests.write",
+            ),
+            (
+                Method::POST,
+                "/api/v1/workflow/approvals/1/approve",
+                "workflow.approvals.write",
             ),
             (
                 Method::DELETE,
@@ -626,6 +681,11 @@ mod tests {
             (
                 Method::GET,
                 "/api/v1/monitoring/layers/service",
+                "monitoring.sources.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/monitoring/metrics",
                 "monitoring.sources.read",
             ),
             (
