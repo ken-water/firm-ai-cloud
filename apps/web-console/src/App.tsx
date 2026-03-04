@@ -1,8 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
-import { HorizontalFillBar, MetricSparkline } from "./components/chart-primitives";
-import { AppShell, AuthGate, SectionCard } from "./components/layout";
+import { AppShell, AuthGate } from "./components/layout";
+import {
+  API_BASE_URL,
+  AUTH_SESSION_EXPIRED_EVENT,
+  DEFAULT_AUTH_TOKEN,
+  DEFAULT_AUTH_USER,
+  apiFetch,
+  getRuntimeAuthSession,
+  readErrorMessage,
+  setRuntimeAuthSession,
+  type AuthMode,
+  type AuthSession
+} from "./lib/api-client";
 import {
   buildMetricPolylinePoints,
   buildParallelEdgeMeta,
@@ -43,6 +54,10 @@ import {
   type FunctionWorkspace,
   type MenuAxis
 } from "./pages/console-page-routing";
+import { CmdbSections } from "./pages/cmdb-sections";
+import { IntegrationMonitoringSections } from "./pages/integration-monitoring-sections";
+import { OverviewAdminSections } from "./pages/overview-admin-sections";
+import { WorkflowTicketSections } from "./pages/workflow-ticket-sections";
 
 type Asset = {
   id: number;
@@ -609,26 +624,9 @@ type OwnerDraft = {
   owner_ref: string;
 };
 
-const DEFAULT_API_BASE_URL =
-  typeof window !== "undefined"
-    ? `${window.location.protocol}//${window.location.hostname}:8080`
-    : "http://127.0.0.1:8080";
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || DEFAULT_API_BASE_URL;
-const API_AUTH_USER = (import.meta.env.VITE_AUTH_USER ?? "admin").trim();
-const API_AUTH_TOKEN = (import.meta.env.VITE_AUTH_TOKEN ?? "").trim();
-const AUTH_SESSION_STORAGE_KEY = "cloudops.auth.session.v1";
-const AUTH_SESSION_EXPIRED_EVENT = "cloudops.auth.session-expired";
 const SUPPORTED_UI_LANGUAGES = ["en-US", "zh-CN"] as const;
 
 type UiLanguage = (typeof SUPPORTED_UI_LANGUAGES)[number];
-
-type AuthMode = "header" | "bearer";
-
-type AuthSession = {
-  mode: AuthMode;
-  principal: string;
-  token: string | null;
-};
 
 type AuthIdentity = {
   user: {
@@ -639,9 +637,6 @@ type AuthIdentity = {
   };
   roles: string[];
 };
-
-const runtimeDefaultSession = deriveDefaultAuthSession();
-let runtimeAuthSession: AuthSession | null = loadStoredAuthSession() ?? runtimeDefaultSession;
 
 const defaultFieldForm: NewFieldForm = {
   field_key: "",
@@ -743,17 +738,18 @@ const defaultImpactRelationTypes = ["contains", "depends_on", "runs_service", "o
 export function App() {
   const { t, i18n } = useTranslation();
   const currentLanguage = normalizeUiLanguage(i18n.resolvedLanguage ?? i18n.language);
-  const [authSession, setAuthSession] = useState<AuthSession | null>(runtimeAuthSession);
+  const initialRuntimeAuthSession = getRuntimeAuthSession();
+  const [authSession, setAuthSession] = useState<AuthSession | null>(initialRuntimeAuthSession);
   const [authIdentity, setAuthIdentity] = useState<AuthIdentity | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
-  const [loginMode, setLoginMode] = useState<AuthMode>(runtimeAuthSession?.mode ?? "header");
+  const [loginMode, setLoginMode] = useState<AuthMode>(initialRuntimeAuthSession?.mode ?? "header");
   const [loginPrincipal, setLoginPrincipal] = useState<string>(
-    runtimeAuthSession?.mode === "header" ? runtimeAuthSession.principal : API_AUTH_USER
+    initialRuntimeAuthSession?.mode === "header" ? initialRuntimeAuthSession.principal : DEFAULT_AUTH_USER
   );
   const [loginToken, setLoginToken] = useState<string>(
-    runtimeAuthSession?.mode === "bearer" ? runtimeAuthSession.token ?? "" : API_AUTH_TOKEN
+    initialRuntimeAuthSession?.mode === "bearer" ? initialRuntimeAuthSession.token ?? "" : DEFAULT_AUTH_TOKEN
   );
   const [assets, setAssets] = useState<Asset[]>([]);
   const [assetStats, setAssetStats] = useState<AssetStatsResponse | null>(null);
@@ -910,8 +906,7 @@ export function App() {
   }, [authIdentity, canAccessAdmin]);
 
   const applyAuthSession = useCallback((session: AuthSession | null) => {
-    runtimeAuthSession = session;
-    persistAuthSession(session);
+    setRuntimeAuthSession(session);
     setAuthSession(session);
   }, []);
 
@@ -956,7 +951,8 @@ export function App() {
   }, [applyAuthSession, loginMode, loginPrincipal, loginToken, t]);
 
   const signOut = useCallback(async () => {
-    if (runtimeAuthSession?.mode === "bearer" && runtimeAuthSession.token) {
+    const currentSession = getRuntimeAuthSession();
+    if (currentSession?.mode === "bearer" && currentSession.token) {
       try {
         await apiFetch(`${API_BASE_URL}/api/v1/auth/logout`, { method: "POST" });
       } catch {
@@ -3532,6 +3528,345 @@ export function App() {
     );
   }
 
+  const workflowTicketSectionsProps = {
+    addWorkflowStepToDraft,
+    approveWorkflowRequest,
+    approvingWorkflowRequestId,
+    bucketBarWidth,
+    canWriteCmdb,
+    cellStyle,
+    completeWorkflowManualStep,
+    createTicket,
+    createWorkflowRequest,
+    createWorkflowTemplate,
+    creatingTicket,
+    creatingWorkflowRequest,
+    creatingWorkflowTemplate,
+    executeWorkflowRequest,
+    executingWorkflowRequestId,
+    exportWorkflowReportCsv,
+    formatSignedDelta,
+    loadTicketDetail,
+    loadTickets,
+    loadWorkflowLogs,
+    loadWorkflowRequests,
+    loadWorkflowTemplates,
+    loadingTicketDetail,
+    loadingTickets,
+    loadingWorkflowLogs,
+    loadingWorkflowRequests,
+    loadingWorkflowTemplates,
+    manualCompletingWorkflowRequestId,
+    newTicket,
+    newWorkflowRequest,
+    newWorkflowStep,
+    newWorkflowTemplateDescription,
+    newWorkflowTemplateName,
+    newWorkflowTemplateSteps,
+    rejectWorkflowRequest,
+    rejectingWorkflowRequestId,
+    removeWorkflowStepFromDraft,
+    selectedTicketId,
+    selectedTicketSummary,
+    selectedWorkflowRequest,
+    setNewTicket,
+    setNewWorkflowRequest,
+    setNewWorkflowStep,
+    setNewWorkflowTemplateDescription,
+    setNewWorkflowTemplateName,
+    setSelectedTicketId,
+    setSelectedWorkflowRequestId,
+    setTicketPriorityFilter,
+    setTicketQueryFilter,
+    setTicketStatusDraft,
+    setTicketStatusFilter,
+    setWorkflowReportRangeDays,
+    setWorkflowReportRequesterFilter,
+    setWorkflowReportStatusFilter,
+    setWorkflowReportTemplateFilter,
+    statusChipClass,
+    subSectionTitleStyle,
+    t,
+    ticketDetail,
+    ticketNotice,
+    ticketPriorityFilter,
+    ticketQueryFilter,
+    ticketStatusDraft,
+    ticketStatusFilter,
+    tickets,
+    truncateTopologyLabel,
+    updateTicketStatus,
+    updatingTicketStatusId,
+    visibleSections,
+    workflowDailyTrend,
+    workflowDailyTrendMax,
+    workflowKpis,
+    workflowLogs,
+    workflowNotice,
+    workflowReportDailyTrend,
+    workflowReportDailyTrendMax,
+    workflowReportExecutionStats,
+    workflowReportRangeDays,
+    workflowReportRequesterFilter,
+    workflowReportRows,
+    workflowReportStatusBuckets,
+    workflowReportStatusFilter,
+    workflowReportStatusMax,
+    workflowReportStatusOptions,
+    workflowReportSummary,
+    workflowReportTemplateBuckets,
+    workflowReportTemplateFilter,
+    workflowReportTemplateMax,
+    workflowReportTemplateOptions,
+    workflowRequesterBuckets,
+    workflowRequesterMax,
+    workflowRequesterTrendRanks,
+    workflowRequests,
+    workflowStatusBuckets,
+    workflowStatusMax,
+    workflowTemplateDisplayName,
+    workflowTemplateTrendRanks,
+    workflowTemplateUsageBuckets,
+    workflowTemplateUsageMax,
+    workflowTemplates
+  };
+
+  const cmdbSectionsProps = {
+    addOwnerDraft,
+    assetBindings,
+    assetClassFilter,
+    assetClassOptions,
+    assetImpact,
+    assetMonitoring,
+    assetNameById,
+    assetSearch,
+    assetSiteFilter,
+    assetSiteOptions,
+    assetSortMode,
+    assetStats,
+    assetStatsBusinessServiceBuckets,
+    assetStatsBusinessServiceMax,
+    assetStatsDepartmentBuckets,
+    assetStatsDepartmentMax,
+    assetStatsStatusBuckets,
+    assetStatsStatusMax,
+    assetStatusFilter,
+    assetStatusOptions,
+    assets,
+    bindingBusinessServicesInput,
+    bindingDepartmentsInput,
+    bindingNotice,
+    bindingOwnerDrafts,
+    bucketBarWidth,
+    buildTopologyEdgePath,
+    canWriteCmdb,
+    cellStyle,
+    createFieldDefinition,
+    createRelation,
+    creatingField,
+    creatingRelation,
+    defaultImpactRelationTypes,
+    deleteRelation,
+    deletingRelationId,
+    emptyState,
+    fieldDefinitions,
+    filteredAssets,
+    hasAssetFilter,
+    hierarchyHintEdges,
+    impactDepth,
+    impactDirection,
+    impactNodeNameById,
+    impactNotice,
+    impactRelationTypes,
+    impactRelationTypesInput,
+    lifecycleNotice,
+    lifecycleStatuses,
+    loadAssetBindings,
+    loadAssetImpact,
+    loadAssetMonitoring,
+    loadAssetStats,
+    loadRelations,
+    loadingAssetBindings,
+    loadingAssetImpact,
+    loadingAssetMonitoring,
+    loadingAssetStats,
+    loadingAssets,
+    loadingRelations,
+    monitoringNotice,
+    newField,
+    newRelation,
+    normalizeOwnerType,
+    parseImpactDepth,
+    parseImpactRelationTypesInput,
+    refreshImpact,
+    relationNotice,
+    relationSummary,
+    relationTypeColor,
+    relations,
+    removeOwnerDraft,
+    renderCustomFields,
+    resetAssetFilters,
+    saveAssetBindings,
+    selectedAsset,
+    selectedAssetId,
+    selectedAssetNumericId,
+    selectedTopologyEdge,
+    selectedTopologyEdgeKey,
+    setAssetClassFilter,
+    setAssetSearch,
+    setAssetSiteFilter,
+    setAssetSortMode,
+    setAssetStatusFilter,
+    setBindingBusinessServicesInput,
+    setBindingDepartmentsInput,
+    setBindingOwnerDrafts,
+    setImpactDepth,
+    setImpactDirection,
+    setImpactRelationTypesInput,
+    setNewField,
+    setNewRelation,
+    setSelectedAssetId,
+    setSelectedTopologyEdgeKey,
+    subSectionTitleStyle,
+    t,
+    topologyEdgeKey,
+    topologyEdgeRenderMeta,
+    topologyNodeFill,
+    topologyNodePositions,
+    transitionAssetLifecycle,
+    transitioningLifecycleStatus,
+    triggerAssetMonitoringSync,
+    triggeringMonitoringSync,
+    truncateTopologyLabel,
+    updateOwnerDraftRef,
+    updateOwnerDraftType,
+    updatingAssetBindings,
+    visibleSections
+  };
+
+  const integrationMonitoringSectionsProps = {
+    assets,
+    buildMetricPolylinePoints,
+    canWriteCmdb,
+    cellStyle,
+    createMonitoringSource,
+    createNotificationChannel,
+    createNotificationSubscription,
+    createNotificationTemplate,
+    creatingMonitoringSource,
+    creatingNotificationChannel,
+    creatingNotificationSubscription,
+    creatingNotificationTemplate,
+    defaultMonitoringSourceFilters,
+    discoveryCandidates,
+    discoveryJobs,
+    discoveryNotice,
+    findAssetByCode,
+    formatMetricValue,
+    hasMonitoringSourceFilter,
+    loadDiscoveryCandidates,
+    loadDiscoveryJobs,
+    loadMonitoringMetrics,
+    loadMonitoringSources,
+    loadNotificationChannels,
+    loadNotificationSubscriptions,
+    loadNotificationTemplates,
+    loadingDiscoveryCandidates,
+    loadingDiscoveryJobs,
+    loadingMonitoringMetrics,
+    loadingMonitoringSources,
+    loadingNotificationChannels,
+    loadingNotificationSubscriptions,
+    loadingNotificationTemplates,
+    monitoringMetrics,
+    monitoringMetricsError,
+    monitoringMetricsWindowMinutes,
+    monitoringMetricsWindowValue,
+    monitoringSourceFilters,
+    monitoringSourceNotice,
+    monitoringSourceStats,
+    monitoringSources,
+    newMonitoringSource,
+    newNotificationChannel,
+    newNotificationSubscription,
+    newNotificationTemplate,
+    notificationChannelById,
+    notificationChannelNameById,
+    notificationChannels,
+    notificationNotice,
+    notificationSubscriptions,
+    notificationTemplates,
+    probeMonitoringSource,
+    probingMonitoringSourceId,
+    readPayloadString,
+    reviewDiscoveryCandidate,
+    reviewingCandidateId,
+    runDiscoveryJob,
+    runningDiscoveryJobId,
+    scanCode,
+    scanMode,
+    scanResult,
+    scanning,
+    selectedAssetId,
+    setMonitoringMetricsWindowMinutes,
+    setMonitoringSourceFilters,
+    setNewMonitoringSource,
+    setNewNotificationChannel,
+    setNewNotificationSubscription,
+    setNewNotificationTemplate,
+    setScanCode,
+    setScanMode,
+    setSelectedAssetId,
+    statusChipClass,
+    subSectionTitleStyle,
+    t,
+    visibleSections
+  };
+
+  const overviewAdminSectionsProps = {
+    activePage,
+    assetStats,
+    assetStatsBusinessServiceBuckets,
+    assetStatsBusinessServiceMax,
+    assetStatsDepartmentBuckets,
+    assetStatsDepartmentMax,
+    assetStatsStatusBuckets,
+    assetStatsStatusMax,
+    assets,
+    bucketBarWidth,
+    businessWorkspace,
+    businessWorkspaceOptions,
+    canAccessAdmin,
+    canWriteCmdb,
+    cockpitCriticalAssets,
+    cockpitOperationalAssets,
+    createSampleAsset,
+    creatingSample,
+    departmentWorkspace,
+    departmentWorkspaceOptions,
+    functionWorkspace,
+    loadAssets,
+    loadAssetStats,
+    loadFieldDefinitions,
+    loadingAssetStats,
+    loadingAssets,
+    loadingFields,
+    loadingMonitoringOverview,
+    menuAxis,
+    monitoringOverview,
+    monitoringSources,
+    perspectiveScopeLabel,
+    selectedBusinessAssetCount,
+    selectedDepartmentAssetCount,
+    setBusinessWorkspace,
+    setDepartmentWorkspace,
+    setFunctionWorkspace,
+    setMenuAxis,
+    subSectionTitleStyle,
+    t,
+    visibleSections
+  };
+
   return (
     <AppShell
       title={t("app.title")}
@@ -3563,3301 +3898,10 @@ export function App() {
       error={error ? `${t("cmdb.messages.error")}: ${error}` : null}
       warning={!canWriteCmdb ? t("auth.messages.readOnly") : null}
     >
-
-      {canAccessAdmin && (
-        <>
-          {visibleSections.has("section-admin") && (
-            <SectionCard id="section-admin" title={t("auth.adminPanel.title")}>
-              <p style={{ marginTop: 0 }}>{t("auth.adminPanel.description")}</p>
-            </SectionCard>
-          )}
-        </>
-      )}
-
-      {activePage !== "admin" && (
-        <SectionCard>
-          <div className="toolbar-row">
-            <button onClick={() => void Promise.all([loadAssets(), loadAssetStats()])} disabled={loadingAssets || loadingAssetStats}>
-              {loadingAssets || loadingAssetStats ? t("cmdb.actions.loading") : t("cmdb.actions.refreshAssets")}
-            </button>
-            <button onClick={() => void loadFieldDefinitions()} disabled={loadingFields}>
-              {loadingFields ? t("cmdb.actions.loading") : t("cmdb.actions.refreshFields")}
-            </button>
-            {canWriteCmdb && (
-              <button onClick={() => void createSampleAsset()} disabled={creatingSample}>
-                {creatingSample ? t("cmdb.actions.creating") : t("cmdb.actions.createSample")}
-              </button>
-            )}
-          </div>
-        </SectionCard>
-      )}
-
-      {activePage === "overview" && (
-      <SectionCard id="section-perspective" title={t("cmdb.perspective.title")}>
-        <div className="filter-grid">
-          <label className="control-field">
-            <span>{t("cmdb.perspective.menuAxis")}</span>
-            <select value={menuAxis} onChange={(event) => setMenuAxis(event.target.value as MenuAxis)}>
-              <option value="function">{t("cmdb.perspective.menuAxisOptions.function")}</option>
-              <option value="department">{t("cmdb.perspective.menuAxisOptions.department")}</option>
-              <option value="business">{t("cmdb.perspective.menuAxisOptions.business")}</option>
-              <option value="screen">{t("cmdb.perspective.menuAxisOptions.screen")}</option>
-            </select>
-          </label>
-          {menuAxis === "function" && (
-            <label className="control-field">
-              <span>{t("cmdb.perspective.functionWorkspace")}</span>
-              <select
-                value={functionWorkspace}
-                onChange={(event) => setFunctionWorkspace(event.target.value as FunctionWorkspace)}
-              >
-                <option value="full">{t("cmdb.perspective.functionWorkspaceOptions.full")}</option>
-                <option value="cmdb">{t("cmdb.perspective.functionWorkspaceOptions.cmdb")}</option>
-                <option value="monitoring">{t("cmdb.perspective.functionWorkspaceOptions.monitoring")}</option>
-                <option value="workflow">{t("cmdb.perspective.functionWorkspaceOptions.workflow")}</option>
-              </select>
-            </label>
-          )}
-          {menuAxis === "department" && (
-            <label className="control-field">
-              <span>{t("cmdb.perspective.departmentWorkspace")}</span>
-              <select value={departmentWorkspace} onChange={(event) => setDepartmentWorkspace(event.target.value)}>
-                {departmentWorkspaceOptions.map((item) => (
-                  <option key={`dept-workspace-${item}`} value={item}>
-                    {item === "all" ? t("cmdb.perspective.workspaceAll") : item}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {menuAxis === "business" && (
-            <label className="control-field">
-              <span>{t("cmdb.perspective.businessWorkspace")}</span>
-              <select value={businessWorkspace} onChange={(event) => setBusinessWorkspace(event.target.value)}>
-                {businessWorkspaceOptions.map((item) => (
-                  <option key={`biz-workspace-${item}`} value={item}>
-                    {item === "all" ? t("cmdb.perspective.workspaceAll") : item}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-        </div>
-        <p className="section-note">
-          {t("cmdb.perspective.summary", {
-            axis: menuAxis,
-            scope: perspectiveScopeLabel
-          })}
-        </p>
-      </SectionCard>
-      )}
-
-      {visibleSections.has("section-cockpit") && (
-        <SectionCard id="section-cockpit" title={t("cmdb.cockpit.title")}>
-          <div className="detail-grid">
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.cards.assetTotal")}</h3>
-              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{assetStats?.total_assets ?? assets.length}</p>
-              <p className="section-note">{t("cmdb.cockpit.scopeLabel", { value: perspectiveScopeLabel })}</p>
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.cards.operational")}</h3>
-              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{cockpitOperationalAssets}</p>
-              <p className="section-note">{t("cmdb.cockpit.cards.monitored", { value: monitoringOverview?.summary.monitored_asset_total ?? 0 })}</p>
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.cards.critical")}</h3>
-              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{cockpitCriticalAssets}</p>
-              <p className="section-note">{t("cmdb.cockpit.cards.sources", { value: monitoringOverview?.summary.source_total ?? monitoringSources.length })}</p>
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.cards.responsibility")}</h3>
-              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>
-                {menuAxis === "department" ? selectedDepartmentAssetCount : selectedBusinessAssetCount}
-              </p>
-              <p className="section-note">
-                {menuAxis === "department"
-                  ? t("cmdb.cockpit.cards.departmentAssets")
-                  : menuAxis === "business"
-                    ? t("cmdb.cockpit.cards.businessAssets")
-                    : t("cmdb.cockpit.cards.globalAssets")}
-              </p>
-            </div>
-          </div>
-
-          <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.charts.status")}</h3>
-              {assetStatsStatusBuckets.length === 0 ? (
-                <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
-              ) : (
-                assetStatsStatusBuckets.slice(0, 6).map((bucket) => (
-                  <div key={`cockpit-status-${bucket.key}`} style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", gap: "0.5rem", marginBottom: "0.35rem", alignItems: "center" }}>
-                    <span>{bucket.label}</span>
-                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
-                      <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, assetStatsStatusMax)} color="#1d4ed8" />
-                    </div>
-                    <span>{bucket.asset_total}</span>
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.charts.department")}</h3>
-              {assetStatsDepartmentBuckets.length === 0 ? (
-                <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
-              ) : (
-                assetStatsDepartmentBuckets.slice(0, 6).map((bucket) => (
-                  <div key={`cockpit-dept-${bucket.key}`} style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", gap: "0.5rem", marginBottom: "0.35rem", alignItems: "center" }}>
-                    <span>{bucket.label}</span>
-                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
-                      <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, assetStatsDepartmentMax)} color="#0f766e" />
-                    </div>
-                    <span>{bucket.asset_total}</span>
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.cockpit.charts.business")}</h3>
-              {assetStatsBusinessServiceBuckets.length === 0 ? (
-                <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
-              ) : (
-                assetStatsBusinessServiceBuckets.slice(0, 6).map((bucket) => (
-                  <div key={`cockpit-biz-${bucket.key}`} style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", gap: "0.5rem", marginBottom: "0.35rem", alignItems: "center" }}>
-                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bucket.label}</span>
-                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
-                      <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, assetStatsBusinessServiceMax)} color="#be123c" />
-                    </div>
-                    <span>{bucket.asset_total}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-          {loadingMonitoringOverview && <p className="inline-note">{t("cmdb.cockpit.messages.loadingOverview")}</p>}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-workflow-cockpit") && (
-        <SectionCard id="section-workflow-cockpit" title={t("cmdb.workflow.cockpit.title")}>
-          <p className="section-note">
-            {t("cmdb.workflow.cockpit.summary", {
-              requests: workflowKpis.totalRequests,
-              active: workflowKpis.activeRequests,
-              completed: workflowKpis.completedRequests,
-              failed: workflowKpis.failedRequests
-            })}
-          </p>
-
-          <div className="detail-grid">
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.totalRequests")}</h3>
-              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.totalRequests}</p>
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.activeRequests")}</h3>
-              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.activeRequests}</p>
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.approvalQueue")}</h3>
-              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.approvalQueue}</p>
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.manualQueue")}</h3>
-              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.manualQueue}</p>
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.completionRate")}</h3>
-              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.completionRate}%</p>
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.cards.automationShare")}</h3>
-              <p style={{ fontSize: "2rem", margin: "0.2rem 0" }}>{workflowKpis.automationShare}%</p>
-            </div>
-          </div>
-
-          <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.charts.status")}</h3>
-              {workflowStatusBuckets.length === 0 ? (
-                <p>{t("cmdb.workflow.messages.noRequests")}</p>
-              ) : (
-                workflowStatusBuckets.slice(0, 8).map((bucket) => (
-                  <div
-                    key={`workflow-status-${bucket.key}`}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "160px 1fr auto",
-                      gap: "0.5rem",
-                      marginBottom: "0.35rem",
-                      alignItems: "center"
-                    }}
-                  >
-                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {bucket.label}
-                    </span>
-                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
-                      <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, workflowStatusMax)} color="#1d4ed8" />
-                    </div>
-                    <span>{bucket.asset_total}</span>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.charts.templateUsage")}</h3>
-              {workflowTemplateUsageBuckets.length === 0 ? (
-                <p>{t("cmdb.workflow.messages.noRequests")}</p>
-              ) : (
-                workflowTemplateUsageBuckets.slice(0, 8).map((bucket) => (
-                  <div
-                    key={`workflow-template-usage-${bucket.key}`}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "180px 1fr auto",
-                      gap: "0.5rem",
-                      marginBottom: "0.35rem",
-                      alignItems: "center"
-                    }}
-                  >
-                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {bucket.label}
-                    </span>
-                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
-                      <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, workflowTemplateUsageMax)} color="#0f766e" />
-                    </div>
-                    <span>{bucket.asset_total}</span>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.charts.requesterLoad")}</h3>
-              {workflowRequesterBuckets.length === 0 ? (
-                <p>{t("cmdb.workflow.messages.noRequests")}</p>
-              ) : (
-                workflowRequesterBuckets.slice(0, 8).map((bucket) => (
-                  <div
-                    key={`workflow-requester-${bucket.key}`}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "160px 1fr auto",
-                      gap: "0.5rem",
-                      marginBottom: "0.35rem",
-                      alignItems: "center"
-                    }}
-                  >
-                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {bucket.label}
-                    </span>
-                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
-                      <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, workflowRequesterMax)} color="#be123c" />
-                    </div>
-                    <span>{bucket.asset_total}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.charts.dailyTrend")}</h3>
-              {workflowDailyTrendMax <= 0 ? (
-                <p>{t("cmdb.workflow.cockpit.labels.noRecentData")}</p>
-              ) : (
-                <div style={{ display: "flex", gap: "0.45rem", alignItems: "end", minHeight: "168px" }}>
-                  {workflowDailyTrend.map((point) => (
-                    <div
-                      key={point.day_key}
-                      style={{ flex: "1 1 0", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.3rem" }}
-                      title={t("cmdb.workflow.cockpit.trendTooltip", {
-                        day: point.day_label,
-                        total: point.total,
-                        completed: point.completed,
-                        failed: point.failed,
-                        active: point.active
-                      })}
-                    >
-                      <div
-                        style={{
-                          position: "relative",
-                          width: "100%",
-                          maxWidth: "38px",
-                          height: "118px",
-                          background: "#e2e8f0",
-                          borderRadius: "10px",
-                          overflow: "hidden"
-                        }}
-                      >
-                        <div
-                          style={{
-                            position: "absolute",
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            height: bucketBarWidth(point.total, workflowDailyTrendMax),
-                            background: "linear-gradient(180deg, #38bdf8 0%, #1d4ed8 100%)"
-                          }}
-                        />
-                      </div>
-                      <span style={{ fontSize: "0.78rem", color: "#4f6478" }}>{point.day_label}</span>
-                      <span style={{ fontSize: "0.8rem", fontWeight: 600 }}>{point.total}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.cockpit.charts.executionQuality")}</h3>
-              <p className="section-note">
-                {t("cmdb.workflow.cockpit.executionSummary", {
-                  avgExecution: workflowKpis.averageExecutionMs,
-                  successRate: workflowKpis.executionSuccessRate,
-                  sampleSize: workflowKpis.executionSampleSize
-                })}
-              </p>
-              <div className="toolbar-row">
-                <span className="status-chip status-chip-success">
-                  {t("cmdb.workflow.cockpit.labels.completed")}: {workflowKpis.completedRequests}
-                </span>
-                <span className="status-chip status-chip-danger">
-                  {t("cmdb.workflow.cockpit.labels.failed")}: {workflowKpis.failedRequests}
-                </span>
-                <span className="status-chip">
-                  {t("cmdb.workflow.cockpit.labels.active")}: {workflowKpis.activeRequests}
-                </span>
-              </div>
-              <div className="toolbar-row" style={{ marginTop: "0.35rem" }}>
-                <span className="status-chip">
-                  {t("cmdb.workflow.cockpit.labels.avgExecution")}: {workflowKpis.averageExecutionMs} ms
-                </span>
-                <span className="status-chip">
-                  {t("cmdb.workflow.cockpit.labels.executionSuccessRate")}: {workflowKpis.executionSuccessRate}%
-                </span>
-                <span className="status-chip">
-                  {t("cmdb.workflow.cockpit.labels.sampleSize")}: {workflowKpis.executionSampleSize}
-                </span>
-              </div>
-            </div>
-          </div>
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-workflow-reports") && (
-        <SectionCard
-          id="section-workflow-reports"
-          title={t("cmdb.workflow.reports.title")}
-          actions={(
-            <div className="toolbar-row">
-              <button onClick={() => exportWorkflowReportCsv()}>{t("cmdb.workflow.reports.actions.exportCsv")}</button>
-              <button
-                onClick={() => {
-                  setWorkflowReportRangeDays("30");
-                  setWorkflowReportStatusFilter("all");
-                  setWorkflowReportTemplateFilter("all");
-                  setWorkflowReportRequesterFilter("");
-                }}
-              >
-                {t("cmdb.workflow.reports.actions.resetFilters")}
-              </button>
-            </div>
-          )}
-        >
-          <div className="filter-grid">
-            <label className="control-field">
-              <span>{t("cmdb.workflow.reports.filters.rangeDaysLabel")}</span>
-              <select value={workflowReportRangeDays} onChange={(event) => setWorkflowReportRangeDays(event.target.value)}>
-                <option value="7">{t("cmdb.workflow.reports.filters.rangeOptions.7")}</option>
-                <option value="30">{t("cmdb.workflow.reports.filters.rangeOptions.30")}</option>
-                <option value="90">{t("cmdb.workflow.reports.filters.rangeOptions.90")}</option>
-              </select>
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.workflow.reports.filters.statusLabel")}</span>
-              <select
-                value={workflowReportStatusFilter}
-                onChange={(event) => setWorkflowReportStatusFilter(event.target.value)}
-              >
-                <option value="all">{t("cmdb.workflow.reports.filters.statusAll")}</option>
-                {workflowReportStatusOptions.map((status) => (
-                  <option key={`workflow-report-status-${status}`} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.workflow.reports.filters.templateLabel")}</span>
-              <select
-                value={workflowReportTemplateFilter}
-                onChange={(event) => setWorkflowReportTemplateFilter(event.target.value)}
-              >
-                <option value="all">{t("cmdb.workflow.reports.filters.templateAll")}</option>
-                {workflowReportTemplateOptions.map((templateName) => (
-                  <option key={`workflow-report-template-${templateName}`} value={templateName}>
-                    {templateName}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.workflow.reports.filters.requesterLabel")}</span>
-              <input
-                value={workflowReportRequesterFilter}
-                onChange={(event) => setWorkflowReportRequesterFilter(event.target.value)}
-                placeholder={t("cmdb.workflow.reports.filters.requesterPlaceholder")}
-              />
-            </label>
-          </div>
-
-          <p className="section-note">
-            {t("cmdb.workflow.reports.summary", {
-              total: workflowReportSummary.total,
-              completed: workflowReportSummary.completed,
-              failed: workflowReportSummary.failed,
-              active: workflowReportSummary.active,
-              completionRate: workflowReportSummary.completionRate,
-              failureRate: workflowReportSummary.failureRate
-            })}
-          </p>
-
-          <div className="detail-grid">
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.reports.charts.statusDistribution")}</h3>
-              {workflowReportStatusBuckets.length === 0 ? (
-                <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
-              ) : (
-                workflowReportStatusBuckets.map((bucket) => (
-                  <div
-                    key={`workflow-report-status-${bucket.key}`}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "160px 1fr auto",
-                      gap: "0.5rem",
-                      marginBottom: "0.35rem",
-                      alignItems: "center"
-                    }}
-                  >
-                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {bucket.label}
-                    </span>
-                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
-                      <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, workflowReportStatusMax)} color="#0f766e" />
-                    </div>
-                    <span>{bucket.asset_total}</span>
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.reports.charts.templateDistribution")}</h3>
-              {workflowReportTemplateBuckets.length === 0 ? (
-                <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
-              ) : (
-                workflowReportTemplateBuckets.slice(0, 10).map((bucket) => (
-                  <div
-                    key={`workflow-report-template-${bucket.key}`}
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "180px 1fr auto",
-                      gap: "0.5rem",
-                      marginBottom: "0.35rem",
-                      alignItems: "center"
-                    }}
-                  >
-                    <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {bucket.label}
-                    </span>
-                    <div style={{ background: "#e2e8f0", height: "8px", borderRadius: "999px", overflow: "hidden" }}>
-                      <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, workflowReportTemplateMax)} color="#1d4ed8" />
-                    </div>
-                    <span>{bucket.asset_total}</span>
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.reports.charts.dailyTrend")}</h3>
-              {workflowReportDailyTrendMax <= 0 ? (
-                <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
-              ) : (
-                <div style={{ display: "flex", gap: "0.45rem", alignItems: "end", minHeight: "176px", overflowX: "auto", paddingBottom: "0.35rem" }}>
-                  {workflowReportDailyTrend.map((point) => (
-                    <div
-                      key={`workflow-report-trend-${point.day_key}`}
-                      style={{ flex: "0 0 34px", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.3rem" }}
-                      title={t("cmdb.workflow.cockpit.trendTooltip", {
-                        day: point.day_label,
-                        total: point.total,
-                        completed: point.completed,
-                        failed: point.failed,
-                        active: point.active
-                      })}
-                    >
-                      <div
-                        style={{
-                          position: "relative",
-                          width: "100%",
-                          height: "120px",
-                          background: "#e2e8f0",
-                          borderRadius: "8px",
-                          overflow: "hidden"
-                        }}
-                      >
-                        <div
-                          style={{
-                            position: "absolute",
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            height: bucketBarWidth(point.total, workflowReportDailyTrendMax),
-                            background: "linear-gradient(180deg, #7dd3fc 0%, #1d4ed8 100%)"
-                          }}
-                        />
-                        {point.total > 0 && (
-                          <>
-                            <div
-                              style={{
-                                position: "absolute",
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                height: `${(point.failed / point.total) * Number.parseFloat(bucketBarWidth(point.total, workflowReportDailyTrendMax))}%`,
-                                background: "rgba(190, 24, 93, 0.75)"
-                              }}
-                            />
-                            <div
-                              style={{
-                                position: "absolute",
-                                left: 0,
-                                right: 0,
-                                bottom: `${(point.failed / point.total) * Number.parseFloat(bucketBarWidth(point.total, workflowReportDailyTrendMax))}%`,
-                                height: `${(point.completed / point.total) * Number.parseFloat(bucketBarWidth(point.total, workflowReportDailyTrendMax))}%`,
-                                background: "rgba(15, 118, 110, 0.78)"
-                              }}
-                            />
-                          </>
-                        )}
-                      </div>
-                      <span style={{ fontSize: "0.72rem", color: "#4f6478" }}>{point.day_label}</span>
-                      <span style={{ fontSize: "0.75rem", fontWeight: 600 }}>{point.total}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <p className="inline-note">
-                {t("cmdb.workflow.reports.executionSummary", {
-                  avgExecution: workflowReportExecutionStats.averageDurationMs,
-                  successRate: workflowReportExecutionStats.successRate,
-                  sampleSize: workflowReportExecutionStats.sampleSize,
-                  automationShare: workflowReportExecutionStats.automationShare
-                })}
-              </p>
-            </div>
-          </div>
-
-          <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.reports.charts.templateRanking")}</h3>
-              {workflowTemplateTrendRanks.length === 0 ? (
-                <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
-              ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ borderCollapse: "collapse", minWidth: "920px", width: "100%" }}>
-                    <thead>
-                      <tr>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.name")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.thisWeek")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.lastWeek")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.weekDelta")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.thisMonth")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.lastMonth")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.monthDelta")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {workflowTemplateTrendRanks.slice(0, 8).map((item) => (
-                        <tr key={`workflow-rank-template-${item.key}`}>
-                          <td style={cellStyle}>{item.label}</td>
-                          <td style={cellStyle}>{item.week_current}</td>
-                          <td style={cellStyle}>{item.week_previous}</td>
-                          <td style={cellStyle}>{formatSignedDelta(item.week_delta)}</td>
-                          <td style={cellStyle}>{item.month_current}</td>
-                          <td style={cellStyle}>{item.month_previous}</td>
-                          <td style={cellStyle}>{formatSignedDelta(item.month_delta)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            <div className="detail-panel">
-              <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.reports.charts.requesterRanking")}</h3>
-              {workflowRequesterTrendRanks.length === 0 ? (
-                <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
-              ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ borderCollapse: "collapse", minWidth: "920px", width: "100%" }}>
-                    <thead>
-                      <tr>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.name")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.thisWeek")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.lastWeek")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.weekDelta")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.thisMonth")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.lastMonth")}</th>
-                        <th style={cellStyle}>{t("cmdb.workflow.reports.ranking.columns.monthDelta")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {workflowRequesterTrendRanks.slice(0, 8).map((item) => (
-                        <tr key={`workflow-rank-requester-${item.key}`}>
-                          <td style={cellStyle}>{item.label}</td>
-                          <td style={cellStyle}>{item.week_current}</td>
-                          <td style={cellStyle}>{item.week_previous}</td>
-                          <td style={cellStyle}>{formatSignedDelta(item.week_delta)}</td>
-                          <td style={cellStyle}>{item.month_current}</td>
-                          <td style={cellStyle}>{item.month_previous}</td>
-                          <td style={cellStyle}>{formatSignedDelta(item.month_delta)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <h3 style={{ ...subSectionTitleStyle, marginTop: "0.9rem" }}>{t("cmdb.workflow.reports.table.title")}</h3>
-          {workflowReportRows.length === 0 ? (
-            <p>{t("cmdb.workflow.reports.messages.noResult")}</p>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ borderCollapse: "collapse", minWidth: "1180px", width: "100%" }}>
-                <thead>
-                  <tr>
-                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.id")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.template")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.requester")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.status")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.createdAt")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.updatedAt")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.reports.table.columns.lastError")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {workflowReportRows.slice(0, 200).map((item) => (
-                    <tr key={`workflow-report-row-${item.id}`}>
-                      <td style={cellStyle}>#{item.id}</td>
-                      <td style={cellStyle}>{workflowTemplateDisplayName(item)}</td>
-                      <td style={cellStyle}>{item.requester}</td>
-                      <td style={cellStyle}>
-                        <span className={statusChipClass(item.status)}>{item.status}</span>
-                      </td>
-                      <td style={cellStyle}>{new Date(item.created_at).toLocaleString()}</td>
-                      <td style={cellStyle}>{new Date(item.updated_at).toLocaleString()}</td>
-                      <td style={cellStyle}>{item.last_error ?? "-"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-workflow") && (
-        <SectionCard id="section-workflow" title={t("cmdb.workflow.title")}>
-          <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
-            <button onClick={() => void loadWorkflowTemplates()} disabled={loadingWorkflowTemplates}>
-              {loadingWorkflowTemplates ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.refreshTemplates")}
-            </button>
-            <button onClick={() => void loadWorkflowRequests()} disabled={loadingWorkflowRequests}>
-              {loadingWorkflowRequests ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.refreshRequests")}
-            </button>
-            {selectedWorkflowRequest && (
-              <button
-                onClick={() => void loadWorkflowLogs(selectedWorkflowRequest.id)}
-                disabled={loadingWorkflowLogs}
-              >
-                {loadingWorkflowLogs ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.refreshLogs")}
-              </button>
-            )}
-          </div>
-
-          {workflowNotice && <p className="banner banner-success">{workflowNotice}</p>}
-          <p className="section-note">
-            {t("cmdb.workflow.summary", {
-              templates: workflowTemplates.length,
-              requests: workflowRequests.length
-            })}
-          </p>
-          {!canWriteCmdb && <p className="inline-note">{t("cmdb.workflow.messages.readOnlyHint")}</p>}
-
-          <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.templatesTitle")}</h3>
-          {canWriteCmdb && (
-            <>
-              <div className="form-grid" style={{ marginBottom: "0.75rem" }}>
-                <label className="control-field">
-                  <span>{t("cmdb.workflow.form.templateName")}</span>
-                  <input
-                    value={newWorkflowTemplateName}
-                    onChange={(event) => setNewWorkflowTemplateName(event.target.value)}
-                    placeholder={t("cmdb.workflow.form.templateNamePlaceholder")}
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.workflow.form.templateDescription")}</span>
-                  <input
-                    value={newWorkflowTemplateDescription}
-                    onChange={(event) => setNewWorkflowTemplateDescription(event.target.value)}
-                    placeholder={t("cmdb.workflow.form.templateDescriptionPlaceholder")}
-                  />
-                </label>
-              </div>
-
-              <div className="form-grid" style={{ marginBottom: "0.75rem" }}>
-                <label className="control-field">
-                  <span>{t("cmdb.workflow.form.stepId")}</span>
-                  <input
-                    value={newWorkflowStep.id}
-                    onChange={(event) =>
-                      setNewWorkflowStep((prev) => ({
-                        ...prev,
-                        id: event.target.value
-                      }))
-                    }
-                    placeholder="apply-patch"
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.workflow.form.stepName")}</span>
-                  <input
-                    value={newWorkflowStep.name}
-                    onChange={(event) =>
-                      setNewWorkflowStep((prev) => ({
-                        ...prev,
-                        name: event.target.value
-                      }))
-                    }
-                    placeholder={t("cmdb.workflow.form.stepNamePlaceholder")}
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.workflow.form.stepKind")}</span>
-                  <select
-                    value={newWorkflowStep.kind}
-                    onChange={(event) =>
-                      setNewWorkflowStep((prev) => ({
-                        ...prev,
-                        kind: event.target.value as WorkflowStepKind
-                      }))
-                    }
-                  >
-                    <option value="script">script</option>
-                    <option value="manual">manual</option>
-                    <option value="approval">approval</option>
-                  </select>
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.workflow.form.timeoutSeconds")}</span>
-                  <input
-                    value={newWorkflowStep.timeout_seconds}
-                    onChange={(event) =>
-                      setNewWorkflowStep((prev) => ({
-                        ...prev,
-                        timeout_seconds: event.target.value
-                      }))
-                    }
-                    placeholder="300"
-                    disabled={newWorkflowStep.kind !== "script"}
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.workflow.form.approverGroup")}</span>
-                  <input
-                    value={newWorkflowStep.approver_group}
-                    onChange={(event) =>
-                      setNewWorkflowStep((prev) => ({
-                        ...prev,
-                        approver_group: event.target.value
-                      }))
-                    }
-                    placeholder="ops-lead"
-                    disabled={newWorkflowStep.kind === "script"}
-                  />
-                </label>
-              </div>
-              <div style={{ marginBottom: "0.75rem" }}>
-                <label className="control-field">
-                  <span>{t("cmdb.workflow.form.stepScript")}</span>
-                  <textarea
-                    value={newWorkflowStep.script}
-                    onChange={(event) =>
-                      setNewWorkflowStep((prev) => ({
-                        ...prev,
-                        script: event.target.value
-                      }))
-                    }
-                    rows={4}
-                    style={{ width: "100%" }}
-                    placeholder="echo 'run automation...'"
-                    disabled={newWorkflowStep.kind !== "script"}
-                  />
-                </label>
-              </div>
-              <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={newWorkflowStep.auto_run}
-                    onChange={(event) =>
-                      setNewWorkflowStep((prev) => ({
-                        ...prev,
-                        auto_run: event.target.checked
-                      }))
-                    }
-                    disabled={newWorkflowStep.kind !== "script"}
-                  />{" "}
-                  {t("cmdb.workflow.form.autoRun")}
-                </label>
-                <button onClick={() => addWorkflowStepToDraft()}>
-                  {t("cmdb.workflow.actions.addStep")}
-                </button>
-                <button onClick={() => void createWorkflowTemplate()} disabled={creatingWorkflowTemplate}>
-                  {creatingWorkflowTemplate ? t("cmdb.actions.creating") : t("cmdb.workflow.actions.createTemplate")}
-                </button>
-              </div>
-            </>
-          )}
-
-          {newWorkflowTemplateSteps.length > 0 && (
-            <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
-              <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
-                <thead>
-                  <tr>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.step.id")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.step.name")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.step.kind")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.step.autoRun")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.step.timeout")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.step.script")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.step.approver")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.step.actions")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {newWorkflowTemplateSteps.map((step) => (
-                    <tr key={`draft-step-${step.id}`}>
-                      <td style={cellStyle}>{step.id}</td>
-                      <td style={cellStyle}>{step.name}</td>
-                      <td style={cellStyle}>{step.kind}</td>
-                      <td style={cellStyle}>{step.auto_run ? "Yes" : "No"}</td>
-                      <td style={cellStyle}>{step.timeout_seconds}</td>
-                      <td style={cellStyle}>{step.kind === "script" ? truncateTopologyLabel(step.script, 72) : "-"}</td>
-                      <td style={cellStyle}>{step.approver_group || "-"}</td>
-                      <td style={cellStyle}>
-                        <button onClick={() => removeWorkflowStepFromDraft(step.id)}>
-                          {t("cmdb.workflow.actions.removeStep")}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {loadingWorkflowTemplates && workflowTemplates.length === 0 ? (
-            <p>{t("cmdb.workflow.messages.loadingTemplates")}</p>
-          ) : workflowTemplates.length === 0 ? (
-            <p>{t("cmdb.workflow.messages.noTemplates")}</p>
-          ) : (
-            <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
-              <table style={{ borderCollapse: "collapse", minWidth: "1100px", width: "100%" }}>
-                <thead>
-                  <tr>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.template.id")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.template.name")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.template.steps")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.template.enabled")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.template.updatedAt")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {workflowTemplates.map((template) => (
-                    <tr key={template.id}>
-                      <td style={cellStyle}>{template.id}</td>
-                      <td style={cellStyle}>{template.name}</td>
-                      <td style={cellStyle}>{template.definition.steps.length}</td>
-                      <td style={cellStyle}>{template.is_enabled ? "Yes" : "No"}</td>
-                      <td style={cellStyle}>{new Date(template.updated_at).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.requestsTitle")}</h3>
-          {canWriteCmdb && (
-            <div className="form-grid" style={{ marginBottom: "0.75rem" }}>
-              <label className="control-field">
-                <span>{t("cmdb.workflow.form.requestTemplate")}</span>
-                <select
-                  value={newWorkflowRequest.template_id}
-                  onChange={(event) =>
-                    setNewWorkflowRequest((prev) => ({
-                      ...prev,
-                      template_id: event.target.value
-                    }))
-                  }
-                >
-                  <option value="">{t("cmdb.workflow.form.selectTemplate")}</option>
-                  {workflowTemplates.map((template) => (
-                    <option key={`workflow-template-${template.id}`} value={template.id}>
-                      #{template.id} {template.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="control-field">
-                <span>{t("cmdb.workflow.form.requestTitle")}</span>
-                <input
-                  value={newWorkflowRequest.title}
-                  onChange={(event) =>
-                    setNewWorkflowRequest((prev) => ({
-                      ...prev,
-                      title: event.target.value
-                    }))
-                  }
-                  placeholder={t("cmdb.workflow.form.requestTitlePlaceholder")}
-                />
-              </label>
-              <label className="control-field">
-                <span>{t("cmdb.workflow.form.requestPayload")}</span>
-                <input
-                  value={newWorkflowRequest.payload_json}
-                  onChange={(event) =>
-                    setNewWorkflowRequest((prev) => ({
-                      ...prev,
-                      payload_json: event.target.value
-                    }))
-                  }
-                  placeholder='{"asset_id": 101}'
-                />
-              </label>
-              <div className="toolbar-row" style={{ alignSelf: "end" }}>
-                <button onClick={() => void createWorkflowRequest()} disabled={creatingWorkflowRequest}>
-                  {creatingWorkflowRequest ? t("cmdb.actions.creating") : t("cmdb.workflow.actions.createRequest")}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {loadingWorkflowRequests && workflowRequests.length === 0 ? (
-            <p>{t("cmdb.workflow.messages.loadingRequests")}</p>
-          ) : workflowRequests.length === 0 ? (
-            <p>{t("cmdb.workflow.messages.noRequests")}</p>
-          ) : (
-            <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
-              <table style={{ borderCollapse: "collapse", minWidth: "1380px", width: "100%" }}>
-                <thead>
-                  <tr>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.request.id")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.request.template")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.request.title")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.request.status")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.request.stepIndex")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.request.requester")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.request.lastError")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.request.updatedAt")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.request.actions")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {workflowRequests.map((request) => (
-                    <tr key={request.id}>
-                      <td style={cellStyle}>{request.id}</td>
-                      <td style={cellStyle}>#{request.template_id} {request.template_name}</td>
-                      <td style={cellStyle}>{request.title}</td>
-                      <td style={cellStyle}>
-                        <span className={statusChipClass(request.status)}>{request.status}</span>
-                      </td>
-                      <td style={cellStyle}>{request.current_step_index}</td>
-                      <td style={cellStyle}>{request.requester}</td>
-                      <td style={cellStyle}>{request.last_error ?? "-"}</td>
-                      <td style={cellStyle}>{new Date(request.updated_at).toLocaleString()}</td>
-                      <td style={cellStyle}>
-                        <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
-                          <button
-                            onClick={() => {
-                              setSelectedWorkflowRequestId(String(request.id));
-                              void loadWorkflowLogs(request.id);
-                            }}
-                          >
-                            {t("cmdb.workflow.actions.viewLogs")}
-                          </button>
-                          <button
-                            onClick={() => void approveWorkflowRequest(request.id)}
-                            disabled={approvingWorkflowRequestId === request.id || request.status !== "pending_approval"}
-                          >
-                            {approvingWorkflowRequestId === request.id ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.approve")}
-                          </button>
-                          <button
-                            onClick={() => void rejectWorkflowRequest(request.id)}
-                            disabled={rejectingWorkflowRequestId === request.id || request.status !== "pending_approval"}
-                          >
-                            {rejectingWorkflowRequestId === request.id ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.reject")}
-                          </button>
-                          <button
-                            onClick={() => void executeWorkflowRequest(request.id)}
-                            disabled={
-                              executingWorkflowRequestId === request.id
-                              || (request.status !== "approved" && request.status !== "running")
-                            }
-                          >
-                            {executingWorkflowRequestId === request.id ? t("cmdb.actions.loading") : t("cmdb.workflow.actions.execute")}
-                          </button>
-                          <button
-                            onClick={() => void completeWorkflowManualStep(request.id)}
-                            disabled={manualCompletingWorkflowRequestId === request.id || request.status !== "waiting_manual"}
-                          >
-                            {manualCompletingWorkflowRequestId === request.id
-                              ? t("cmdb.actions.loading")
-                              : t("cmdb.workflow.actions.completeManual")}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <h3 style={subSectionTitleStyle}>{t("cmdb.workflow.logsTitle")}</h3>
-          {!selectedWorkflowRequest ? (
-            <p>{t("cmdb.workflow.messages.selectRequest")}</p>
-          ) : loadingWorkflowLogs && workflowLogs.length === 0 ? (
-            <p>{t("cmdb.workflow.messages.loadingLogs")}</p>
-          ) : workflowLogs.length === 0 ? (
-            <p>{t("cmdb.workflow.messages.noLogs")}</p>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ borderCollapse: "collapse", minWidth: "1350px", width: "100%" }}>
-                <thead>
-                  <tr>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.log.id")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.log.step")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.log.kind")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.log.status")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.log.executor")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.log.exitCode")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.log.duration")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.log.output")}</th>
-                    <th style={cellStyle}>{t("cmdb.workflow.table.log.time")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {workflowLogs.map((log) => (
-                    <tr key={`workflow-log-${log.id}`}>
-                      <td style={cellStyle}>{log.id}</td>
-                      <td style={cellStyle}>
-                        #{log.step_index} {log.step_id} / {log.step_name}
-                      </td>
-                      <td style={cellStyle}>{log.step_kind}</td>
-                      <td style={cellStyle}>
-                        <span className={statusChipClass(log.status)}>{log.status}</span>
-                      </td>
-                      <td style={cellStyle}>{log.executor ?? "-"}</td>
-                      <td style={cellStyle}>{log.exit_code ?? "-"}</td>
-                      <td style={cellStyle}>{log.duration_ms ?? "-"}</td>
-                      <td style={cellStyle}>
-                        <pre style={{ margin: 0, maxWidth: "420px", maxHeight: "120px", overflow: "auto", whiteSpace: "pre-wrap" }}>
-                          {truncateTopologyLabel(log.output ?? log.error ?? "-", 3000)}
-                        </pre>
-                      </td>
-                      <td style={cellStyle}>
-                        {log.finished_at ? new Date(log.finished_at).toLocaleString() : (log.created_at ? new Date(log.created_at).toLocaleString() : "-")}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-tickets") && (
-        <SectionCard
-          id="section-tickets"
-          title={t("cmdb.tickets.title")}
-          actions={(
-            <div className="toolbar-row">
-              <button onClick={() => void loadTickets()} disabled={loadingTickets}>
-                {loadingTickets ? t("cmdb.actions.loading") : t("cmdb.tickets.actions.refresh")}
-              </button>
-              <button onClick={() => void loadTickets()} disabled={loadingTickets}>
-                {t("cmdb.tickets.actions.applyFilters")}
-              </button>
-              <button
-                onClick={() => {
-                  setTicketStatusFilter("all");
-                  setTicketPriorityFilter("all");
-                  setTicketQueryFilter("");
-                }}
-              >
-                {t("cmdb.tickets.actions.resetFilters")}
-              </button>
-            </div>
-          )}
-        >
-          {ticketNotice && <p className="banner banner-success">{ticketNotice}</p>}
-          <p className="section-note">
-            {t("cmdb.tickets.summary", {
-              total: tickets.length,
-              selected: selectedTicketSummary?.ticket_no ?? "-"
-            })}
-          </p>
-          {!canWriteCmdb && <p className="inline-note">{t("cmdb.tickets.messages.readOnlyHint")}</p>}
-
-          <div className="filter-grid">
-            <label className="control-field">
-              <span>{t("cmdb.tickets.filters.status")}</span>
-              <select value={ticketStatusFilter} onChange={(event) => setTicketStatusFilter(event.target.value)}>
-                <option value="all">{t("cmdb.tickets.filters.all")}</option>
-                <option value="open">open</option>
-                <option value="in_progress">in_progress</option>
-                <option value="resolved">resolved</option>
-                <option value="closed">closed</option>
-                <option value="cancelled">cancelled</option>
-              </select>
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.tickets.filters.priority")}</span>
-              <select value={ticketPriorityFilter} onChange={(event) => setTicketPriorityFilter(event.target.value)}>
-                <option value="all">{t("cmdb.tickets.filters.all")}</option>
-                <option value="low">low</option>
-                <option value="medium">medium</option>
-                <option value="high">high</option>
-                <option value="critical">critical</option>
-              </select>
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.tickets.filters.query")}</span>
-              <input
-                value={ticketQueryFilter}
-                onChange={(event) => setTicketQueryFilter(event.target.value)}
-                placeholder={t("cmdb.tickets.filters.queryPlaceholder")}
-              />
-            </label>
-          </div>
-
-          {canWriteCmdb && (
-            <>
-              <h3 style={subSectionTitleStyle}>{t("cmdb.tickets.createTitle")}</h3>
-              <div className="form-grid">
-                <label className="control-field">
-                  <span>{t("cmdb.tickets.form.title")}</span>
-                  <input
-                    value={newTicket.title}
-                    onChange={(event) => setNewTicket((prev) => ({ ...prev, title: event.target.value }))}
-                    placeholder={t("cmdb.tickets.form.titlePlaceholder")}
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.tickets.form.priority")}</span>
-                  <select
-                    value={newTicket.priority}
-                    onChange={(event) =>
-                      setNewTicket((prev) => ({ ...prev, priority: event.target.value as NewTicketForm["priority"] }))
-                    }
-                  >
-                    <option value="low">low</option>
-                    <option value="medium">medium</option>
-                    <option value="high">high</option>
-                    <option value="critical">critical</option>
-                  </select>
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.tickets.form.category")}</span>
-                  <input
-                    value={newTicket.category}
-                    onChange={(event) => setNewTicket((prev) => ({ ...prev, category: event.target.value }))}
-                    placeholder="incident"
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.tickets.form.assignee")}</span>
-                  <input
-                    value={newTicket.assignee}
-                    onChange={(event) => setNewTicket((prev) => ({ ...prev, assignee: event.target.value }))}
-                    placeholder="ops-oncall"
-                  />
-                </label>
-              </div>
-              <div className="form-grid" style={{ marginTop: "0.5rem" }}>
-                <label className="control-field">
-                  <span>{t("cmdb.tickets.form.assetIds")}</span>
-                  <input
-                    value={newTicket.asset_ids_csv}
-                    onChange={(event) => setNewTicket((prev) => ({ ...prev, asset_ids_csv: event.target.value }))}
-                    placeholder="1,2,3"
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.tickets.form.alertSource")}</span>
-                  <input
-                    value={newTicket.alert_source}
-                    onChange={(event) => setNewTicket((prev) => ({ ...prev, alert_source: event.target.value }))}
-                    placeholder="zabbix"
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.tickets.form.alertKey")}</span>
-                  <input
-                    value={newTicket.alert_key}
-                    onChange={(event) => setNewTicket((prev) => ({ ...prev, alert_key: event.target.value }))}
-                    placeholder="problemid:123456"
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.tickets.form.alertSeverity")}</span>
-                  <input
-                    value={newTicket.alert_severity}
-                    onChange={(event) => setNewTicket((prev) => ({ ...prev, alert_severity: event.target.value }))}
-                    placeholder="warning"
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.tickets.form.workflowTemplateId")}</span>
-                  <input
-                    value={newTicket.workflow_template_id}
-                    onChange={(event) => setNewTicket((prev) => ({ ...prev, workflow_template_id: event.target.value }))}
-                    placeholder="1"
-                  />
-                </label>
-                <label className="control-field">
-                  <span>{t("cmdb.tickets.form.triggerWorkflow")}</span>
-                  <select
-                    value={newTicket.trigger_workflow ? "true" : "false"}
-                    onChange={(event) =>
-                      setNewTicket((prev) => ({ ...prev, trigger_workflow: event.target.value === "true" }))
-                    }
-                  >
-                    <option value="false">false</option>
-                    <option value="true">true</option>
-                  </select>
-                </label>
-              </div>
-              <label className="control-field" style={{ marginTop: "0.5rem" }}>
-                <span>{t("cmdb.tickets.form.alertTitle")}</span>
-                <input
-                  value={newTicket.alert_title}
-                  onChange={(event) => setNewTicket((prev) => ({ ...prev, alert_title: event.target.value }))}
-                  placeholder="Database CPU usage high"
-                />
-              </label>
-              <label className="control-field" style={{ marginTop: "0.5rem" }}>
-                <span>{t("cmdb.tickets.form.description")}</span>
-                <textarea
-                  rows={3}
-                  value={newTicket.description}
-                  onChange={(event) => setNewTicket((prev) => ({ ...prev, description: event.target.value }))}
-                  placeholder={t("cmdb.tickets.form.descriptionPlaceholder")}
-                />
-              </label>
-              <div className="toolbar-row" style={{ marginTop: "0.5rem" }}>
-                <button onClick={() => void createTicket()} disabled={creatingTicket}>
-                  {creatingTicket ? t("cmdb.actions.creating") : t("cmdb.tickets.actions.create")}
-                </button>
-              </div>
-            </>
-          )}
-
-          <h3 style={{ ...subSectionTitleStyle, marginTop: "0.8rem" }}>{t("cmdb.tickets.listTitle")}</h3>
-          {loadingTickets && tickets.length === 0 ? (
-            <p>{t("cmdb.tickets.messages.loading")}</p>
-          ) : tickets.length === 0 ? (
-            <p>{t("cmdb.tickets.messages.noTickets")}</p>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ borderCollapse: "collapse", minWidth: "1120px", width: "100%" }}>
-                <thead>
-                  <tr>
-                    <th style={cellStyle}>{t("cmdb.tickets.table.id")}</th>
-                    <th style={cellStyle}>{t("cmdb.tickets.table.title")}</th>
-                    <th style={cellStyle}>{t("cmdb.tickets.table.status")}</th>
-                    <th style={cellStyle}>{t("cmdb.tickets.table.priority")}</th>
-                    <th style={cellStyle}>{t("cmdb.tickets.table.requester")}</th>
-                    <th style={cellStyle}>{t("cmdb.tickets.table.links")}</th>
-                    <th style={cellStyle}>{t("cmdb.tickets.table.workflow")}</th>
-                    <th style={cellStyle}>{t("cmdb.tickets.table.updatedAt")}</th>
-                    <th style={cellStyle}>{t("cmdb.tickets.table.actions")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {tickets.map((ticket) => (
-                    <tr key={`ticket-row-${ticket.id}`}>
-                      <td style={cellStyle}>{ticket.ticket_no}</td>
-                      <td style={cellStyle}>{ticket.title}</td>
-                      <td style={cellStyle}>
-                        <span className={statusChipClass(ticket.status)}>{ticket.status}</span>
-                      </td>
-                      <td style={cellStyle}>{ticket.priority}</td>
-                      <td style={cellStyle}>{ticket.requester}</td>
-                      <td style={cellStyle}>
-                        assets:{ticket.asset_link_count} / alerts:{ticket.alert_link_count}
-                      </td>
-                      <td style={cellStyle}>
-                        {ticket.workflow_request_id ? `request #${ticket.workflow_request_id}` : "-"}
-                      </td>
-                      <td style={cellStyle}>{new Date(ticket.updated_at).toLocaleString()}</td>
-                      <td style={cellStyle}>
-                        <button
-                          onClick={() => {
-                            setSelectedTicketId(String(ticket.id));
-                            void loadTicketDetail(ticket.id);
-                          }}
-                        >
-                          {t("cmdb.tickets.actions.viewDetail")}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <h3 style={{ ...subSectionTitleStyle, marginTop: "0.8rem" }}>{t("cmdb.tickets.detailTitle")}</h3>
-          {!selectedTicketId ? (
-            <p>{t("cmdb.tickets.messages.selectTicket")}</p>
-          ) : loadingTicketDetail && !ticketDetail ? (
-            <p>{t("cmdb.tickets.messages.loadingDetail")}</p>
-          ) : !ticketDetail ? (
-            <p>{t("cmdb.tickets.messages.detailEmpty")}</p>
-          ) : (
-            <div className="detail-grid">
-              <div className="detail-panel">
-                <h3 style={subSectionTitleStyle}>{ticketDetail.ticket.ticket_no}</h3>
-                <p style={{ margin: "0.2rem 0 0.5rem 0" }}>{ticketDetail.ticket.title}</p>
-                <p className="section-note">
-                  {ticketDetail.ticket.description?.trim().length
-                    ? ticketDetail.ticket.description
-                    : t("cmdb.tickets.messages.noDescription")}
-                </p>
-                <div className="toolbar-row" style={{ marginTop: "0.5rem" }}>
-                  <span className={statusChipClass(ticketDetail.ticket.status)}>{ticketDetail.ticket.status}</span>
-                  <span className="status-chip">priority: {ticketDetail.ticket.priority}</span>
-                  <span className="status-chip">category: {ticketDetail.ticket.category}</span>
-                </div>
-                <p className="inline-note" style={{ marginTop: "0.45rem" }}>
-                  requester: {ticketDetail.ticket.requester} | assignee: {ticketDetail.ticket.assignee ?? "-"}
-                </p>
-                <p className="inline-note">
-                  updated: {new Date(ticketDetail.ticket.updated_at).toLocaleString()}
-                </p>
-                {canWriteCmdb && (
-                  <div className="toolbar-row" style={{ marginTop: "0.45rem" }}>
-                    <select value={ticketStatusDraft} onChange={(event) => setTicketStatusDraft(event.target.value)}>
-                      <option value="open">open</option>
-                      <option value="in_progress">in_progress</option>
-                      <option value="resolved">resolved</option>
-                      <option value="closed">closed</option>
-                      <option value="cancelled">cancelled</option>
-                    </select>
-                    <button
-                      onClick={() => void updateTicketStatus(ticketDetail.ticket.id, ticketStatusDraft)}
-                      disabled={updatingTicketStatusId === ticketDetail.ticket.id}
-                    >
-                      {updatingTicketStatusId === ticketDetail.ticket.id
-                        ? t("cmdb.actions.loading")
-                        : t("cmdb.tickets.actions.updateStatus")}
-                    </button>
-                  </div>
-                )}
-              </div>
-              <div className="detail-panel">
-                <h3 style={subSectionTitleStyle}>{t("cmdb.tickets.detail.assetLinks")}</h3>
-                {ticketDetail.asset_links.length === 0 ? (
-                  <p>{t("cmdb.tickets.messages.noAssetLinks")}</p>
-                ) : (
-                  ticketDetail.asset_links.map((link) => (
-                    <div key={`ticket-asset-${link.asset_id}`} className="toolbar-row" style={{ justifyContent: "space-between" }}>
-                      <span>#{link.asset_id} {link.asset_name ?? "-"}</span>
-                      <span className="status-chip">{link.asset_class ?? "-"}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="detail-panel">
-                <h3 style={subSectionTitleStyle}>{t("cmdb.tickets.detail.alertLinks")}</h3>
-                {ticketDetail.alert_links.length === 0 ? (
-                  <p>{t("cmdb.tickets.messages.noAlertLinks")}</p>
-                ) : (
-                  ticketDetail.alert_links.map((link) => (
-                    <div key={`ticket-alert-${link.alert_source}-${link.alert_key}`} style={{ marginBottom: "0.45rem" }}>
-                      <div>
-                        <strong>{link.alert_source}</strong> / {link.alert_key}
-                      </div>
-                      <div className="inline-note">
-                        {link.alert_title ?? "-"} | severity: {link.severity ?? "-"}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-scan") && (
-        <SectionCard id="section-scan" title={t("cmdb.scan.title")}>
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
-            <input
-              value={scanCode}
-              onChange={(event) => setScanCode(event.target.value)}
-              placeholder={t("cmdb.scan.placeholder")}
-              style={{ minWidth: "220px" }}
-            />
-            <select value={scanMode} onChange={(event) => setScanMode(event.target.value as "auto" | "qr" | "barcode")}>
-              <option value="auto">{t("cmdb.scan.modes.auto")}</option>
-              <option value="qr">{t("cmdb.scan.modes.qr")}</option>
-              <option value="barcode">{t("cmdb.scan.modes.barcode")}</option>
-            </select>
-            <button onClick={() => void findAssetByCode()} disabled={scanning}>
-              {scanning ? t("cmdb.actions.loading") : t("cmdb.scan.find")}
-            </button>
-          </div>
-          {scanResult && (
-            <p style={{ marginTop: "0.5rem" }}>
-              {t("cmdb.scan.hit")}: #{scanResult.id} {scanResult.name} ({scanResult.asset_class})
-            </p>
-          )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-discovery") && (
-        <SectionCard id="section-discovery" title={t("cmdb.discovery.title")}>
-        <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
-          <button onClick={() => void loadDiscoveryJobs()} disabled={loadingDiscoveryJobs}>
-            {loadingDiscoveryJobs ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.refreshJobs")}
-          </button>
-          <button onClick={() => void loadDiscoveryCandidates()} disabled={loadingDiscoveryCandidates}>
-            {loadingDiscoveryCandidates ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.refreshCandidates")}
-          </button>
-        </div>
-
-        {discoveryNotice && <p className="banner banner-success">{discoveryNotice}</p>}
-        <p className="section-note">
-          {t("cmdb.discovery.summary", { jobs: discoveryJobs.length, candidates: discoveryCandidates.length })}
-        </p>
-        {!canWriteCmdb && <p className="inline-note">{t("cmdb.discovery.messages.readOnlyHint")}</p>}
-
-        <h3 style={subSectionTitleStyle}>{t("cmdb.discovery.jobsTitle")}</h3>
-        {loadingDiscoveryJobs && discoveryJobs.length === 0 ? (
-          <p>{t("cmdb.discovery.messages.loadingJobs")}</p>
-        ) : discoveryJobs.length === 0 ? (
-          <p>{t("cmdb.discovery.messages.noJobs")}</p>
-        ) : (
-          <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
-            <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
-              <thead>
-                <tr>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.job.id")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.job.name")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.job.sourceType")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.job.status")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.job.lastRunStatus")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.job.lastRunAt")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.job.actions")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {discoveryJobs.map((job) => (
-                  <tr key={job.id}>
-                    <td style={cellStyle}>{job.id}</td>
-                    <td style={cellStyle}>{job.name}</td>
-                    <td style={cellStyle}>{job.source_type}</td>
-                    <td style={cellStyle}>
-                      <span className={statusChipClass(job.status)}>{job.status}</span>
-                    </td>
-                    <td style={cellStyle}>
-                      {job.last_run_status ? <span className={statusChipClass(job.last_run_status)}>{job.last_run_status}</span> : "-"}
-                    </td>
-                    <td style={cellStyle}>{job.last_run_at ? new Date(job.last_run_at).toLocaleString() : "-"}</td>
-                    <td style={cellStyle}>
-                      {canWriteCmdb ? (
-                        <button onClick={() => void runDiscoveryJob(job.id)} disabled={runningDiscoveryJobId === job.id}>
-                          {runningDiscoveryJobId === job.id ? t("cmdb.actions.loading") : t("cmdb.discovery.actions.run")}
-                        </button>
-                      ) : (
-                        <span>{t("auth.labels.readOnly")}</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        <h3 style={subSectionTitleStyle}>{t("cmdb.discovery.candidatesTitle")}</h3>
-        {loadingDiscoveryCandidates && discoveryCandidates.length === 0 ? (
-          <p>{t("cmdb.discovery.messages.loadingCandidates")}</p>
-        ) : discoveryCandidates.length === 0 ? (
-          <p>{t("cmdb.discovery.messages.noCandidates")}</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ borderCollapse: "collapse", minWidth: "1100px", width: "100%" }}>
-              <thead>
-                <tr>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.id")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.fingerprint")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.name")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.class")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.ip")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.discoveredAt")}</th>
-                  <th style={cellStyle}>{t("cmdb.discovery.table.candidate.actions")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {discoveryCandidates.map((candidate) => (
-                  <tr key={candidate.id}>
-                    <td style={cellStyle}>{candidate.id}</td>
-                    <td style={cellStyle}>{candidate.fingerprint}</td>
-                    <td style={cellStyle}>{readPayloadString(candidate.payload, "name") ?? "-"}</td>
-                    <td style={cellStyle}>{readPayloadString(candidate.payload, "asset_class") ?? "-"}</td>
-                    <td style={cellStyle}>{readPayloadString(candidate.payload, "ip") ?? "-"}</td>
-                    <td style={cellStyle}>{new Date(candidate.discovered_at).toLocaleString()}</td>
-                    <td style={cellStyle}>
-                      {canWriteCmdb ? (
-                        <div style={{ display: "flex", gap: "0.5rem" }}>
-                          <button
-                            onClick={() => void reviewDiscoveryCandidate(candidate.id, "approve")}
-                            disabled={reviewingCandidateId === candidate.id}
-                          >
-                            {reviewingCandidateId === candidate.id
-                              ? t("cmdb.actions.loading")
-                              : t("cmdb.discovery.actions.approve")}
-                          </button>
-                          <button
-                            onClick={() => void reviewDiscoveryCandidate(candidate.id, "reject")}
-                            disabled={reviewingCandidateId === candidate.id}
-                          >
-                            {reviewingCandidateId === candidate.id
-                              ? t("cmdb.actions.loading")
-                              : t("cmdb.discovery.actions.reject")}
-                          </button>
-                        </div>
-                      ) : (
-                        <span>{t("auth.labels.readOnly")}</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-monitoring-sources") && (
-        <SectionCard id="section-monitoring-sources" title={t("cmdb.monitoringSources.title")}>
-        <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
-          <button onClick={() => void loadMonitoringSources(monitoringSourceFilters)} disabled={loadingMonitoringSources}>
-            {loadingMonitoringSources
-              ? t("cmdb.actions.loading")
-              : t("cmdb.monitoringSources.actions.refresh")}
-          </button>
-          <span className="section-meta">
-            {t("cmdb.monitoringSources.summary", {
-              total: monitoringSourceStats.total,
-              enabled: monitoringSourceStats.enabled,
-              reachable: monitoringSourceStats.reachable,
-              unreachable: monitoringSourceStats.unreachable
-            })}
-          </span>
-        </div>
-
-        {monitoringSourceNotice && <p className="banner banner-success">{monitoringSourceNotice}</p>}
-
-        <div className="filter-grid" style={{ marginBottom: "0.75rem" }}>
-          <label className="control-field">
-            <span>{t("cmdb.monitoringSources.filters.sourceTypeLabel")}</span>
-            <select
-              value={monitoringSourceFilters.source_type}
-              onChange={(event) =>
-                setMonitoringSourceFilters((prev) => ({
-                  ...prev,
-                  source_type: event.target.value
-                }))
-              }
-            >
-              <option value="">{t("cmdb.monitoringSources.filters.allSourceTypes")}</option>
-              <option value="zabbix">zabbix</option>
-            </select>
-          </label>
-          <label className="control-field">
-            <span>{t("cmdb.monitoringSources.filters.siteLabel")}</span>
-            <input
-              value={monitoringSourceFilters.site}
-              onChange={(event) =>
-                setMonitoringSourceFilters((prev) => ({
-                  ...prev,
-                  site: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.monitoringSources.filters.sitePlaceholder")}
-            />
-          </label>
-          <label className="control-field">
-            <span>{t("cmdb.monitoringSources.filters.departmentLabel")}</span>
-            <input
-              value={monitoringSourceFilters.department}
-              onChange={(event) =>
-                setMonitoringSourceFilters((prev) => ({
-                  ...prev,
-                  department: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.monitoringSources.filters.departmentPlaceholder")}
-            />
-          </label>
-          <label className="control-field">
-            <span>{t("cmdb.monitoringSources.filters.enabledLabel")}</span>
-            <select
-              value={monitoringSourceFilters.is_enabled}
-              onChange={(event) =>
-                setMonitoringSourceFilters((prev) => ({
-                  ...prev,
-                  is_enabled: event.target.value as "all" | "true" | "false"
-                }))
-              }
-            >
-              <option value="all">{t("cmdb.monitoringSources.filters.enabledAll")}</option>
-              <option value="true">{t("cmdb.monitoringSources.filters.enabledOnly")}</option>
-              <option value="false">{t("cmdb.monitoringSources.filters.disabledOnly")}</option>
-            </select>
-          </label>
-        </div>
-        <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
-          <button onClick={() => void loadMonitoringSources(monitoringSourceFilters)} disabled={loadingMonitoringSources}>
-            {loadingMonitoringSources ? t("cmdb.actions.loading") : t("cmdb.monitoringSources.actions.applyFilters")}
-          </button>
-          <button
-            onClick={() => {
-              const next = { ...defaultMonitoringSourceFilters };
-              setMonitoringSourceFilters(next);
-              void loadMonitoringSources(next);
-            }}
-            disabled={!hasMonitoringSourceFilter || loadingMonitoringSources}
-          >
-            {t("cmdb.monitoringSources.actions.resetFilters")}
-          </button>
-        </div>
-
-        {!canWriteCmdb && <p className="inline-note">{t("cmdb.monitoringSources.messages.readOnlyHint")}</p>}
-
-        {canWriteCmdb && (
-          <div className="form-grid" style={{ marginBottom: "0.9rem" }}>
-            <label className="control-field">
-              <span>{t("cmdb.monitoringSources.form.name")}</span>
-              <input
-                value={newMonitoringSource.name}
-                onChange={(event) =>
-                  setNewMonitoringSource((prev) => ({
-                    ...prev,
-                    name: event.target.value
-                  }))
-                }
-                placeholder={t("cmdb.monitoringSources.form.namePlaceholder")}
-              />
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.monitoringSources.form.sourceType")}</span>
-              <select
-                value={newMonitoringSource.source_type}
-                onChange={(event) =>
-                  setNewMonitoringSource((prev) => ({
-                    ...prev,
-                    source_type: event.target.value as "zabbix"
-                  }))
-                }
-              >
-                <option value="zabbix">zabbix</option>
-              </select>
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.monitoringSources.form.authType")}</span>
-              <select
-                value={newMonitoringSource.auth_type}
-                onChange={(event) =>
-                  setNewMonitoringSource((prev) => ({
-                    ...prev,
-                    auth_type: event.target.value as "token" | "basic"
-                  }))
-                }
-              >
-                <option value="token">token</option>
-                <option value="basic">basic</option>
-              </select>
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.monitoringSources.form.endpoint")}</span>
-              <input
-                value={newMonitoringSource.endpoint}
-                onChange={(event) =>
-                  setNewMonitoringSource((prev) => ({
-                    ...prev,
-                    endpoint: event.target.value
-                  }))
-                }
-                placeholder={t("cmdb.monitoringSources.form.endpointPlaceholder")}
-              />
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.monitoringSources.form.proxyEndpoint")}</span>
-              <input
-                value={newMonitoringSource.proxy_endpoint}
-                onChange={(event) =>
-                  setNewMonitoringSource((prev) => ({
-                    ...prev,
-                    proxy_endpoint: event.target.value
-                  }))
-                }
-                placeholder={t("cmdb.monitoringSources.form.proxyEndpointPlaceholder")}
-              />
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.monitoringSources.form.secretRef")}</span>
-              <input
-                value={newMonitoringSource.secret_ref}
-                onChange={(event) =>
-                  setNewMonitoringSource((prev) => ({
-                    ...prev,
-                    secret_ref: event.target.value
-                  }))
-                }
-                placeholder={t("cmdb.monitoringSources.form.secretRefPlaceholder")}
-              />
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.monitoringSources.form.username")}</span>
-              <input
-                value={newMonitoringSource.username}
-                onChange={(event) =>
-                  setNewMonitoringSource((prev) => ({
-                    ...prev,
-                    username: event.target.value
-                  }))
-                }
-                placeholder={t("cmdb.monitoringSources.form.usernamePlaceholder")}
-                disabled={newMonitoringSource.auth_type !== "basic"}
-              />
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.monitoringSources.form.site")}</span>
-              <input
-                value={newMonitoringSource.site}
-                onChange={(event) =>
-                  setNewMonitoringSource((prev) => ({
-                    ...prev,
-                    site: event.target.value
-                  }))
-                }
-                placeholder={t("cmdb.monitoringSources.form.sitePlaceholder")}
-              />
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.monitoringSources.form.department")}</span>
-              <input
-                value={newMonitoringSource.department}
-                onChange={(event) =>
-                  setNewMonitoringSource((prev) => ({
-                    ...prev,
-                    department: event.target.value
-                  }))
-                }
-                placeholder={t("cmdb.monitoringSources.form.departmentPlaceholder")}
-              />
-            </label>
-            <label className="control-field">
-              <span>{t("cmdb.monitoringSources.form.enabled")}</span>
-              <select
-                value={newMonitoringSource.is_enabled ? "true" : "false"}
-                onChange={(event) =>
-                  setNewMonitoringSource((prev) => ({
-                    ...prev,
-                    is_enabled: event.target.value === "true"
-                  }))
-                }
-              >
-                <option value="true">{t("cmdb.monitoringSources.form.enabledTrue")}</option>
-                <option value="false">{t("cmdb.monitoringSources.form.enabledFalse")}</option>
-              </select>
-            </label>
-          </div>
-        )}
-        {canWriteCmdb && (
-          <div className="toolbar-row" style={{ marginBottom: "0.8rem" }}>
-            <button onClick={() => void createMonitoringSource()} disabled={creatingMonitoringSource}>
-              {creatingMonitoringSource
-                ? t("cmdb.actions.creating")
-                : t("cmdb.monitoringSources.actions.create")}
-            </button>
-          </div>
-        )}
-
-        {loadingMonitoringSources && monitoringSources.length === 0 ? (
-          <p>{t("cmdb.monitoringSources.messages.loading")}</p>
-        ) : monitoringSources.length === 0 ? (
-          <p>{t("cmdb.monitoringSources.messages.noSources")}</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ borderCollapse: "collapse", minWidth: "1500px", width: "100%" }}>
-              <thead>
-                <tr>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.id")}</th>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.name")}</th>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.type")}</th>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.endpoint")}</th>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.authType")}</th>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.scope")}</th>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.enabled")}</th>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.probeStatus")}</th>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.probeTime")}</th>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.probeMessage")}</th>
-                  <th style={cellStyle}>{t("cmdb.monitoringSources.table.actions")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {monitoringSources.map((source) => (
-                  <tr key={source.id}>
-                    <td style={cellStyle}>{source.id}</td>
-                    <td style={cellStyle}>{source.name}</td>
-                    <td style={cellStyle}>{source.source_type}</td>
-                    <td style={cellStyle}>
-                      <div>{source.endpoint}</div>
-                      {source.proxy_endpoint && (
-                        <div className="section-meta">
-                          {t("cmdb.monitoringSources.table.proxyLabel")}: {source.proxy_endpoint}
-                        </div>
-                      )}
-                    </td>
-                    <td style={cellStyle}>
-                      {source.auth_type}
-                      {source.username ? ` (${source.username})` : ""}
-                    </td>
-                    <td style={cellStyle}>
-                      {(source.site ?? "*")} / {(source.department ?? "*")}
-                    </td>
-                    <td style={cellStyle}>
-                      {source.is_enabled
-                        ? t("cmdb.monitoringSources.form.enabledTrue")
-                        : t("cmdb.monitoringSources.form.enabledFalse")}
-                    </td>
-                    <td style={cellStyle}>
-                      <span className={statusChipClass(source.last_probe_status ?? "unknown")}>
-                        {source.last_probe_status ?? t("cmdb.monitoringSources.messages.neverProbed")}
-                      </span>
-                    </td>
-                    <td style={cellStyle}>
-                      {source.last_probe_at ? new Date(source.last_probe_at).toLocaleString() : "-"}
-                    </td>
-                    <td style={cellStyle}>{source.last_probe_message ?? "-"}</td>
-                    <td style={cellStyle}>
-                      {canWriteCmdb ? (
-                        <button
-                          onClick={() => void probeMonitoringSource(source.id)}
-                          disabled={probingMonitoringSourceId === source.id}
-                        >
-                          {probingMonitoringSourceId === source.id
-                            ? t("cmdb.actions.loading")
-                            : t("cmdb.monitoringSources.actions.probe")}
-                        </button>
-                      ) : (
-                        <span>{t("auth.labels.readOnly")}</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-monitoring-metrics") && (
-        <SectionCard id="section-monitoring-metrics" title={t("cmdb.monitoringMetrics.title")}>
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "flex-end", marginBottom: "0.75rem" }}>
-          <label className="control-field" style={{ minWidth: "220px" }}>
-            <span>{t("cmdb.monitoringMetrics.filters.assetLabel")}</span>
-            <select value={selectedAssetId} onChange={(event) => setSelectedAssetId(event.target.value)}>
-              <option value="">{t("cmdb.monitoringMetrics.filters.selectAsset")}</option>
-              {assets.map((asset) => (
-                <option key={asset.id} value={asset.id}>
-                  #{asset.id} {asset.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="control-field" style={{ minWidth: "170px" }}>
-            <span>{t("cmdb.monitoringMetrics.filters.windowLabel")}</span>
-            <select
-              value={monitoringMetricsWindowMinutes}
-              onChange={(event) => setMonitoringMetricsWindowMinutes(event.target.value)}
-            >
-              <option value="30">30m</option>
-              <option value="60">60m</option>
-              <option value="180">180m</option>
-              <option value="360">360m</option>
-            </select>
-          </label>
-          <button
-            onClick={() => {
-              const assetId = Number.parseInt(selectedAssetId, 10);
-              if (!Number.isFinite(assetId) || assetId <= 0) {
-                return;
-              }
-              void loadMonitoringMetrics(assetId, monitoringMetricsWindowValue);
-            }}
-            disabled={loadingMonitoringMetrics || !selectedAssetId}
-          >
-            {loadingMonitoringMetrics ? t("cmdb.actions.loading") : t("cmdb.monitoringMetrics.actions.refresh")}
-          </button>
-        </div>
-
-        {!selectedAssetId ? (
-          <p>{t("cmdb.monitoringMetrics.messages.selectAsset")}</p>
-        ) : loadingMonitoringMetrics && !monitoringMetrics ? (
-          <p>{t("cmdb.monitoringMetrics.messages.loading")}</p>
-        ) : monitoringMetricsError ? (
-          <p className="inline-note">
-            {t("cmdb.monitoringMetrics.messages.error", { error: monitoringMetricsError })}
-          </p>
-        ) : !monitoringMetrics ? (
-          <p>{t("cmdb.monitoringMetrics.messages.noData")}</p>
-        ) : (
-          <>
-            <p className="section-note">
-              {t("cmdb.monitoringMetrics.summary", {
-                asset: monitoringMetrics.asset_name,
-                host: monitoringMetrics.host_id,
-                source: monitoringMetrics.source.name,
-                window: monitoringMetrics.window_minutes
-              })}
-            </p>
-
-            <div className="detail-grid">
-              {monitoringMetrics.series.map((series) => (
-                <div key={series.metric} className="detail-panel">
-                  <h3 style={subSectionTitleStyle}>{series.label}</h3>
-                  <p className="section-note">
-                    {t("cmdb.monitoringMetrics.latest", {
-                      value: series.latest ? formatMetricValue(series.latest.value, series.unit) : "-",
-                      time: series.latest ? new Date(series.latest.timestamp).toLocaleString() : "-"
-                    })}
-                  </p>
-                  {series.note && <p className="inline-note">{series.note}</p>}
-                  {series.points.length === 0 ? (
-                    <p>{t("cmdb.monitoringMetrics.messages.emptySeries")}</p>
-                  ) : (
-                    <div style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.35rem" }}>
-                      <MetricSparkline
-                        ariaLabel={series.label}
-                        points={buildMetricPolylinePoints(series.points, 320, 120, 12)}
-                        stroke="#2563eb"
-                      />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-notifications") && (
-        <SectionCard id="section-notifications" title={t("cmdb.notifications.title")}>
-        <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
-          <button onClick={() => void loadNotificationChannels()} disabled={loadingNotificationChannels}>
-            {loadingNotificationChannels ? t("cmdb.actions.loading") : t("cmdb.notifications.actions.refreshChannels")}
-          </button>
-          <button onClick={() => void loadNotificationTemplates()} disabled={loadingNotificationTemplates}>
-            {loadingNotificationTemplates
-              ? t("cmdb.actions.loading")
-              : t("cmdb.notifications.actions.refreshTemplates")}
-          </button>
-          <button onClick={() => void loadNotificationSubscriptions()} disabled={loadingNotificationSubscriptions}>
-            {loadingNotificationSubscriptions
-              ? t("cmdb.actions.loading")
-              : t("cmdb.notifications.actions.refreshSubscriptions")}
-          </button>
-        </div>
-
-        {notificationNotice && <p className="banner banner-success">{notificationNotice}</p>}
-        <p className="section-note">
-          {t("cmdb.notifications.summary", {
-            channels: notificationChannels.length,
-            templates: notificationTemplates.length,
-            subscriptions: notificationSubscriptions.length
-          })}
-        </p>
-        {!canWriteCmdb && <p className="inline-note">{t("cmdb.notifications.messages.readOnlyHint")}</p>}
-
-        <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.channelsTitle")}</h3>
-        {canWriteCmdb && (
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-            <input
-              value={newNotificationChannel.name}
-              onChange={(event) =>
-                setNewNotificationChannel((prev) => ({
-                  ...prev,
-                  name: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.notifications.form.channelName")}
-            />
-            <select
-              value={newNotificationChannel.channel_type}
-              onChange={(event) =>
-                setNewNotificationChannel((prev) => ({
-                  ...prev,
-                  channel_type: event.target.value as "email" | "webhook"
-                }))
-              }
-            >
-              <option value="webhook">webhook</option>
-              <option value="email">email</option>
-            </select>
-            <input
-              value={newNotificationChannel.target}
-              onChange={(event) =>
-                setNewNotificationChannel((prev) => ({
-                  ...prev,
-                  target: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.notifications.form.target")}
-              style={{ minWidth: "260px" }}
-            />
-            <input
-              value={newNotificationChannel.config_json}
-              onChange={(event) =>
-                setNewNotificationChannel((prev) => ({
-                  ...prev,
-                  config_json: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.notifications.form.configJson")}
-              style={{ minWidth: "240px" }}
-            />
-            <button onClick={() => void createNotificationChannel()} disabled={creatingNotificationChannel}>
-              {creatingNotificationChannel ? t("cmdb.actions.creating") : t("cmdb.notifications.actions.createChannel")}
-            </button>
-          </div>
-        )}
-        {loadingNotificationChannels && notificationChannels.length === 0 ? (
-          <p>{t("cmdb.notifications.messages.loadingChannels")}</p>
-        ) : notificationChannels.length === 0 ? (
-          <p>{t("cmdb.notifications.messages.noChannels")}</p>
-        ) : (
-          <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
-            <table style={{ borderCollapse: "collapse", minWidth: "900px", width: "100%" }}>
-              <thead>
-                <tr>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.id")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.name")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.type")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.target")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.enabled")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.channel.updatedAt")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {notificationChannels.map((channel) => (
-                  <tr key={channel.id}>
-                    <td style={cellStyle}>{channel.id}</td>
-                    <td style={cellStyle}>{channel.name}</td>
-                    <td style={cellStyle}>{channel.channel_type}</td>
-                    <td style={cellStyle}>{channel.target}</td>
-                    <td style={cellStyle}>{channel.is_enabled ? "Yes" : "No"}</td>
-                    <td style={cellStyle}>{new Date(channel.updated_at).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.templatesTitle")}</h3>
-        {canWriteCmdb && (
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-            <input
-              value={newNotificationTemplate.event_type}
-              onChange={(event) =>
-                setNewNotificationTemplate((prev) => ({
-                  ...prev,
-                  event_type: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.notifications.form.eventType")}
-            />
-            <input
-              value={newNotificationTemplate.title_template}
-              onChange={(event) =>
-                setNewNotificationTemplate((prev) => ({
-                  ...prev,
-                  title_template: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.notifications.form.titleTemplate")}
-              style={{ minWidth: "260px" }}
-            />
-            <input
-              value={newNotificationTemplate.body_template}
-              onChange={(event) =>
-                setNewNotificationTemplate((prev) => ({
-                  ...prev,
-                  body_template: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.notifications.form.bodyTemplate")}
-              style={{ minWidth: "320px" }}
-            />
-            <button onClick={() => void createNotificationTemplate()} disabled={creatingNotificationTemplate}>
-              {creatingNotificationTemplate ? t("cmdb.actions.creating") : t("cmdb.notifications.actions.createTemplate")}
-            </button>
-          </div>
-        )}
-        {loadingNotificationTemplates && notificationTemplates.length === 0 ? (
-          <p>{t("cmdb.notifications.messages.loadingTemplates")}</p>
-        ) : notificationTemplates.length === 0 ? (
-          <p>{t("cmdb.notifications.messages.noTemplates")}</p>
-        ) : (
-          <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
-            <table style={{ borderCollapse: "collapse", minWidth: "1100px", width: "100%" }}>
-              <thead>
-                <tr>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.template.id")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.template.eventType")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.template.titleTemplate")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.template.bodyTemplate")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.template.enabled")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.template.updatedAt")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {notificationTemplates.map((template) => (
-                  <tr key={template.id}>
-                    <td style={cellStyle}>{template.id}</td>
-                    <td style={cellStyle}>{template.event_type}</td>
-                    <td style={cellStyle}>{template.title_template}</td>
-                    <td style={cellStyle}>{template.body_template}</td>
-                    <td style={cellStyle}>{template.is_enabled ? "Yes" : "No"}</td>
-                    <td style={cellStyle}>{new Date(template.updated_at).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        <h3 style={subSectionTitleStyle}>{t("cmdb.notifications.subscriptionsTitle")}</h3>
-        {canWriteCmdb && (
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-            <select
-              value={newNotificationSubscription.channel_id}
-              onChange={(event) =>
-                setNewNotificationSubscription((prev) => ({
-                  ...prev,
-                  channel_id: event.target.value
-                }))
-              }
-            >
-              <option value="">{t("cmdb.notifications.form.selectChannel")}</option>
-              {notificationChannels.map((channel) => (
-                <option key={channel.id} value={channel.id}>
-                  #{channel.id} {channel.name} ({channel.channel_type})
-                </option>
-              ))}
-            </select>
-            <input
-              value={newNotificationSubscription.event_type}
-              onChange={(event) =>
-                setNewNotificationSubscription((prev) => ({
-                  ...prev,
-                  event_type: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.notifications.form.eventType")}
-            />
-            <input
-              value={newNotificationSubscription.site}
-              onChange={(event) =>
-                setNewNotificationSubscription((prev) => ({
-                  ...prev,
-                  site: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.notifications.form.siteOptional")}
-            />
-            <input
-              value={newNotificationSubscription.department}
-              onChange={(event) =>
-                setNewNotificationSubscription((prev) => ({
-                  ...prev,
-                  department: event.target.value
-                }))
-              }
-              placeholder={t("cmdb.notifications.form.departmentOptional")}
-            />
-            <button onClick={() => void createNotificationSubscription()} disabled={creatingNotificationSubscription}>
-              {creatingNotificationSubscription
-                ? t("cmdb.actions.creating")
-                : t("cmdb.notifications.actions.createSubscription")}
-            </button>
-          </div>
-        )}
-        {loadingNotificationSubscriptions && notificationSubscriptions.length === 0 ? (
-          <p>{t("cmdb.notifications.messages.loadingSubscriptions")}</p>
-        ) : notificationSubscriptions.length === 0 ? (
-          <p>{t("cmdb.notifications.messages.noSubscriptions")}</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ borderCollapse: "collapse", minWidth: "1100px", width: "100%" }}>
-              <thead>
-                <tr>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.id")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.eventType")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.channel")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.target")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.scope")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.enabled")}</th>
-                  <th style={cellStyle}>{t("cmdb.notifications.table.subscription.updatedAt")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {notificationSubscriptions.map((subscription) => {
-                  const channel = notificationChannelById.get(subscription.channel_id);
-                  return (
-                    <tr key={subscription.id}>
-                      <td style={cellStyle}>{subscription.id}</td>
-                      <td style={cellStyle}>{subscription.event_type}</td>
-                      <td style={cellStyle}>
-                        #{subscription.channel_id} {notificationChannelNameById.get(subscription.channel_id) ?? "-"}
-                      </td>
-                      <td style={cellStyle}>{channel?.target ?? "-"}</td>
-                      <td style={cellStyle}>
-                        {subscription.site ?? "*"} / {subscription.department ?? "*"}
-                      </td>
-                      <td style={cellStyle}>{subscription.is_enabled ? "Yes" : "No"}</td>
-                      <td style={cellStyle}>{new Date(subscription.updated_at).toLocaleString()}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-fields") && (
-        <SectionCard id="section-fields" title={t("cmdb.fields.title")}>
-        {canWriteCmdb ? (
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-            <input
-              value={newField.field_key}
-              onChange={(event) => setNewField((prev) => ({ ...prev, field_key: event.target.value }))}
-              placeholder={t("cmdb.fields.form.fieldKey")}
-            />
-            <input
-              value={newField.name}
-              onChange={(event) => setNewField((prev) => ({ ...prev, name: event.target.value }))}
-              placeholder={t("cmdb.fields.form.name")}
-            />
-            <select
-              value={newField.field_type}
-              onChange={(event) => setNewField((prev) => ({ ...prev, field_type: event.target.value }))}
-            >
-              <option value="text">text</option>
-              <option value="integer">integer</option>
-              <option value="float">float</option>
-              <option value="boolean">boolean</option>
-              <option value="enum">enum</option>
-              <option value="date">date</option>
-              <option value="datetime">datetime</option>
-            </select>
-            <input
-              value={newField.max_length}
-              onChange={(event) => setNewField((prev) => ({ ...prev, max_length: event.target.value }))}
-              placeholder={t("cmdb.fields.form.maxLength")}
-              style={{ width: "140px" }}
-            />
-            {newField.field_type === "enum" && (
-              <input
-                value={newField.options_csv}
-                onChange={(event) => setNewField((prev) => ({ ...prev, options_csv: event.target.value }))}
-                placeholder={t("cmdb.fields.form.enumOptions")}
-                style={{ minWidth: "250px" }}
-              />
-            )}
-            <label>
-              <input
-                type="checkbox"
-                checked={newField.required}
-                onChange={(event) => setNewField((prev) => ({ ...prev, required: event.target.checked }))}
-              />{" "}
-              {t("cmdb.fields.form.required")}
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={newField.scanner_enabled}
-                onChange={(event) => setNewField((prev) => ({ ...prev, scanner_enabled: event.target.checked }))}
-              />{" "}
-              {t("cmdb.fields.form.scannerEnabled")}
-            </label>
-            <button onClick={() => void createFieldDefinition()} disabled={creatingField}>
-              {creatingField ? t("cmdb.actions.creating") : t("cmdb.fields.form.create")}
-            </button>
-          </div>
-        ) : (
-          <p>{t("auth.labels.readOnly")}</p>
-        )}
-
-        {fieldDefinitions.length === 0 ? (
-          <p>{t("cmdb.fields.empty")}</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ borderCollapse: "collapse", minWidth: "900px", width: "100%" }}>
-              <thead>
-                <tr>
-                  <th style={cellStyle}>{t("cmdb.fields.table.key")}</th>
-                  <th style={cellStyle}>{t("cmdb.fields.table.name")}</th>
-                  <th style={cellStyle}>{t("cmdb.fields.table.type")}</th>
-                  <th style={cellStyle}>{t("cmdb.fields.table.maxLength")}</th>
-                  <th style={cellStyle}>{t("cmdb.fields.table.required")}</th>
-                  <th style={cellStyle}>{t("cmdb.fields.table.options")}</th>
-                  <th style={cellStyle}>{t("cmdb.fields.table.scannerEnabled")}</th>
-                  <th style={cellStyle}>{t("cmdb.fields.table.enabled")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fieldDefinitions.map((item) => (
-                  <tr key={item.id}>
-                    <td style={cellStyle}>{item.field_key}</td>
-                    <td style={cellStyle}>{item.name}</td>
-                    <td style={cellStyle}>{item.field_type}</td>
-                    <td style={cellStyle}>{item.max_length ?? "-"}</td>
-                    <td style={cellStyle}>{item.required ? "Yes" : "No"}</td>
-                    <td style={cellStyle}>{item.options?.join(", ") ?? "-"}</td>
-                    <td style={cellStyle}>{item.scanner_enabled ? "Yes" : "No"}</td>
-                    <td style={cellStyle}>{item.is_enabled ? "Yes" : "No"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-relations") && (
-        <SectionCard
-          id="section-relations"
-          title={t("cmdb.relations.title")}
-          actions={
-            selectedAsset
-              ? (
-                <span className="section-meta">
-                  {t("cmdb.relations.selectedAsset", { id: selectedAsset.id, name: selectedAsset.name })}
-                </span>
-              )
-              : undefined
-          }
-        >
-        {emptyState ? (
-          <p>{t("cmdb.relations.messages.noAssets")}</p>
-        ) : (
-          <>
-            {relationNotice && <p className="banner banner-success">{relationNotice}</p>}
-
-            <div className="toolbar-row">
-              <span>{t("cmdb.relations.form.sourceAsset")}</span>
-              <select value={selectedAssetId} onChange={(event) => setSelectedAssetId(event.target.value)}>
-                {assets.map((asset) => (
-                  <option key={asset.id} value={asset.id}>
-                    #{asset.id} {asset.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={() => {
-                  const id = Number.parseInt(selectedAssetId, 10);
-                  if (Number.isFinite(id) && id > 0) {
-                    void loadRelations(id);
-                  }
-                }}
-                disabled={loadingRelations}
-              >
-                {loadingRelations ? t("cmdb.actions.loading") : t("cmdb.relations.actions.refresh")}
-              </button>
-            </div>
-
-            <p className="section-note">
-              {t("cmdb.relations.summary", {
-                upstream: relationSummary.upstream,
-                downstream: relationSummary.downstream
-              })}
-            </p>
-
-            {selectedAsset && (
-              <p className="section-note">
-                {t("cmdb.relations.messages.sourceDetails", {
-                  class: selectedAsset.asset_class,
-                  status: selectedAsset.status,
-                  ip: selectedAsset.ip ?? "-"
-                })}
-              </p>
-            )}
-
-            {canWriteCmdb ? (
-              <div className="toolbar-row">
-                <span>{t("cmdb.relations.form.targetAsset")}</span>
-                <select
-                  value={newRelation.dst_asset_id}
-                  onChange={(event) => setNewRelation((prev) => ({ ...prev, dst_asset_id: event.target.value }))}
-                >
-                  <option value="">{t("cmdb.relations.form.selectTarget")}</option>
-                  {assets.map((asset) => (
-                    <option key={asset.id} value={asset.id}>
-                      #{asset.id} {asset.name}
-                    </option>
-                  ))}
-                </select>
-
-                <input
-                  value={newRelation.relation_type}
-                  onChange={(event) => setNewRelation((prev) => ({ ...prev, relation_type: event.target.value }))}
-                  placeholder={t("cmdb.relations.form.relationType")}
-                />
-
-                <select
-                  value={newRelation.source}
-                  onChange={(event) => setNewRelation((prev) => ({ ...prev, source: event.target.value }))}
-                >
-                  <option value="manual">manual</option>
-                  <option value="discovery">discovery</option>
-                  <option value="import">import</option>
-                </select>
-
-                <button onClick={() => void createRelation()} disabled={creatingRelation}>
-                  {creatingRelation ? t("cmdb.actions.creating") : t("cmdb.relations.actions.create")}
-                </button>
-              </div>
-            ) : (
-              <p className="inline-note">{t("cmdb.relations.messages.readOnlyHint")}</p>
-            )}
-
-            {loadingRelations && relations.length === 0 ? (
-              <p>{t("cmdb.relations.messages.loading")}</p>
-            ) : relations.length === 0 ? (
-              <p>{t("cmdb.relations.messages.empty")}</p>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ borderCollapse: "collapse", minWidth: "900px", width: "100%" }}>
-                  <thead>
-                    <tr>
-                      <th style={cellStyle}>{t("cmdb.relations.table.id")}</th>
-                      <th style={cellStyle}>{t("cmdb.relations.table.source")}</th>
-                      <th style={cellStyle}>{t("cmdb.relations.table.target")}</th>
-                      <th style={cellStyle}>{t("cmdb.relations.table.type")}</th>
-                      <th style={cellStyle}>{t("cmdb.relations.table.origin")}</th>
-                      <th style={cellStyle}>{t("cmdb.relations.table.updatedAt")}</th>
-                      <th style={cellStyle}>{t("cmdb.relations.table.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {relations.map((relation) => (
-                      <tr key={relation.id}>
-                        <td style={cellStyle}>{relation.id}</td>
-                        <td style={cellStyle}>
-                          #{relation.src_asset_id} {assetNameById.get(relation.src_asset_id) ?? "-"}
-                        </td>
-                        <td style={cellStyle}>
-                          #{relation.dst_asset_id} {assetNameById.get(relation.dst_asset_id) ?? "-"}
-                        </td>
-                        <td style={cellStyle}>{relation.relation_type}</td>
-                        <td style={cellStyle}>{relation.source}</td>
-                        <td style={cellStyle}>{new Date(relation.updated_at).toLocaleString()}</td>
-                        <td style={cellStyle}>
-                          {canWriteCmdb ? (
-                            <button
-                              onClick={() => void deleteRelation(relation.id)}
-                              disabled={deletingRelationId === relation.id}
-                            >
-                              {deletingRelationId === relation.id
-                                ? t("cmdb.actions.loading")
-                                : t("cmdb.relations.actions.delete")}
-                            </button>
-                          ) : (
-                            <span>{t("auth.labels.readOnly")}</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </>
-        )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-readiness") && (
-        <SectionCard
-          id="section-readiness"
-          title={t("cmdb.assetDetail.title")}
-          actions={selectedAsset ? <span className="section-meta">#{selectedAsset.id} {selectedAsset.name}</span> : undefined}
-        >
-        {emptyState ? (
-          <p>{t("cmdb.assetDetail.messages.noAssets")}</p>
-        ) : !selectedAsset ? (
-          <p>{t("cmdb.assetDetail.messages.selectAsset")}</p>
-        ) : (
-          <>
-            <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
-              <button
-                onClick={() => {
-                  const assetId = Number.parseInt(selectedAssetId, 10);
-                  if (!Number.isFinite(assetId) || assetId <= 0) {
-                    return;
-                  }
-                  const depth = parseImpactDepth(impactDepth) ?? 4;
-                  const relationTypes = parseImpactRelationTypesInput(impactRelationTypesInput, defaultImpactRelationTypes);
-                  void Promise.all([
-                    loadAssetBindings(assetId),
-                    loadAssetMonitoring(assetId),
-                    loadAssetImpact(assetId, impactDirection, depth, relationTypes)
-                  ]);
-                }}
-                disabled={loadingAssetBindings || loadingAssetMonitoring || loadingAssetImpact}
-              >
-                {t("cmdb.assetDetail.actions.refresh")}
-              </button>
-              <span className="section-meta">
-                {t("cmdb.assetDetail.assetSummary", {
-                  class: selectedAsset.asset_class,
-                  status: selectedAsset.status,
-                  ip: selectedAsset.ip ?? "-"
-                })}
-              </span>
-            </div>
-
-            {bindingNotice && <p className="banner banner-success">{bindingNotice}</p>}
-            {lifecycleNotice && <p className="banner banner-success">{lifecycleNotice}</p>}
-            {monitoringNotice && <p className="banner banner-success">{monitoringNotice}</p>}
-            {impactNotice && <p className="banner banner-success">{impactNotice}</p>}
-
-            <div className="detail-grid">
-              <div className="detail-panel">
-                <h3 style={subSectionTitleStyle}>{t("cmdb.assetDetail.lifecycle.title")}</h3>
-                {loadingAssetBindings && !assetBindings ? (
-                  <p>{t("cmdb.assetDetail.lifecycle.loading")}</p>
-                ) : !assetBindings ? (
-                  <p>{t("cmdb.assetDetail.lifecycle.empty")}</p>
-                ) : (
-                  <>
-                    <p className="section-note">
-                      {t("cmdb.assetDetail.lifecycle.summary", {
-                        status: selectedAsset.status,
-                        departments: assetBindings.readiness.department_count,
-                        services: assetBindings.readiness.business_service_count,
-                        owners: assetBindings.readiness.owner_count
-                      })}
-                    </p>
-                    <div className="readiness-checklist">
-                      <span
-                        className={`status-chip ${assetBindings.readiness.department_count > 0 ? "status-chip-success" : "status-chip-warn"}`}
-                      >
-                        {t("cmdb.assetDetail.readiness.department")}
-                      </span>
-                      <span
-                        className={`status-chip ${assetBindings.readiness.business_service_count > 0 ? "status-chip-success" : "status-chip-warn"}`}
-                      >
-                        {t("cmdb.assetDetail.readiness.businessService")}
-                      </span>
-                      <span
-                        className={`status-chip ${assetBindings.readiness.owner_count > 0 ? "status-chip-success" : "status-chip-warn"}`}
-                      >
-                        {t("cmdb.assetDetail.readiness.owner")}
-                      </span>
-                    </div>
-
-                    {assetBindings.readiness.can_transition_operational ? (
-                      <p className="inline-note">{t("cmdb.assetDetail.readiness.ready")}</p>
-                    ) : (
-                      <p className="inline-note">
-                        {t("cmdb.assetDetail.readiness.blocked", {
-                          missing: assetBindings.readiness.missing
-                            .map((item) => t(`cmdb.assetDetail.readiness.missing.${item}`))
-                            .join(", ")
-                        })}
-                      </p>
-                    )}
-
-                    <div className="toolbar-row">
-                      {lifecycleStatuses.map((status) => (
-                        <button
-                          key={status}
-                          onClick={() => void transitionAssetLifecycle(status)}
-                          disabled={
-                            !canWriteCmdb
-                            || transitioningLifecycleStatus !== null
-                            || selectedAsset.status === status
-                          }
-                        >
-                          {transitioningLifecycleStatus === status
-                            ? t("cmdb.actions.loading")
-                            : t("cmdb.assetDetail.lifecycle.transitionTo", { status })}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="detail-panel">
-                <h3 style={subSectionTitleStyle}>{t("cmdb.assetDetail.monitoring.title")}</h3>
-                {loadingAssetMonitoring && !assetMonitoring ? (
-                  <p>{t("cmdb.assetDetail.monitoring.loading")}</p>
-                ) : !assetMonitoring ? (
-                  <p>{t("cmdb.assetDetail.monitoring.empty")}</p>
-                ) : (
-                  <>
-                    <p className="section-note">
-                      {t("cmdb.assetDetail.monitoring.bindingSummary", {
-                        source: assetMonitoring.binding?.source_system ?? "-",
-                        status: assetMonitoring.binding?.last_sync_status ?? "unknown",
-                        host: assetMonitoring.binding?.external_host_id ?? "-"
-                      })}
-                    </p>
-                    <p className="section-note">
-                      {t("cmdb.assetDetail.monitoring.latestJob", {
-                        status: assetMonitoring.latest_job?.status ?? "-",
-                        attempt: assetMonitoring.latest_job?.attempt ?? 0,
-                        maxAttempts: assetMonitoring.latest_job?.max_attempts ?? 0,
-                        error: assetMonitoring.latest_job?.last_error ?? "-"
-                      })}
-                    </p>
-                    <div className="toolbar-row">
-                      <button
-                        onClick={() => void triggerAssetMonitoringSync()}
-                        disabled={!canWriteCmdb || triggeringMonitoringSync}
-                      >
-                        {triggeringMonitoringSync
-                          ? t("cmdb.actions.loading")
-                          : t("cmdb.assetDetail.monitoring.actions.triggerSync")}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-
-            <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
-              <div className="detail-panel">
-                <h3 style={subSectionTitleStyle}>{t("cmdb.assetDetail.bindings.title")}</h3>
-                <div className="form-grid">
-                  <label className="control-field">
-                    <span>{t("cmdb.assetDetail.bindings.departments")}</span>
-                    <input
-                      value={bindingDepartmentsInput}
-                      onChange={(event) => setBindingDepartmentsInput(event.target.value)}
-                      placeholder={t("cmdb.assetDetail.bindings.departmentsPlaceholder")}
-                      disabled={!canWriteCmdb}
-                    />
-                  </label>
-                  <label className="control-field">
-                    <span>{t("cmdb.assetDetail.bindings.businessServices")}</span>
-                    <input
-                      value={bindingBusinessServicesInput}
-                      onChange={(event) => setBindingBusinessServicesInput(event.target.value)}
-                      placeholder={t("cmdb.assetDetail.bindings.businessServicesPlaceholder")}
-                      disabled={!canWriteCmdb}
-                    />
-                  </label>
-                </div>
-
-                <p className="section-note">{t("cmdb.assetDetail.bindings.ownerHint")}</p>
-                {bindingOwnerDrafts.length === 0 ? (
-                  <p className="inline-note">{t("cmdb.assetDetail.bindings.noOwners")}</p>
-                ) : (
-                  <div className="owner-list">
-                    {bindingOwnerDrafts.map((owner) => (
-                      <div className="owner-row" key={owner.key}>
-                        <select
-                          value={owner.owner_type}
-                          onChange={(event) => updateOwnerDraftType(owner.key, normalizeOwnerType(event.target.value))}
-                          disabled={!canWriteCmdb}
-                        >
-                          <option value="team">team</option>
-                          <option value="user">user</option>
-                          <option value="group">group</option>
-                          <option value="external">external</option>
-                        </select>
-                        <input
-                          value={owner.owner_ref}
-                          onChange={(event) => updateOwnerDraftRef(owner.key, event.target.value)}
-                          placeholder={t("cmdb.assetDetail.bindings.ownerRefPlaceholder")}
-                          disabled={!canWriteCmdb}
-                        />
-                        <button onClick={() => removeOwnerDraft(owner.key)} disabled={!canWriteCmdb}>
-                          {t("cmdb.assetDetail.bindings.actions.removeOwner")}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="toolbar-row" style={{ marginTop: "0.75rem" }}>
-                  <button onClick={() => addOwnerDraft()} disabled={!canWriteCmdb}>
-                    {t("cmdb.assetDetail.bindings.actions.addOwner")}
-                  </button>
-                  <button onClick={() => void saveAssetBindings()} disabled={!canWriteCmdb || updatingAssetBindings}>
-                    {updatingAssetBindings
-                      ? t("cmdb.actions.loading")
-                      : t("cmdb.assetDetail.bindings.actions.save")}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setBindingDepartmentsInput("");
-                      setBindingBusinessServicesInput("");
-                      setBindingOwnerDrafts([]);
-                    }}
-                    disabled={!canWriteCmdb || updatingAssetBindings}
-                  >
-                    {t("cmdb.assetDetail.bindings.actions.clear")}
-                  </button>
-                </div>
-              </div>
-
-              <div className="detail-panel">
-                <h3 style={subSectionTitleStyle}>{t("cmdb.assetDetail.impact.title")}</h3>
-                <div className="toolbar-row">
-                  <label>
-                    {t("cmdb.assetDetail.impact.directionLabel")}{" "}
-                    <select
-                      value={impactDirection}
-                      onChange={(event) => setImpactDirection(event.target.value as ImpactDirection)}
-                    >
-                      <option value="downstream">downstream</option>
-                      <option value="upstream">upstream</option>
-                      <option value="both">both</option>
-                    </select>
-                  </label>
-                  <label>
-                    {t("cmdb.assetDetail.impact.depthLabel")}{" "}
-                    <input
-                      value={impactDepth}
-                      onChange={(event) => setImpactDepth(event.target.value)}
-                      style={{ width: "72px" }}
-                    />
-                  </label>
-                  <button onClick={() => void refreshImpact()} disabled={loadingAssetImpact}>
-                    {loadingAssetImpact ? t("cmdb.actions.loading") : t("cmdb.assetDetail.impact.actions.refresh")}
-                  </button>
-                </div>
-
-                {loadingAssetImpact && !assetImpact ? (
-                  <p>{t("cmdb.assetDetail.impact.loading")}</p>
-                ) : !assetImpact ? (
-                  <p>{t("cmdb.assetDetail.impact.empty")}</p>
-                ) : (
-                  <>
-                    <p className="section-note">
-                      {t("cmdb.assetDetail.impact.summary", {
-                        direction: assetImpact.direction,
-                        depth: assetImpact.depth_limit,
-                        nodes: assetImpact.nodes.length,
-                        edges: assetImpact.edges.length,
-                        services: assetImpact.affected_business_services.length,
-                        owners: assetImpact.affected_owners.length
-                      })}
-                    </p>
-                    {hierarchyHintEdges.length === 0 ? (
-                      <p className="inline-note">{t("cmdb.assetDetail.impact.noHierarchyHints")}</p>
-                    ) : (
-                      <div className="hint-list">
-                        {hierarchyHintEdges.map((edge) => (
-                          <div key={`${edge.id}-${edge.direction}`} className="hint-row">
-                            #{edge.id}: {impactNodeNameById.get(edge.src_asset_id) ?? edge.src_asset_id} {"-> "}
-                            {impactNodeNameById.get(edge.dst_asset_id) ?? edge.dst_asset_id}
-                            {" "}({edge.direction}, d={edge.depth})
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <p className="section-note">
-                      {t("cmdb.assetDetail.impact.affectedServices", {
-                        value: assetImpact.affected_business_services.map((item) => item.name).join(", ") || "-"
-                      })}
-                    </p>
-                    <p className="section-note">
-                      {t("cmdb.assetDetail.impact.affectedOwners", {
-                        value: assetImpact.affected_owners.map((item) => item.name).join(", ") || "-"
-                      })}
-                    </p>
-                  </>
-                )}
-              </div>
-            </div>
-          </>
-        )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-topology") && (
-        <SectionCard id="section-topology" title={t("cmdb.topology.title")}>
-        {emptyState ? (
-          <p>{t("cmdb.topology.messages.noAssets")}</p>
-        ) : (
-          <>
-            <div className="filter-grid" style={{ marginBottom: "0.75rem" }}>
-              <label className="control-field">
-                <span>{t("cmdb.topology.filters.asset")}</span>
-                <select value={selectedAssetId} onChange={(event) => setSelectedAssetId(event.target.value)}>
-                  <option value="">{t("cmdb.topology.filters.selectAsset")}</option>
-                  {assets.map((asset) => (
-                    <option key={asset.id} value={asset.id}>
-                      #{asset.id} {asset.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="control-field">
-                <span>{t("cmdb.topology.filters.direction")}</span>
-                <select value={impactDirection} onChange={(event) => setImpactDirection(event.target.value as ImpactDirection)}>
-                  <option value="downstream">downstream</option>
-                  <option value="upstream">upstream</option>
-                  <option value="both">both</option>
-                </select>
-              </label>
-              <label className="control-field">
-                <span>{t("cmdb.topology.filters.depth")}</span>
-                <input value={impactDepth} onChange={(event) => setImpactDepth(event.target.value)} />
-              </label>
-              <label className="control-field">
-                <span>{t("cmdb.topology.filters.relationTypes")}</span>
-                <input
-                  value={impactRelationTypesInput}
-                  onChange={(event) => setImpactRelationTypesInput(event.target.value)}
-                  placeholder="contains,depends_on,runs_service,owned_by"
-                />
-              </label>
-            </div>
-            <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>
-              <button onClick={() => void refreshImpact()} disabled={loadingAssetImpact || !selectedAssetId}>
-                {loadingAssetImpact ? t("cmdb.actions.loading") : t("cmdb.topology.actions.refresh")}
-              </button>
-              {assetImpact && (
-                <span className="section-meta">
-                  {t("cmdb.topology.summary", {
-                    root: `${assetImpact.root_asset_id}`,
-                    nodes: assetImpact.nodes.length,
-                    edges: assetImpact.edges.length,
-                    depth: assetImpact.depth_limit,
-                    direction: assetImpact.direction
-                  })}
-                </span>
-              )}
-            </div>
-            <p className="section-note">
-              {t("cmdb.topology.filters.activeRelationTypes", {
-                value: impactRelationTypes.join(", ")
-              })}
-            </p>
-
-            {!selectedAssetId ? (
-              <p>{t("cmdb.topology.messages.selectAsset")}</p>
-            ) : loadingAssetImpact && !assetImpact ? (
-              <p>{t("cmdb.topology.messages.loading")}</p>
-            ) : !assetImpact ? (
-              <p>{t("cmdb.topology.messages.noData")}</p>
-            ) : (
-              <>
-                <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.5rem" }}>
-                  <svg viewBox="0 0 980 540" style={{ width: "100%", minWidth: "780px", height: "540px", display: "block", background: "linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)", borderRadius: "8px" }}>
-                    {assetImpact.edges.map((edge) => {
-                      const src = topologyNodePositions.get(edge.src_asset_id);
-                      const dst = topologyNodePositions.get(edge.dst_asset_id);
-                      if (!src || !dst) {
-                        return null;
-                      }
-                      const meta = topologyEdgeRenderMeta.get(topologyEdgeKey(edge)) ?? { index: 0, total: 1 };
-                      const path = buildTopologyEdgePath(src, dst, meta.index, meta.total);
-                      const selected = selectedTopologyEdgeKey === topologyEdgeKey(edge);
-                      const stroke = relationTypeColor(edge.relation_type);
-
-                      return (
-                        <path
-                          key={topologyEdgeKey(edge)}
-                          d={path}
-                          fill="none"
-                          stroke={stroke}
-                          strokeWidth={selected ? 3.2 : 1.8}
-                          opacity={selected ? 1 : 0.75}
-                          style={{ cursor: "pointer" }}
-                          onClick={() => setSelectedTopologyEdgeKey(topologyEdgeKey(edge))}
-                        />
-                      );
-                    })}
-
-                    {assetImpact.nodes.map((node) => {
-                      const pos = topologyNodePositions.get(node.id);
-                      if (!pos) {
-                        return null;
-                      }
-
-                      const isRoot = node.id === assetImpact.root_asset_id;
-                      const selected = node.id === selectedAssetNumericId;
-                      return (
-                        <g
-                          key={`topology-node-${node.id}`}
-                          style={{ cursor: "pointer" }}
-                          onClick={() => setSelectedAssetId(String(node.id))}
-                        >
-                          <circle
-                            cx={pos.x}
-                            cy={pos.y}
-                            r={isRoot ? 19 : 15}
-                            fill={topologyNodeFill(node.status, isRoot)}
-                            stroke={selected ? "#1d4ed8" : "#0f172a"}
-                            strokeWidth={selected ? 3 : 1.5}
-                          />
-                          <text
-                            x={pos.x}
-                            y={pos.y + 4}
-                            textAnchor="middle"
-                            fill="#ffffff"
-                            style={{ fontSize: "10px", fontWeight: 600 }}
-                          >
-                            {node.id}
-                          </text>
-                          <text
-                            x={pos.x}
-                            y={pos.y + (isRoot ? 34 : 30)}
-                            textAnchor="middle"
-                            fill="#0f172a"
-                            style={{ fontSize: "11px", fontWeight: isRoot ? 700 : 500 }}
-                          >
-                            {truncateTopologyLabel(node.name, 24)}
-                          </text>
-                        </g>
-                      );
-                    })}
-                  </svg>
-                </div>
-
-                <div className="toolbar-row" style={{ marginTop: "0.75rem" }}>
-                  {assetImpact.relation_types.map((relationType) => (
-                    <span key={relationType} className="status-chip" style={{ borderColor: relationTypeColor(relationType), color: relationTypeColor(relationType) }}>
-                      {relationType}
-                    </span>
-                  ))}
-                </div>
-                <p className="inline-note">{t("cmdb.topology.messages.nodeHint")}</p>
-
-                {selectedTopologyEdge ? (
-                  <div className="detail-panel" style={{ marginTop: "0.75rem" }}>
-                    <h3 style={subSectionTitleStyle}>{t("cmdb.topology.edgeDetail.title")}</h3>
-                    <p className="section-note">
-                      {t("cmdb.topology.edgeDetail.summary", {
-                        id: selectedTopologyEdge.id,
-                        src: `${selectedTopologyEdge.src_asset_id}`,
-                        dst: `${selectedTopologyEdge.dst_asset_id}`,
-                        relationType: selectedTopologyEdge.relation_type,
-                        direction: selectedTopologyEdge.direction,
-                        depth: selectedTopologyEdge.depth,
-                        source: selectedTopologyEdge.source
-                      })}
-                    </p>
-                    <div className="toolbar-row">
-                      <button onClick={() => setSelectedAssetId(String(selectedTopologyEdge.src_asset_id))}>
-                        {t("cmdb.topology.edgeDetail.focusSource")}
-                      </button>
-                      <button onClick={() => setSelectedAssetId(String(selectedTopologyEdge.dst_asset_id))}>
-                        {t("cmdb.topology.edgeDetail.focusTarget")}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="inline-note">{t("cmdb.topology.messages.selectEdge")}</p>
-                )}
-              </>
-            )}
-          </>
-        )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-asset-stats") && (
-        <SectionCard
-          id="section-asset-stats"
-          title={t("cmdb.assetStats.title")}
-          actions={(
-            <button onClick={() => void loadAssetStats()} disabled={loadingAssetStats}>
-              {loadingAssetStats ? t("cmdb.actions.loading") : t("cmdb.assetStats.actions.refresh")}
-            </button>
-          )}
-        >
-        {loadingAssetStats && !assetStats ? (
-          <p>{t("cmdb.assetStats.messages.loading")}</p>
-        ) : !assetStats || assetStats.total_assets === 0 ? (
-          <p>{t("cmdb.assetStats.messages.noData")}</p>
-        ) : (
-          <>
-            <p className="section-note">
-              {t("cmdb.assetStats.summary", {
-                total: assetStats.total_assets,
-                departmentUnbound: assetStats.unbound.department_assets,
-                businessUnbound: assetStats.unbound.business_service_assets
-              })}
-            </p>
-
-            <div className="detail-grid">
-              <div className="detail-panel">
-                <h3 style={subSectionTitleStyle}>{t("cmdb.assetStats.groups.status")}</h3>
-                {assetStatsStatusBuckets.length === 0 ? (
-                  <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
-                ) : (
-                  <div>
-                    {assetStatsStatusBuckets.map((bucket) => (
-                      <div
-                        key={`status-${bucket.key}`}
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "minmax(140px, 180px) 1fr auto",
-                          alignItems: "center",
-                          gap: "0.5rem",
-                          marginBottom: "0.4rem"
-                        }}
-                      >
-                        <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {bucket.label}
-                        </span>
-                        <div style={{ background: "#e2e8f0", borderRadius: "999px", overflow: "hidden", minWidth: "140px", height: "10px" }}>
-                          <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, assetStatsStatusMax)} color="#2563eb" />
-                        </div>
-                        <span>{bucket.asset_total}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="detail-panel">
-                <h3 style={subSectionTitleStyle}>{t("cmdb.assetStats.groups.department")}</h3>
-                {assetStatsDepartmentBuckets.length === 0 ? (
-                  <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
-                ) : (
-                  <div>
-                    {assetStatsDepartmentBuckets.map((bucket) => (
-                      <div
-                        key={`department-${bucket.key}`}
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "minmax(140px, 180px) 1fr auto",
-                          alignItems: "center",
-                          gap: "0.5rem",
-                          marginBottom: "0.4rem"
-                        }}
-                      >
-                        <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {bucket.label}
-                        </span>
-                        <div style={{ background: "#e2e8f0", borderRadius: "999px", overflow: "hidden", minWidth: "140px", height: "10px" }}>
-                          <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, assetStatsDepartmentMax)} color="#0f766e" />
-                        </div>
-                        <span>{bucket.asset_total}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="detail-panel">
-                <h3 style={subSectionTitleStyle}>{t("cmdb.assetStats.groups.businessService")}</h3>
-                {assetStatsBusinessServiceBuckets.length === 0 ? (
-                  <p>{t("cmdb.assetStats.messages.noBuckets")}</p>
-                ) : (
-                  <div>
-                    {assetStatsBusinessServiceBuckets.map((bucket) => (
-                      <div
-                        key={`business-service-${bucket.key}`}
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "minmax(140px, 180px) 1fr auto",
-                          alignItems: "center",
-                          gap: "0.5rem",
-                          marginBottom: "0.4rem"
-                        }}
-                      >
-                        <span title={bucket.label} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {bucket.label}
-                        </span>
-                        <div style={{ background: "#e2e8f0", borderRadius: "999px", overflow: "hidden", minWidth: "140px", height: "10px" }}>
-                          <HorizontalFillBar width={bucketBarWidth(bucket.asset_total, assetStatsBusinessServiceMax)} color="#ea580c" />
-                        </div>
-                        <span>{bucket.asset_total}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
-        )}
-        </SectionCard>
-      )}
-
-      {visibleSections.has("section-assets") && (
-        <SectionCard
-          id="section-assets"
-          title={t("cmdb.assets.title")}
-          actions={(
-            <button onClick={resetAssetFilters} disabled={!hasAssetFilter}>
-              {t("cmdb.assets.actions.resetFilters")}
-            </button>
-          )}
-        >
-        <div className="filter-grid">
-          <label className="control-field">
-            <span>{t("cmdb.assets.filters.searchLabel")}</span>
-            <input
-              value={assetSearch}
-              onChange={(event) => setAssetSearch(event.target.value)}
-              placeholder={t("cmdb.assets.filters.searchPlaceholder")}
-            />
-          </label>
-          <label className="control-field">
-            <span>{t("cmdb.assets.filters.statusLabel")}</span>
-            <select value={assetStatusFilter} onChange={(event) => setAssetStatusFilter(event.target.value)}>
-              <option value="">{t("cmdb.assets.filters.allStatuses")}</option>
-              {assetStatusOptions.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="control-field">
-            <span>{t("cmdb.assets.filters.classLabel")}</span>
-            <select value={assetClassFilter} onChange={(event) => setAssetClassFilter(event.target.value)}>
-              <option value="">{t("cmdb.assets.filters.allClasses")}</option>
-              {assetClassOptions.map((assetClass) => (
-                <option key={assetClass} value={assetClass}>
-                  {assetClass}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="control-field">
-            <span>{t("cmdb.assets.filters.siteLabel")}</span>
-            <select value={assetSiteFilter} onChange={(event) => setAssetSiteFilter(event.target.value)}>
-              <option value="">{t("cmdb.assets.filters.allSites")}</option>
-              {assetSiteOptions.map((site) => (
-                <option key={site} value={site}>
-                  {site}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="control-field">
-            <span>{t("cmdb.assets.filters.sortLabel")}</span>
-            <select value={assetSortMode} onChange={(event) => setAssetSortMode(event.target.value as AssetSortMode)}>
-              <option value="updated_desc">{t("cmdb.assets.filters.sort.updatedDesc")}</option>
-              <option value="name_asc">{t("cmdb.assets.filters.sort.nameAsc")}</option>
-              <option value="id_asc">{t("cmdb.assets.filters.sort.idAsc")}</option>
-            </select>
-          </label>
-        </div>
-
-        <p className="section-note">
-          {t("cmdb.assets.summary", { shown: filteredAssets.length, total: assets.length })}
-        </p>
-
-        {loadingAssets && assets.length === 0 ? (
-          <p>{t("cmdb.assets.messages.loading")}</p>
-        ) : emptyState ? (
-          <p>{t("cmdb.messages.empty")}</p>
-        ) : filteredAssets.length === 0 ? (
-          <div className="empty-state">
-            <p>{t("cmdb.assets.messages.noFilterResult")}</p>
-            <button onClick={resetAssetFilters}>{t("cmdb.assets.actions.clearAndShowAll")}</button>
-          </div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ borderCollapse: "collapse", minWidth: "1200px", width: "100%" }}>
-              <thead>
-                <tr>
-                  <th style={cellStyle}>{t("cmdb.table.id")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.class")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.name")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.hostname")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.ip")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.status")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.site")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.department")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.owner")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.qrCode")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.barcode")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.customFields")}</th>
-                  <th style={cellStyle}>{t("cmdb.table.updatedAt")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredAssets.map((asset) => (
-                  <tr key={asset.id}>
-                    <td style={cellStyle}>{asset.id}</td>
-                    <td style={cellStyle}>{asset.asset_class}</td>
-                    <td style={cellStyle}>{asset.name}</td>
-                    <td style={cellStyle}>{asset.hostname ?? "-"}</td>
-                    <td style={cellStyle}>{asset.ip ?? "-"}</td>
-                    <td style={cellStyle}>{asset.status}</td>
-                    <td style={cellStyle}>{asset.site ?? "-"}</td>
-                    <td style={cellStyle}>{asset.department ?? "-"}</td>
-                    <td style={cellStyle}>{asset.owner ?? "-"}</td>
-                    <td style={cellStyle}>{asset.qr_code ?? "-"}</td>
-                    <td style={cellStyle}>{asset.barcode ?? "-"}</td>
-                    <td style={cellStyle}>{renderCustomFields(asset.custom_fields)}</td>
-                    <td style={cellStyle}>{new Date(asset.updated_at).toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        </SectionCard>
-      )}
+      <OverviewAdminSections {...overviewAdminSectionsProps} />
+      <WorkflowTicketSections {...workflowTicketSectionsProps} />
+      <IntegrationMonitoringSections {...integrationMonitoringSectionsProps} />
+      <CmdbSections {...cmdbSectionsProps} />
     </AppShell>
   );
 }
@@ -6896,155 +3940,6 @@ function formatLocalDateKey(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-async function readErrorMessage(response: Response): Promise<string> {
-  const message = await extractApiErrorMessage(response.clone());
-  if (response.status === 403) {
-    if (message && isSessionExpiredError(message)) {
-      return "Session is invalid or expired. Please sign in again.";
-    }
-    if (message) {
-      return `Unauthorized: ${message}`;
-    }
-    return "Unauthorized: your current role cannot perform this action.";
-  }
-
-  return message ?? `HTTP ${response.status}`;
-}
-
-async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
-  const headers = new Headers(init?.headers ?? undefined);
-  if (runtimeAuthSession?.mode === "header") {
-    const principal = runtimeAuthSession.principal.trim();
-    if (principal.length > 0) {
-      headers.set("x-auth-user", principal);
-    }
-  }
-  if (runtimeAuthSession?.mode === "bearer") {
-    const token = runtimeAuthSession.token?.trim() ?? "";
-    if (token.length > 0) {
-      headers.set("Authorization", `Bearer ${token}`);
-    }
-  }
-
-  const response = await fetch(input, {
-    ...init,
-    headers
-  });
-
-  if (response.status === 403 && runtimeAuthSession?.mode === "bearer") {
-    const message = await extractApiErrorMessage(response.clone());
-    if (message && isSessionExpiredError(message)) {
-      runtimeAuthSession = null;
-      persistAuthSession(null);
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT));
-      }
-    }
-  }
-
-  return response;
-}
-
-function deriveDefaultAuthSession(): AuthSession | null {
-  if (API_AUTH_TOKEN.length > 0) {
-    return {
-      mode: "bearer",
-      principal: "oidc-session",
-      token: API_AUTH_TOKEN
-    };
-  }
-
-  if (API_AUTH_USER.length > 0) {
-    return {
-      mode: "header",
-      principal: API_AUTH_USER,
-      token: null
-    };
-  }
-
-  return null;
-}
-
-function loadStoredAuthSession(): AuthSession | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const raw = window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-
-    const mode = (parsed as { mode?: unknown }).mode;
-    const principal = (parsed as { principal?: unknown }).principal;
-    const token = (parsed as { token?: unknown }).token;
-
-    if (mode === "header" && typeof principal === "string" && principal.trim().length > 0) {
-      return {
-        mode: "header",
-        principal: principal.trim(),
-        token: null
-      };
-    }
-
-    if (mode === "bearer" && typeof token === "string" && token.trim().length > 0) {
-      return {
-        mode: "bearer",
-        principal: typeof principal === "string" ? principal : "oidc-session",
-        token: token.trim()
-      };
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-}
-
-function persistAuthSession(session: AuthSession | null): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  if (!session) {
-    window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
-    return;
-  }
-
-  window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(session));
-}
-
-function isSessionExpiredError(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("invalid or expired")
-    || normalized.includes("bearer token cannot be empty")
-    || normalized.includes("authorization header is invalid")
-  );
-}
-
-async function extractApiErrorMessage(response: Response): Promise<string | null> {
-  try {
-    const payload = (await response.json()) as unknown;
-    if (payload && typeof payload === "object" && "error" in payload) {
-      const value = (payload as { error?: unknown }).error;
-      if (typeof value === "string" && value.trim().length > 0) {
-        return value.trim();
-      }
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
 }
 
 const subSectionTitleStyle: CSSProperties = {
