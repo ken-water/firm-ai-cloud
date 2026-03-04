@@ -7,16 +7,17 @@ use axum::{
     http::HeaderMap,
     routing::get,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sqlx::{Postgres, QueryBuilder};
 use tokio::time::sleep;
+use tracing::warn;
 
 use crate::state::AppState;
 use crate::{
-    audit::write_from_headers_best_effort,
+    audit::{AuditLogWriteInput, write_audit_log_best_effort, write_from_headers_best_effort},
     error::{AppError, AppResult},
 };
 
@@ -71,10 +72,19 @@ struct DiscoveryJob {
     status: String,
     is_enabled: bool,
     last_run_at: Option<DateTime<Utc>>,
+    next_run_at: Option<DateTime<Utc>>,
     last_run_status: Option<String>,
     last_error: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ScheduledDiscoveryJob {
+    id: i64,
+    schedule: String,
+    last_run_at: Option<DateTime<Utc>>,
+    next_run_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -279,17 +289,22 @@ async fn create_discovery_job(
     let scope = normalize_scope(payload.scope)?;
     let schedule = trim_optional(payload.schedule);
     let is_enabled = payload.is_enabled.unwrap_or(true);
+    if let Some(value) = schedule.as_deref() {
+        parse_schedule_interval_seconds(value)?;
+    }
+    let next_run_at = compute_next_run_at(schedule.as_deref(), is_enabled, Utc::now());
 
     let job: DiscoveryJob = sqlx::query_as(
-        "INSERT INTO discovery_jobs (name, source_type, scope, schedule, status, is_enabled)
-         VALUES ($1, $2, $3, $4, 'idle', $5)
-         RETURNING id, name, source_type, scope, schedule, status, is_enabled, last_run_at, last_run_status, last_error, created_at, updated_at",
+        "INSERT INTO discovery_jobs (name, source_type, scope, schedule, status, is_enabled, next_run_at)
+         VALUES ($1, $2, $3, $4, 'idle', $5, $6)
+         RETURNING id, name, source_type, scope, schedule, status, is_enabled, last_run_at, next_run_at, last_run_status, last_error, created_at, updated_at",
     )
     .bind(name)
     .bind(source_type)
     .bind(scope)
     .bind(schedule)
     .bind(is_enabled)
+    .bind(next_run_at)
     .fetch_one(&state.db)
     .await?;
 
@@ -313,7 +328,7 @@ async fn create_discovery_job(
 
 async fn list_discovery_jobs(State(state): State<AppState>) -> AppResult<Json<Vec<DiscoveryJob>>> {
     let jobs: Vec<DiscoveryJob> = sqlx::query_as(
-        "SELECT id, name, source_type, scope, schedule, status, is_enabled, last_run_at, last_run_status, last_error, created_at, updated_at
+        "SELECT id, name, source_type, scope, schedule, status, is_enabled, last_run_at, next_run_at, last_run_status, last_error, created_at, updated_at
          FROM discovery_jobs
          ORDER BY id DESC",
     )
@@ -328,13 +343,146 @@ async fn run_discovery_job(
     headers: HeaderMap,
     Path(job_id): Path<i64>,
 ) -> AppResult<Json<RunDiscoveryJobResponse>> {
+    match run_discovery_job_by_id(&state.db, job_id).await {
+        Ok(result) => {
+            write_from_headers_best_effort(
+                &state.db,
+                &headers,
+                "cmdb.discovery_job.run",
+                "discovery_job",
+                Some(job_id.to_string()),
+                "success",
+                None,
+                json!({
+                    "new_detected_events": result.stats.new_detected_events,
+                    "profile_changed_events": result.stats.profile_changed_events,
+                    "offboarded_suspected_events": result.stats.offboarded_suspected_events,
+                    "queued_candidates": result.stats.queued_candidates,
+                    "skipped_candidates": result.stats.skipped_candidates
+                }),
+            )
+            .await;
+            Ok(Json(result))
+        }
+        Err(err) => {
+            let message = err.to_string();
+            write_from_headers_best_effort(
+                &state.db,
+                &headers,
+                "cmdb.discovery_job.run",
+                "discovery_job",
+                Some(job_id.to_string()),
+                "failed",
+                Some(message),
+                json!({}),
+            )
+            .await;
+            Err(err)
+        }
+    }
+}
+
+pub(crate) async fn run_scheduled_jobs_once(db: &sqlx::PgPool) -> AppResult<u32> {
+    let jobs: Vec<ScheduledDiscoveryJob> = sqlx::query_as(
+        "SELECT id, schedule, last_run_at, next_run_at
+         FROM discovery_jobs
+         WHERE is_enabled = TRUE
+           AND schedule IS NOT NULL
+           AND status <> 'running'
+           AND (next_run_at IS NULL OR next_run_at <= NOW())
+         ORDER BY id ASC
+         LIMIT 200",
+    )
+    .fetch_all(db)
+    .await?;
+
+    let now = Utc::now();
+    let mut processed: u32 = 0;
+
+    for job in jobs {
+        let interval_seconds = match parse_schedule_interval_seconds(job.schedule.as_str()) {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(
+                    job_id = job.id,
+                    schedule = job.schedule,
+                    error = %err,
+                    "discovery scheduler skipped job due to invalid schedule"
+                );
+                continue;
+            }
+        };
+
+        if !should_run_on_schedule(job.next_run_at, job.last_run_at, interval_seconds, now) {
+            continue;
+        }
+
+        match run_discovery_job_by_id(db, job.id).await {
+            Ok(result) => {
+                processed += 1;
+                write_audit_log_best_effort(
+                    db,
+                    AuditLogWriteInput {
+                        actor: "system:discovery-scheduler".to_string(),
+                        action: "cmdb.discovery_job.run.auto".to_string(),
+                        target_type: "discovery_job".to_string(),
+                        target_id: Some(job.id.to_string()),
+                        result: "success".to_string(),
+                        message: None,
+                        metadata: json!({
+                            "trigger": "scheduler",
+                            "new_detected_events": result.stats.new_detected_events,
+                            "profile_changed_events": result.stats.profile_changed_events,
+                            "offboarded_suspected_events": result.stats.offboarded_suspected_events,
+                            "queued_candidates": result.stats.queued_candidates,
+                            "skipped_candidates": result.stats.skipped_candidates,
+                            "next_run_at": result.job.next_run_at
+                        }),
+                    },
+                )
+                .await;
+            }
+            Err(AppError::Validation(message)) if message.contains("already running") => {}
+            Err(err) => {
+                let message = err.to_string();
+                warn!(
+                    job_id = job.id,
+                    error = %err,
+                    "discovery scheduler failed to run job"
+                );
+                write_audit_log_best_effort(
+                    db,
+                    AuditLogWriteInput {
+                        actor: "system:discovery-scheduler".to_string(),
+                        action: "cmdb.discovery_job.run.auto".to_string(),
+                        target_type: "discovery_job".to_string(),
+                        target_id: Some(job.id.to_string()),
+                        result: "failed".to_string(),
+                        message: Some(message),
+                        metadata: json!({
+                            "trigger": "scheduler"
+                        }),
+                    },
+                )
+                .await;
+            }
+        }
+    }
+
+    Ok(processed)
+}
+
+async fn run_discovery_job_by_id(
+    db: &sqlx::PgPool,
+    job_id: i64,
+) -> AppResult<RunDiscoveryJobResponse> {
     let existing: Option<DiscoveryJob> = sqlx::query_as(
-        "SELECT id, name, source_type, scope, schedule, status, is_enabled, last_run_at, last_run_status, last_error, created_at, updated_at
+        "SELECT id, name, source_type, scope, schedule, status, is_enabled, last_run_at, next_run_at, last_run_status, last_error, created_at, updated_at
          FROM discovery_jobs
          WHERE id = $1",
     )
     .bind(job_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(db)
     .await?;
 
     let existing =
@@ -346,48 +494,26 @@ async fn run_discovery_job(
         )));
     }
 
-    let running_job = mark_discovery_job_running(&state.db, job_id).await?;
+    let running_job = mark_discovery_job_running(db, job_id).await?;
+    let run_started_at = running_job.last_run_at.unwrap_or_else(Utc::now);
+    let next_run_at = compute_next_run_at(
+        running_job.schedule.as_deref(),
+        running_job.is_enabled,
+        run_started_at,
+    );
+    let run_result = execute_discovery_job(db, &running_job).await;
 
-    let run_result = execute_discovery_job(&state.db, &running_job).await;
     match run_result {
         Ok(stats) => {
-            let final_job = mark_discovery_job_success(&state.db, job_id).await?;
-            write_from_headers_best_effort(
-                &state.db,
-                &headers,
-                "cmdb.discovery_job.run",
-                "discovery_job",
-                Some(job_id.to_string()),
-                "success",
-                None,
-                json!({
-                    "new_detected_events": stats.new_detected_events,
-                    "profile_changed_events": stats.profile_changed_events,
-                    "offboarded_suspected_events": stats.offboarded_suspected_events,
-                    "queued_candidates": stats.queued_candidates,
-                    "skipped_candidates": stats.skipped_candidates
-                }),
-            )
-            .await;
-            Ok(Json(RunDiscoveryJobResponse {
+            let final_job = mark_discovery_job_success(db, job_id, next_run_at).await?;
+            Ok(RunDiscoveryJobResponse {
                 job: final_job,
                 stats,
-            }))
+            })
         }
         Err(err) => {
             let message = err.to_string();
-            let _ = mark_discovery_job_failed(&state.db, job_id, &message).await;
-            write_from_headers_best_effort(
-                &state.db,
-                &headers,
-                "cmdb.discovery_job.run",
-                "discovery_job",
-                Some(job_id.to_string()),
-                "failed",
-                Some(message.clone()),
-                json!({}),
-            )
-            .await;
+            let _ = mark_discovery_job_failed(db, job_id, &message, next_run_at).await;
             Err(err)
         }
     }
@@ -1124,33 +1250,42 @@ fn collect_from_k8s_seed(scope: &Value) -> AppResult<Vec<DiscoveryInputItem>> {
 }
 
 async fn mark_discovery_job_running(db: &sqlx::PgPool, job_id: i64) -> AppResult<DiscoveryJob> {
-    sqlx::query_as(
+    let item: Option<DiscoveryJob> = sqlx::query_as(
         "UPDATE discovery_jobs
          SET status = 'running',
              last_run_at = NOW(),
+             next_run_at = NULL,
              last_run_status = 'running',
              last_error = NULL,
              updated_at = NOW()
          WHERE id = $1
-         RETURNING id, name, source_type, scope, schedule, status, is_enabled, last_run_at, last_run_status, last_error, created_at, updated_at",
+           AND status <> 'running'
+         RETURNING id, name, source_type, scope, schedule, status, is_enabled, last_run_at, next_run_at, last_run_status, last_error, created_at, updated_at",
     )
     .bind(job_id)
-    .fetch_one(db)
-    .await
-    .map_err(AppError::from)
+    .fetch_optional(db)
+    .await?;
+
+    item.ok_or_else(|| AppError::Validation(format!("discovery job {job_id} is already running")))
 }
 
-async fn mark_discovery_job_success(db: &sqlx::PgPool, job_id: i64) -> AppResult<DiscoveryJob> {
+async fn mark_discovery_job_success(
+    db: &sqlx::PgPool,
+    job_id: i64,
+    next_run_at: Option<DateTime<Utc>>,
+) -> AppResult<DiscoveryJob> {
     sqlx::query_as(
         "UPDATE discovery_jobs
          SET status = 'idle',
+             next_run_at = $2,
              last_run_status = 'success',
              last_error = NULL,
              updated_at = NOW()
          WHERE id = $1
-         RETURNING id, name, source_type, scope, schedule, status, is_enabled, last_run_at, last_run_status, last_error, created_at, updated_at",
+         RETURNING id, name, source_type, scope, schedule, status, is_enabled, last_run_at, next_run_at, last_run_status, last_error, created_at, updated_at",
     )
     .bind(job_id)
+    .bind(next_run_at)
     .fetch_one(db)
     .await
     .map_err(AppError::from)
@@ -1160,18 +1295,21 @@ async fn mark_discovery_job_failed(
     db: &sqlx::PgPool,
     job_id: i64,
     message: &str,
+    next_run_at: Option<DateTime<Utc>>,
 ) -> AppResult<DiscoveryJob> {
     sqlx::query_as(
         "UPDATE discovery_jobs
          SET status = 'failed',
+             next_run_at = $3,
              last_run_status = 'failed',
              last_error = $2,
              updated_at = NOW()
          WHERE id = $1
-         RETURNING id, name, source_type, scope, schedule, status, is_enabled, last_run_at, last_run_status, last_error, created_at, updated_at",
+         RETURNING id, name, source_type, scope, schedule, status, is_enabled, last_run_at, next_run_at, last_run_status, last_error, created_at, updated_at",
     )
     .bind(job_id)
     .bind(truncate_error(message))
+    .bind(next_run_at)
     .fetch_one(db)
     .await
     .map_err(AppError::from)
@@ -2217,6 +2355,96 @@ fn parse_time_filter(value: Option<String>, field: &str) -> AppResult<Option<Dat
     Ok(Some(parsed.with_timezone(&Utc)))
 }
 
+fn parse_schedule_interval_seconds(value: &str) -> AppResult<i64> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(AppError::Validation("schedule cannot be empty".to_string()));
+    }
+
+    let token = if let Some(rest) = normalized.strip_prefix("every:") {
+        rest.trim()
+    } else if let Some(rest) = normalized.strip_prefix("@every") {
+        rest.trim()
+    } else if let Some(rest) = normalized.strip_prefix("every") {
+        rest.trim()
+    } else {
+        normalized.as_str()
+    };
+
+    let seconds = parse_interval_token_seconds(token).ok_or_else(|| {
+        AppError::Validation(format!(
+            "schedule '{value}' is invalid, supported examples: 30, 30s, 5m, 1h, every:5m, @every 30s"
+        ))
+    })?;
+
+    if !(10..=86_400).contains(&seconds) {
+        return Err(AppError::Validation(format!(
+            "schedule interval for '{value}' must be between 10 and 86400 seconds"
+        )));
+    }
+
+    Ok(seconds)
+}
+
+fn parse_interval_token_seconds(token: &str) -> Option<i64> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+
+    if token.chars().all(|ch| ch.is_ascii_digit()) {
+        return token.parse::<i64>().ok();
+    }
+
+    if token.len() < 2 {
+        return None;
+    }
+
+    let (number, unit) = token.split_at(token.len() - 1);
+    let value = number.parse::<i64>().ok()?;
+    let multiplier = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3_600,
+        "d" => 86_400,
+        _ => return None,
+    };
+
+    value.checked_mul(multiplier)
+}
+
+fn compute_next_run_at(
+    schedule: Option<&str>,
+    is_enabled: bool,
+    reference_time: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    if !is_enabled {
+        return None;
+    }
+
+    let schedule = schedule?;
+    let interval_seconds = parse_schedule_interval_seconds(schedule).ok()?;
+    reference_time.checked_add_signed(ChronoDuration::seconds(interval_seconds))
+}
+
+fn should_run_on_schedule(
+    next_run_at: Option<DateTime<Utc>>,
+    last_run_at: Option<DateTime<Utc>>,
+    interval_seconds: i64,
+    now: DateTime<Utc>,
+) -> bool {
+    if let Some(next_run_at) = next_run_at {
+        return next_run_at <= now;
+    }
+
+    match last_run_at {
+        None => true,
+        Some(last_run_at) => {
+            now.signed_duration_since(last_run_at).num_seconds() >= interval_seconds
+        }
+    }
+}
+
 fn parse_offboarded_threshold(scope: &Value) -> i32 {
     scope
         .get("offboarded_threshold")
@@ -2310,5 +2538,83 @@ fn truncate_error(message: &str) -> String {
         message.to_string()
     } else {
         format!("{}...", &message[..MAX])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, Utc};
+
+    use super::{compute_next_run_at, parse_schedule_interval_seconds, should_run_on_schedule};
+
+    #[test]
+    fn parses_supported_schedule_formats() {
+        assert_eq!(parse_schedule_interval_seconds("30").expect("seconds"), 30);
+        assert_eq!(
+            parse_schedule_interval_seconds("30s").expect("short seconds"),
+            30
+        );
+        assert_eq!(parse_schedule_interval_seconds("5m").expect("minutes"), 300);
+        assert_eq!(parse_schedule_interval_seconds("1h").expect("hours"), 3_600);
+        assert_eq!(
+            parse_schedule_interval_seconds("every:15m").expect("every prefix"),
+            900
+        );
+        assert_eq!(
+            parse_schedule_interval_seconds("@every 45s").expect("at-every prefix"),
+            45
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_schedule_formats() {
+        assert!(parse_schedule_interval_seconds("").is_err());
+        assert!(parse_schedule_interval_seconds("abc").is_err());
+        assert!(parse_schedule_interval_seconds("5w").is_err());
+        assert!(parse_schedule_interval_seconds("8s").is_err());
+    }
+
+    #[test]
+    fn evaluates_schedule_due_state() {
+        let now = Utc::now();
+        assert!(should_run_on_schedule(None, None, 60, now));
+        assert!(should_run_on_schedule(
+            Some(now - Duration::seconds(5)),
+            Some(now - Duration::seconds(10)),
+            60,
+            now
+        ));
+        assert!(!should_run_on_schedule(
+            Some(now + Duration::seconds(5)),
+            Some(now - Duration::seconds(120)),
+            60,
+            now
+        ));
+        assert!(should_run_on_schedule(
+            None,
+            Some(now - Duration::seconds(120)),
+            60,
+            now
+        ));
+        assert!(!should_run_on_schedule(
+            None,
+            Some(now - Duration::seconds(10)),
+            60,
+            now
+        ));
+    }
+
+    #[test]
+    fn computes_next_run_time_for_enabled_jobs() {
+        let now = Utc::now();
+        let next = compute_next_run_at(Some("5m"), true, now).expect("next run");
+        assert_eq!(next, now + Duration::minutes(5));
+    }
+
+    #[test]
+    fn skips_next_run_for_disabled_or_unscheduled_jobs() {
+        let now = Utc::now();
+        assert_eq!(compute_next_run_at(Some("5m"), false, now), None);
+        assert_eq!(compute_next_run_at(None, true, now), None);
     }
 }

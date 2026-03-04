@@ -77,6 +77,13 @@ export AUTH_OIDC_REDIRECT_URI='http://127.0.0.1:8080/api/v1/auth/oidc/callback'
 export AUTH_OIDC_AUTO_PROVISION=false
 ```
 
+Discovery scheduler worker env settings (enabled by default):
+
+```bash
+export DISCOVERY_SCHEDULER_ENABLED=true
+export DISCOVERY_SCHEDULER_POLL_SECONDS=30
+```
+
 Health check:
 
 ```bash
@@ -415,10 +422,11 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs \
         { "name": "srv-a", "hostname": "srv-a.local", "ip": "10.0.1.11", "asset_class": "server" },
         { "name": "sw-a", "hostname": "sw-a.local", "ip": "10.0.1.21", "asset_class": "network_device" }
       ]
-    }
+    },
+    "schedule": "every:1m"
   }'
 
-# trigger a discovery run
+# trigger a manual discovery run (scheduler can also run automatically by schedule)
 curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/jobs/1/run \
   -H "$AUTH_HEADER"
 

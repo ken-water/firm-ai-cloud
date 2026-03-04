@@ -2,6 +2,7 @@ mod audit;
 mod auth;
 mod auth_api;
 mod cmdb;
+mod discovery_scheduler_worker;
 mod error;
 mod iam;
 mod monitoring;
@@ -58,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
         },
     };
     monitoring_sync_worker::start(state.clone());
+    discovery_scheduler_worker::start(state.clone());
     let app = build_router(state);
 
     info!(%addr, "api service starting");

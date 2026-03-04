@@ -75,6 +75,11 @@ bash scripts/install.sh --dependencies-only
 bash scripts/install.sh --mode container
 ```
 
+Key runtime env knobs in `deploy/.env`:
+
+- `MONITORING_SYNC_WORKER_ENABLED` / `MONITORING_SYNC_POLL_SECONDS`
+- `DISCOVERY_SCHEDULER_ENABLED` / `DISCOVERY_SCHEDULER_POLL_SECONDS`
+
 ## 5. Endpoints
 
 After installation, default local endpoints are:

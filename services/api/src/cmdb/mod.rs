@@ -1,5 +1,5 @@
 mod assets;
-mod discovery;
+pub(crate) mod discovery;
 mod field_definitions;
 mod lifecycle;
 pub(crate) mod monitoring_sync;
