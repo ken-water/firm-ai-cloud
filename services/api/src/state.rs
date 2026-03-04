@@ -14,8 +14,16 @@ pub struct OidcSettings {
 }
 
 #[derive(Clone)]
+pub struct WorkflowExecutionSettings {
+    pub policy_mode: String,
+    pub allowlist: Vec<String>,
+    pub sandbox_dir: String,
+}
+
+#[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub rbac_enabled: bool,
     pub oidc: OidcSettings,
+    pub workflow_execution: WorkflowExecutionSettings,
 }

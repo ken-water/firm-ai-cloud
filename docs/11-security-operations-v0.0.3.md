@@ -146,6 +146,33 @@ For production rollout:
 4. Define explicit retention/rotation policy by environment (dev/staging/prod).
 5. Restrict audit-read APIs to `admin` role and monitor access to audit endpoints.
 
+### 3.4 Workflow Automation Execution Policy
+
+Workflow script-step execution is protected by explicit runtime policy:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `WORKFLOW_EXECUTION_POLICY_MODE` | `disabled` | `disabled`, `allowlist`, or `sandboxed` |
+| `WORKFLOW_EXECUTION_ALLOWLIST` | empty | Comma-separated command allowlist for script steps |
+| `WORKFLOW_EXECUTION_SANDBOX_DIR` | `/tmp/cloudops-workflow-sandbox` | Working directory used in `sandboxed` mode |
+
+Policy behaviors:
+
+- `disabled`: all script auto-run steps are blocked.
+- `allowlist`: only allowlisted commands can run.
+- `sandboxed`: same allowlist check, with cleared environment (`PATH=/usr/bin:/bin`) and sandbox working directory.
+
+Operational notes:
+
+1. Use command-form scripts for automation (for example: `echo "ok"` or JSON array form `["/usr/bin/echo","ok"]`).
+2. Avoid arbitrary shell fragments and pipelines in production templates.
+3. Monitor `workflow_execution_logs.metadata.execution_policy` fields:
+   - `mode`
+   - `decision`
+   - `command`
+   - `command_hash_sha256`
+   - `allowlist_match`
+
 ## 4. Deployment Security Notes
 
 ### 4.1 Online/Connected Environments

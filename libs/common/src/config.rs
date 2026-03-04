@@ -22,6 +22,9 @@ pub struct AppConfig {
     pub oidc_auto_provision: bool,
     pub oidc_session_ttl_minutes: u32,
     pub oidc_dev_mode_enabled: bool,
+    pub workflow_execution_policy_mode: String,
+    pub workflow_execution_allowlist: Vec<String>,
+    pub workflow_execution_sandbox_dir: String,
 }
 
 impl AppConfig {
@@ -46,6 +49,14 @@ impl AppConfig {
         let oidc_auto_provision = parse_bool_env("AUTH_OIDC_AUTO_PROVISION", false)?;
         let oidc_session_ttl_minutes = parse_u32_env("AUTH_SESSION_TTL_MINUTES", 480)?;
         let oidc_dev_mode_enabled = parse_bool_env("AUTH_OIDC_DEV_MODE_ENABLED", false)?;
+        let workflow_execution_policy_mode = parse_enum_env(
+            "WORKFLOW_EXECUTION_POLICY_MODE",
+            "disabled",
+            &["disabled", "allowlist", "sandboxed"],
+        )?;
+        let workflow_execution_allowlist = parse_csv_env("WORKFLOW_EXECUTION_ALLOWLIST");
+        let workflow_execution_sandbox_dir = env::var("WORKFLOW_EXECUTION_SANDBOX_DIR")
+            .unwrap_or_else(|_| "/tmp/cloudops-workflow-sandbox".to_string());
 
         Ok(Self {
             host,
@@ -65,6 +76,9 @@ impl AppConfig {
             oidc_auto_provision,
             oidc_session_ttl_minutes,
             oidc_dev_mode_enabled,
+            workflow_execution_policy_mode,
+            workflow_execution_allowlist,
+            workflow_execution_sandbox_dir,
         })
     }
 
@@ -127,6 +141,38 @@ fn parse_optional_env(key: &str) -> Option<String> {
     })
 }
 
+fn parse_csv_env(key: &str) -> Vec<String> {
+    env::var(key)
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_enum_env(key: &str, default: &str, supported: &[&str]) -> Result<String, ConfigError> {
+    match env::var(key) {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            if supported.contains(&normalized.as_str()) {
+                Ok(normalized)
+            } else {
+                Err(ConfigError::InvalidEnum {
+                    key: key.to_string(),
+                    value,
+                    supported: supported.iter().map(|item| item.to_string()).collect(),
+                })
+            }
+        }
+        Err(_) => Ok(default.to_string()),
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("invalid number for {key}: {value}")]
@@ -137,6 +183,12 @@ pub enum ConfigError {
     },
     #[error("invalid boolean for {key}: {value}")]
     InvalidBool { key: String, value: String },
+    #[error("invalid value for {key}: {value}, supported: {supported:?}")]
+    InvalidEnum {
+        key: String,
+        value: String,
+        supported: Vec<String>,
+    },
 }
 
 #[cfg(test)]
@@ -161,6 +213,12 @@ mod tests {
         assert!(cfg.oidc_client_id.is_none());
         assert!(cfg.oidc_client_secret.is_none());
         assert!(cfg.oidc_redirect_uri.is_none());
+        assert_eq!(cfg.workflow_execution_policy_mode, "disabled");
+        assert!(cfg.workflow_execution_allowlist.is_empty());
+        assert_eq!(
+            cfg.workflow_execution_sandbox_dir,
+            "/tmp/cloudops-workflow-sandbox"
+        );
         assert_eq!(
             cfg.database_url,
             "postgres://cloudops:cloudops_local_change_me@127.0.0.1:5432/cloudops"

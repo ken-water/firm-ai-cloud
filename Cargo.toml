@@ -26,3 +26,5 @@ tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1.12", features = ["v4"] }
+sha2 = "0.10"
+shell-words = "1.1"

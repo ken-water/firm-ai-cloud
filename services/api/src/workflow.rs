@@ -1,3 +1,5 @@
+use std::path::Path as FsPath;
+
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -7,6 +9,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{Postgres, QueryBuilder};
 use tokio::{
     process::Command,
@@ -16,7 +19,7 @@ use tokio::{
 use crate::{
     audit::{actor_from_headers, write_from_headers_best_effort},
     error::{AppError, AppResult},
-    state::AppState,
+    state::{AppState, WorkflowExecutionSettings},
 };
 
 const MAX_TEMPLATE_NAME_LEN: usize = 128;
@@ -28,6 +31,7 @@ const MAX_REASON_LEN: usize = 1_024;
 const MAX_LOG_OUTPUT_LEN: usize = 16_000;
 const DEFAULT_SCRIPT_TIMEOUT_SECONDS: u64 = 300;
 const MAX_SCRIPT_TIMEOUT_SECONDS: u64 = 3_600;
+const MAX_COMMAND_LINE_LEN: usize = 4_096;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -197,6 +201,50 @@ struct ScriptExecutionResult {
     output: Option<String>,
     error: Option<String>,
     duration_ms: i32,
+    policy_mode: String,
+    policy_decision: String,
+    command_hash_sha256: String,
+    command: Option<String>,
+    allowlist_match: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScriptExecutionPolicyMode {
+    Disabled,
+    Allowlist,
+    Sandboxed,
+}
+
+impl ScriptExecutionPolicyMode {
+    fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disabled" => Some(Self::Disabled),
+            "allowlist" => Some(Self::Allowlist),
+            "sandboxed" => Some(Self::Sandboxed),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Allowlist => "allowlist",
+            Self::Sandboxed => "sandboxed",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ScriptExecutionPolicy {
+    mode: ScriptExecutionPolicyMode,
+    allowlist: Vec<String>,
+    sandbox_dir: String,
+}
+
+#[derive(Debug, Clone)]
+struct ScriptCommandSpec {
+    executable: String,
+    args: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -544,7 +592,10 @@ async fn execute_request(
         Some(request_id.to_string()),
         "success",
         None,
-        json!({ "status": item.status }),
+        json!({
+            "status": item.status,
+            "execution_policy_mode": state.workflow_execution.policy_mode
+        }),
     )
     .await;
 
@@ -693,6 +744,7 @@ async fn execute_from_step(
     actor: &str,
 ) -> AppResult<()> {
     let mut index = start_index;
+    let script_policy = script_execution_policy_from_settings(&state.workflow_execution);
 
     while index < definition.steps.len() {
         let step = &definition.steps[index];
@@ -784,7 +836,7 @@ async fn execute_from_step(
                 let started_at = Utc::now();
                 let script = step.script.clone().unwrap_or_default();
                 let timeout_seconds = step.timeout_seconds;
-                let script_result = run_shell_script(script, timeout_seconds).await;
+                let script_result = run_shell_script(script, timeout_seconds, &script_policy).await;
                 let finished_at = Utc::now();
 
                 if script_result.success {
@@ -805,7 +857,14 @@ async fn execute_from_step(
                             output: script_result.output,
                             error: None,
                             metadata: json!({
-                                "timeout_seconds": timeout_seconds
+                                "timeout_seconds": timeout_seconds,
+                                "execution_policy": {
+                                    "mode": script_result.policy_mode,
+                                    "decision": script_result.policy_decision,
+                                    "command": script_result.command,
+                                    "command_hash_sha256": script_result.command_hash_sha256,
+                                    "allowlist_match": script_result.allowlist_match
+                                }
                             }),
                         },
                     )
@@ -838,7 +897,14 @@ async fn execute_from_step(
                         output: script_result.output,
                         error: Some(failure_message.clone()),
                         metadata: json!({
-                            "timeout_seconds": timeout_seconds
+                            "timeout_seconds": timeout_seconds,
+                            "execution_policy": {
+                                "mode": script_result.policy_mode,
+                                "decision": script_result.policy_decision,
+                                "command": script_result.command,
+                                "command_hash_sha256": script_result.command_hash_sha256,
+                                "allowlist_match": script_result.allowlist_match
+                            }
                         }),
                     },
                 )
@@ -854,15 +920,106 @@ async fn execute_from_step(
     Ok(())
 }
 
-async fn run_shell_script(script: String, timeout_seconds: u64) -> ScriptExecutionResult {
+async fn run_shell_script(
+    script: String,
+    timeout_seconds: u64,
+    policy: &ScriptExecutionPolicy,
+) -> ScriptExecutionResult {
     let timeout_seconds = timeout_seconds.clamp(1, MAX_SCRIPT_TIMEOUT_SECONDS);
+    let command_hash_sha256 = hash_text_sha256(&script);
 
-    let mut command = Command::new("bash");
-    command.arg("-lc").arg(script);
+    let command_spec = match parse_script_command(script.as_str()) {
+        Ok(spec) => spec,
+        Err(err) => {
+            return ScriptExecutionResult {
+                success: false,
+                exit_code: None,
+                output: None,
+                error: Some(err.to_string()),
+                duration_ms: 0,
+                policy_mode: policy.mode.as_str().to_string(),
+                policy_decision: "blocked_parse_error".to_string(),
+                command_hash_sha256,
+                command: None,
+                allowlist_match: None,
+            };
+        }
+    };
+
+    if policy.mode == ScriptExecutionPolicyMode::Disabled {
+        return ScriptExecutionResult {
+            success: false,
+            exit_code: None,
+            output: None,
+            error: Some(
+                "workflow script execution is disabled by WORKFLOW_EXECUTION_POLICY_MODE=disabled"
+                    .to_string(),
+            ),
+            duration_ms: 0,
+            policy_mode: policy.mode.as_str().to_string(),
+            policy_decision: "blocked_policy_disabled".to_string(),
+            command_hash_sha256,
+            command: Some(command_spec.executable),
+            allowlist_match: None,
+        };
+    }
+
+    let allowlist_match =
+        match match_allowlist_command(command_spec.executable.as_str(), &policy.allowlist) {
+            Some(matched) => matched,
+            None => {
+                return ScriptExecutionResult {
+                    success: false,
+                    exit_code: None,
+                    output: None,
+                    error: Some(format!(
+                        "command '{}' is not in WORKFLOW_EXECUTION_ALLOWLIST",
+                        command_spec.executable
+                    )),
+                    duration_ms: 0,
+                    policy_mode: policy.mode.as_str().to_string(),
+                    policy_decision: "blocked_not_allowlisted".to_string(),
+                    command_hash_sha256,
+                    command: Some(command_spec.executable),
+                    allowlist_match: None,
+                };
+            }
+        };
+
+    let mut command = Command::new(&command_spec.executable);
+    command.args(&command_spec.args);
     command.kill_on_drop(true);
+
+    if policy.mode == ScriptExecutionPolicyMode::Sandboxed {
+        if let Err(err) = std::fs::create_dir_all(&policy.sandbox_dir) {
+            return ScriptExecutionResult {
+                success: false,
+                exit_code: None,
+                output: None,
+                error: Some(format!(
+                    "failed to prepare workflow sandbox directory '{}': {}",
+                    policy.sandbox_dir, err
+                )),
+                duration_ms: 0,
+                policy_mode: policy.mode.as_str().to_string(),
+                policy_decision: "blocked_sandbox_init_failed".to_string(),
+                command_hash_sha256,
+                command: Some(command_spec.executable),
+                allowlist_match: Some(allowlist_match),
+            };
+        }
+
+        command.current_dir(&policy.sandbox_dir);
+        command.env_clear();
+        command.env("PATH", "/usr/bin:/bin");
+        command.env("HOME", &policy.sandbox_dir);
+    }
 
     let started = std::time::Instant::now();
     let output_result = timeout(Duration::from_secs(timeout_seconds), command.output()).await;
+    let policy_mode = policy.mode.as_str().to_string();
+    let command = Some(command_spec.executable);
+    let allowlist_match = Some(allowlist_match);
 
     match output_result {
         Ok(Ok(output)) => {
@@ -876,6 +1033,11 @@ async fn run_shell_script(script: String, timeout_seconds: u64) -> ScriptExecuti
                     output: Some(truncate_text(merged_output, MAX_LOG_OUTPUT_LEN)),
                     error: None,
                     duration_ms,
+                    policy_mode,
+                    policy_decision: "allowed".to_string(),
+                    command_hash_sha256,
+                    command,
+                    allowlist_match,
                 }
             } else {
                 ScriptExecutionResult {
@@ -883,10 +1045,15 @@ async fn run_shell_script(script: String, timeout_seconds: u64) -> ScriptExecuti
                     exit_code,
                     output: Some(truncate_text(merged_output, MAX_LOG_OUTPUT_LEN)),
                     error: Some(format!(
-                        "script exited with code {}",
+                        "command exited with code {}",
                         exit_code.unwrap_or(-1)
                     )),
                     duration_ms,
+                    policy_mode,
+                    policy_decision: "allowed_runtime_failed".to_string(),
+                    command_hash_sha256,
+                    command,
+                    allowlist_match,
                 }
             }
         }
@@ -894,20 +1061,136 @@ async fn run_shell_script(script: String, timeout_seconds: u64) -> ScriptExecuti
             success: false,
             exit_code: None,
             output: None,
-            error: Some(format!("script launch failed: {err}")),
+            error: Some(format!("command launch failed: {err}")),
             duration_ms: elapsed_to_i32(started.elapsed().as_millis()),
+            policy_mode,
+            policy_decision: "allowed_launch_failed".to_string(),
+            command_hash_sha256,
+            command,
+            allowlist_match,
         },
         Err(_) => ScriptExecutionResult {
             success: false,
             exit_code: None,
             output: None,
             error: Some(format!(
-                "script timed out after {} seconds",
+                "command timed out after {} seconds",
                 timeout_seconds
             )),
             duration_ms: elapsed_to_i32(started.elapsed().as_millis()),
+            policy_mode,
+            policy_decision: "allowed_timeout".to_string(),
+            command_hash_sha256,
+            command,
+            allowlist_match,
         },
     }
+}
+
+fn script_execution_policy_from_settings(
+    settings: &WorkflowExecutionSettings,
+) -> ScriptExecutionPolicy {
+    let mode = ScriptExecutionPolicyMode::from_str(settings.policy_mode.as_str())
+        .unwrap_or(ScriptExecutionPolicyMode::Disabled);
+    let allowlist = settings
+        .allowlist
+        .iter()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect();
+
+    ScriptExecutionPolicy {
+        mode,
+        allowlist,
+        sandbox_dir: settings.sandbox_dir.clone(),
+    }
+}
+
+fn parse_script_command(script: &str) -> AppResult<ScriptCommandSpec> {
+    let trimmed = script.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(
+            "script command cannot be empty".to_string(),
+        ));
+    }
+    if trimmed.len() > MAX_COMMAND_LINE_LEN {
+        return Err(AppError::Validation(format!(
+            "script command exceeds max length {MAX_COMMAND_LINE_LEN}"
+        )));
+    }
+
+    let tokens: Vec<String> = if trimmed.starts_with('[') {
+        let parsed: Vec<String> = serde_json::from_str(trimmed).map_err(|err| {
+            AppError::Validation(format!("script command JSON array is invalid: {err}"))
+        })?;
+        if parsed.is_empty() {
+            return Err(AppError::Validation(
+                "script command JSON array cannot be empty".to_string(),
+            ));
+        }
+        parsed
+    } else {
+        shell_words::split(trimmed)
+            .map_err(|err| AppError::Validation(format!("script command parsing failed: {err}")))?
+    };
+
+    if tokens.is_empty() {
+        return Err(AppError::Validation(
+            "script command cannot be empty".to_string(),
+        ));
+    }
+
+    let executable = tokens[0].trim().to_string();
+    if executable.is_empty() {
+        return Err(AppError::Validation(
+            "script command executable cannot be empty".to_string(),
+        ));
+    }
+
+    let args = tokens
+        .into_iter()
+        .skip(1)
+        .map(|item| item.trim().to_string())
+        .collect();
+
+    Ok(ScriptCommandSpec { executable, args })
+}
+
+fn match_allowlist_command(executable: &str, allowlist: &[String]) -> Option<String> {
+    let executable_trimmed = executable.trim();
+    if executable_trimmed.is_empty() {
+        return None;
+    }
+
+    let executable_base = command_basename(executable_trimmed);
+    for item in allowlist {
+        let candidate = item.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        if candidate == executable_trimmed {
+            return Some(candidate.to_string());
+        }
+        if command_basename(candidate) == executable_base {
+            return Some(candidate.to_string());
+        }
+    }
+
+    None
+}
+
+fn command_basename(value: &str) -> &str {
+    FsPath::new(value)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(value)
+}
+
+fn hash_text_sha256(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 async fn insert_execution_log(db: &sqlx::PgPool, input: ExecutionLogInput) -> AppResult<()> {
@@ -1285,4 +1568,92 @@ fn clamp_chars(value: &str, max_len: usize) -> String {
         out.push(ch);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ScriptExecutionPolicyMode, command_basename, hash_text_sha256, match_allowlist_command,
+        parse_script_command, script_execution_policy_from_settings,
+    };
+    use crate::state::WorkflowExecutionSettings;
+
+    #[test]
+    fn parses_policy_mode() {
+        assert_eq!(
+            ScriptExecutionPolicyMode::from_str("disabled"),
+            Some(ScriptExecutionPolicyMode::Disabled)
+        );
+        assert_eq!(
+            ScriptExecutionPolicyMode::from_str("allowlist"),
+            Some(ScriptExecutionPolicyMode::Allowlist)
+        );
+        assert_eq!(
+            ScriptExecutionPolicyMode::from_str("sandboxed"),
+            Some(ScriptExecutionPolicyMode::Sandboxed)
+        );
+        assert_eq!(ScriptExecutionPolicyMode::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn parses_script_command_from_shell_words() {
+        let parsed = parse_script_command("echo \"hello world\" 123").expect("parse");
+        assert_eq!(parsed.executable, "echo");
+        assert_eq!(
+            parsed.args,
+            vec!["hello world".to_string(), "123".to_string()]
+        );
+    }
+
+    #[test]
+    fn parses_script_command_from_json_array() {
+        let parsed = parse_script_command("[\"/bin/echo\", \"ok\"]").expect("parse");
+        assert_eq!(parsed.executable, "/bin/echo");
+        assert_eq!(parsed.args, vec!["ok".to_string()]);
+    }
+
+    #[test]
+    fn matches_allowlist_by_full_path_or_basename() {
+        let allowlist = vec!["/usr/bin/echo".to_string(), "printf".to_string()];
+        assert_eq!(
+            match_allowlist_command("/usr/bin/echo", &allowlist),
+            Some("/usr/bin/echo".to_string())
+        );
+        assert_eq!(
+            match_allowlist_command("echo", &allowlist),
+            Some("/usr/bin/echo".to_string())
+        );
+        assert_eq!(
+            match_allowlist_command("/bin/printf", &allowlist),
+            Some("printf".to_string())
+        );
+        assert_eq!(match_allowlist_command("bash", &allowlist), None);
+    }
+
+    #[test]
+    fn computes_stable_hash_length() {
+        let digest = hash_text_sha256("echo hello");
+        assert_eq!(digest.len(), 64);
+        assert_eq!(digest, hash_text_sha256("echo hello"));
+    }
+
+    #[test]
+    fn normalizes_policy_from_settings() {
+        let settings = WorkflowExecutionSettings {
+            policy_mode: "allowlist".to_string(),
+            allowlist: vec!["echo".to_string(), " ".to_string(), "".to_string()],
+            sandbox_dir: "/tmp/cloudops-workflow-sandbox".to_string(),
+        };
+
+        let policy = script_execution_policy_from_settings(&settings);
+        assert_eq!(policy.mode, ScriptExecutionPolicyMode::Allowlist);
+        assert_eq!(policy.allowlist, vec!["echo".to_string()]);
+        assert_eq!(policy.sandbox_dir, "/tmp/cloudops-workflow-sandbox");
+    }
+
+    #[test]
+    fn resolves_command_basename() {
+        assert_eq!(command_basename("/usr/bin/echo"), "echo");
+        assert_eq!(command_basename("echo"), "echo");
+    }
 }

@@ -20,7 +20,7 @@ use common::config::AppConfig;
 use common::models::{HealthResponse, PingResponse};
 use error::AppResult;
 use sqlx::postgres::PgPoolOptions;
-use state::{AppState, OidcSettings};
+use state::{AppState, OidcSettings, WorkflowExecutionSettings};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -57,6 +57,11 @@ async fn main() -> anyhow::Result<()> {
             auto_provision: config.oidc_auto_provision,
             session_ttl_minutes: config.oidc_session_ttl_minutes,
             dev_mode_enabled: config.oidc_dev_mode_enabled,
+        },
+        workflow_execution: WorkflowExecutionSettings {
+            policy_mode: config.workflow_execution_policy_mode,
+            allowlist: config.workflow_execution_allowlist,
+            sandbox_dir: config.workflow_execution_sandbox_dir,
         },
     };
     monitoring_sync_worker::start(state.clone());

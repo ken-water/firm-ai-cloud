@@ -84,6 +84,20 @@ export DISCOVERY_SCHEDULER_ENABLED=true
 export DISCOVERY_SCHEDULER_POLL_SECONDS=30
 ```
 
+Workflow execution security settings (default blocks script auto-execution):
+
+```bash
+export WORKFLOW_EXECUTION_POLICY_MODE=allowlist
+export WORKFLOW_EXECUTION_ALLOWLIST=echo,printf
+export WORKFLOW_EXECUTION_SANDBOX_DIR=/tmp/cloudops-workflow-sandbox
+```
+
+Notes:
+
+- `disabled`: block all script auto-run steps (default).
+- `allowlist`: run only commands matched in `WORKFLOW_EXECUTION_ALLOWLIST`.
+- `sandboxed`: same allowlist check, and run with cleared environment under sandbox directory.
+
 Health check:
 
 ```bash
