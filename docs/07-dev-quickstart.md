@@ -637,6 +637,8 @@ VITE_AUTH_TOKEN=<access_token_from_oidc_callback> npm run dev
 Notes:
 
 - Web console now has a built-in sign-in session panel.
+- Authenticated shell supports runtime language switch (`English` / `简体中文`) from top-right toolbar.
+- Language preference is persisted in browser local storage and restored on next visit.
 - Header mode (`x-auth-user`) is for local/dev usage.
 - Bearer mode is preferred for OIDC session testing.
 
@@ -689,6 +691,13 @@ OIDC dev-flow smoke check (requires API running with `AUTH_OIDC_ENABLED=true` an
 
 ```bash
 bash scripts/test-oidc-dev.sh
+```
+
+Frontend i18n key coverage check:
+
+```bash
+cd apps/web-console
+npm run check:i18n
 ```
 
 ## 9. Demo Toolkit

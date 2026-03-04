@@ -7,8 +7,9 @@
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 5173",
+    "check:i18n": "node scripts/check-i18n-coverage.mjs",
     "check:guardrails": "node scripts/check-guardrails.mjs",
-    "check:ui": "npm run build && npm run check:guardrails"
+    "check:ui": "npm run build && npm run check:i18n && npm run check:guardrails"
   },
   "dependencies": {
     "i18next": "^25.5.2",

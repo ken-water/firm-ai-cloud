@@ -581,6 +581,9 @@ const API_AUTH_USER = (import.meta.env.VITE_AUTH_USER ?? "admin").trim();
 const API_AUTH_TOKEN = (import.meta.env.VITE_AUTH_TOKEN ?? "").trim();
 const AUTH_SESSION_STORAGE_KEY = "cloudops.auth.session.v1";
 const AUTH_SESSION_EXPIRED_EVENT = "cloudops.auth.session-expired";
+const SUPPORTED_UI_LANGUAGES = ["en-US", "zh-CN"] as const;
+
+type UiLanguage = (typeof SUPPORTED_UI_LANGUAGES)[number];
 
 type AuthMode = "header" | "bearer";
 
@@ -745,7 +748,8 @@ const legacySectionToPage: Record<string, ConsolePage> = {
 };
 
 export function App() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const currentLanguage = normalizeUiLanguage(i18n.resolvedLanguage ?? i18n.language);
   const [authSession, setAuthSession] = useState<AuthSession | null>(runtimeAuthSession);
   const [authIdentity, setAuthIdentity] = useState<AuthIdentity | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
@@ -3475,6 +3479,17 @@ export function App() {
     }));
   }, [activePage, canAccessAdmin, t]);
 
+  const changeLanguage = useCallback(
+    async (language: string) => {
+      const normalized = normalizeUiLanguage(language);
+      if (normalized === currentLanguage) {
+        return;
+      }
+      await i18n.changeLanguage(normalized);
+    },
+    [currentLanguage, i18n]
+  );
+
   if (!authSession || !authIdentity) {
     return (
       <AuthGate
@@ -3533,6 +3548,24 @@ export function App() {
       signOutLabel={t("auth.signOut")}
       onSignOut={() => void signOut()}
       navigationItems={navigationItems}
+      topbarActions={(
+        <>
+          <label className="topbar-language">
+            <span>{t("auth.language.label")}</span>
+            <select
+              value={currentLanguage}
+              onChange={(event) => {
+                void changeLanguage(event.target.value);
+              }}
+              aria-label={t("auth.language.label")}
+            >
+              <option value="en-US">{t("auth.language.options.en-US")}</option>
+              <option value="zh-CN">{t("auth.language.options.zh-CN")}</option>
+            </select>
+          </label>
+          <button onClick={() => void signOut()}>{t("auth.signOut")}</button>
+        </>
+      )}
       notice={authNotice}
       error={error ? `${t("cmdb.messages.error")}: ${error}` : null}
       warning={!canWriteCmdb ? t("auth.messages.readOnly") : null}
@@ -6851,6 +6884,17 @@ export function App() {
       )}
     </AppShell>
   );
+}
+
+function normalizeUiLanguage(language: string): UiLanguage {
+  const normalized = language.trim();
+  if (SUPPORTED_UI_LANGUAGES.some((item) => item === normalized)) {
+    return normalized as UiLanguage;
+  }
+  if (normalized.toLowerCase().startsWith("zh")) {
+    return "zh-CN";
+  }
+  return "en-US";
 }
 
 function buildConsolePageHash(page: ConsolePage): string {

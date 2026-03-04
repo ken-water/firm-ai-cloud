@@ -25,6 +25,7 @@ type AppShellProps = {
   notice?: string | null;
   error?: string | null;
   warning?: string | null;
+  topbarActions?: ReactNode;
   children: ReactNode;
 };
 
@@ -64,6 +65,7 @@ export function AppShell(props: AppShellProps) {
     notice,
     error,
     warning,
+    topbarActions,
     children
   } = props;
 
@@ -94,7 +96,9 @@ export function AppShell(props: AppShellProps) {
             <strong>{statusText}</strong>
             <p>{modeText}</p>
           </div>
-          <button onClick={onSignOut}>{signOutLabel}</button>
+          <div className="topbar-actions">
+            {topbarActions ?? <button onClick={onSignOut}>{signOutLabel}</button>}
+          </div>
         </header>
 
         {notice && <p className="banner banner-success">{notice}</p>}

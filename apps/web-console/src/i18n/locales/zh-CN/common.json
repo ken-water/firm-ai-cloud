@@ -1,79 +1,79 @@
 {
   "app": {
-    "title": "CloudOps One",
-    "subtitle": "Integrated CMDB, monitoring, and workflow platform."
+    "title": "CloudOps 一体化云平台",
+    "subtitle": "融合 CMDB、监控与工单流程的私有云运维平台。"
   },
   "auth": {
-    "title": "Sign in",
-    "subtitle": "Use local header mode for development or bearer token mode for OIDC sessions.",
-    "modeLabel": "Authentication Mode",
+    "title": "登录",
+    "subtitle": "开发环境可使用 Header 模式，或使用 OIDC 会话的 Bearer Token 模式。",
+    "modeLabel": "认证模式",
     "modes": {
       "header": "Header (x-auth-user)",
       "bearer": "Bearer Token"
     },
-    "usernameLabel": "Username",
+    "usernameLabel": "用户名",
     "usernamePlaceholder": "admin",
     "tokenLabel": "Bearer Token",
-    "tokenPlaceholder": "Paste access token from OIDC callback",
-    "signIn": "Sign In",
-    "signingIn": "Signing In...",
-    "signOut": "Sign Out",
-    "status": "Signed in as {{username}} (roles: {{roles}})",
-    "statusMode": "Mode: {{mode}}",
+    "tokenPlaceholder": "粘贴 OIDC 回调返回的 access token",
+    "signIn": "登录",
+    "signingIn": "登录中...",
+    "signOut": "退出登录",
+    "status": "当前用户：{{username}}（角色：{{roles}}）",
+    "statusMode": "当前模式：{{mode}}",
     "language": {
-      "label": "Language",
+      "label": "语言",
       "options": {
         "en-US": "English",
         "zh-CN": "简体中文"
       }
     },
     "navigation": {
-      "overview": "Overview",
+      "overview": "总览",
       "cmdb": "CMDB",
-      "monitoring": "Monitoring",
-      "cockpit": "Cockpit",
-      "workflow": "Workflow",
-      "tickets": "Tickets",
-      "scan": "Scan",
-      "discovery": "Discovery",
-      "monitoringSources": "Monitoring Sources",
-      "monitoringMetrics": "Monitoring Metrics",
-      "notifications": "Notifications",
-      "fields": "Fields",
-      "relations": "Relations",
-      "readiness": "Readiness",
-      "topology": "Topology",
-      "assetStats": "Asset Statistics",
-      "assets": "Assets",
-      "admin": "System Admin"
+      "monitoring": "监控",
+      "cockpit": "驾驶舱",
+      "workflow": "流程",
+      "tickets": "工单",
+      "scan": "扫码",
+      "discovery": "自动发现",
+      "monitoringSources": "监控源",
+      "monitoringMetrics": "监控指标",
+      "notifications": "通知",
+      "fields": "字段",
+      "relations": "关系",
+      "readiness": "就绪度",
+      "topology": "拓扑",
+      "assetStats": "资产统计",
+      "assets": "资产",
+      "admin": "系统管理"
     },
     "adminPanel": {
-      "title": "System Admin Surface",
-      "description": "You have administrator access for IAM and Audit APIs."
+      "title": "系统管理面板",
+      "description": "你拥有 IAM 与审计 API 的管理员访问权限。"
     },
     "labels": {
-      "readOnly": "Read-only"
+      "readOnly": "只读"
     },
     "messages": {
-      "usernameRequired": "Username is required for header mode.",
-      "tokenRequired": "Bearer token is required.",
-      "sessionExpired": "Session expired. Please sign in again.",
-      "signedOut": "Signed out.",
-      "forbiddenAction": "Your current role does not allow this action.",
-      "readOnly": "Read-only mode: write actions are hidden for your current role."
+      "usernameRequired": "Header 模式必须填写用户名。",
+      "tokenRequired": "必须填写 Bearer Token。",
+      "sessionExpired": "会话已过期，请重新登录。",
+      "signedOut": "已退出登录。",
+      "forbiddenAction": "当前角色无权执行该操作。",
+      "readOnly": "当前为只读模式：写操作按钮会被隐藏。"
     }
   },
   "cmdb": {
     "actions": {
-      "refreshAssets": "Refresh Assets",
-      "refreshFields": "Refresh Field Definitions",
-      "loading": "Loading...",
-      "createSample": "Create Sample Asset",
-      "creating": "Creating..."
+      "refreshAssets": "刷新资产",
+      "refreshFields": "刷新字段定义",
+      "loading": "加载中...",
+      "createSample": "创建示例资产",
+      "creating": "创建中..."
     },
     "messages": {
-      "empty": "No assets found. Create one sample asset to get started.",
-      "error": "Request failed"
+      "empty": "当前没有资产数据，可先创建一条示例资产。",
+      "error": "请求失败"
     },
     "perspective": {
       "title": "Workspace Perspective",
