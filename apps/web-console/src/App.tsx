@@ -182,6 +182,7 @@ type DiscoveryJob = {
   status: string;
   is_enabled: boolean;
   last_run_at: string | null;
+  next_run_at: string | null;
   last_run_status: string | null;
   last_error: string | null;
   created_at: string;
@@ -384,6 +385,70 @@ type WorkflowExecutionLog = {
   updated_at: string;
 };
 
+type TicketListItem = {
+  id: number;
+  ticket_no: string;
+  title: string;
+  status: string;
+  priority: string;
+  category: string;
+  requester: string;
+  assignee: string | null;
+  workflow_template_id: number | null;
+  workflow_request_id: number | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  asset_link_count: number;
+  alert_link_count: number;
+};
+
+type TicketAssetLink = {
+  asset_id: number;
+  asset_name: string | null;
+  asset_class: string | null;
+  asset_status: string | null;
+};
+
+type TicketAlertLink = {
+  alert_source: string;
+  alert_key: string;
+  alert_title: string | null;
+  severity: string | null;
+};
+
+type TicketRecord = {
+  id: number;
+  ticket_no: string;
+  title: string;
+  description: string | null;
+  status: string;
+  priority: string;
+  category: string;
+  requester: string;
+  assignee: string | null;
+  workflow_template_id: number | null;
+  workflow_request_id: number | null;
+  metadata: Record<string, unknown>;
+  last_status_note: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type TicketDetailResponse = {
+  ticket: TicketRecord;
+  asset_links: TicketAssetLink[];
+  alert_links: TicketAlertLink[];
+};
+
+type TicketListResponse = {
+  items: TicketListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 type NewFieldForm = {
   field_key: string;
   name: string;
@@ -456,6 +521,21 @@ type NewWorkflowRequestForm = {
   payload_json: string;
 };
 
+type NewTicketForm = {
+  title: string;
+  description: string;
+  priority: "low" | "medium" | "high" | "critical";
+  category: string;
+  assignee: string;
+  asset_ids_csv: string;
+  alert_source: string;
+  alert_key: string;
+  alert_title: string;
+  alert_severity: string;
+  workflow_template_id: string;
+  trigger_workflow: boolean;
+};
+
 type WorkflowDailyTrendPoint = {
   day_key: string;
   day_label: string;
@@ -478,7 +558,7 @@ type WorkflowTrendRankRow = {
 
 type MenuAxis = "function" | "department" | "business" | "screen";
 type FunctionWorkspace = "full" | "cmdb" | "monitoring" | "workflow";
-type ConsolePage = "overview" | "cmdb" | "monitoring" | "workflow" | "admin";
+type ConsolePage = "overview" | "cmdb" | "monitoring" | "workflow" | "tickets" | "admin";
 
 type AssetSortMode = "updated_desc" | "name_asc" | "id_asc";
 type LifecycleStatus = "idle" | "onboarding" | "operational" | "maintenance" | "retired";
@@ -594,6 +674,21 @@ const defaultWorkflowRequestForm: NewWorkflowRequestForm = {
   payload_json: "{}"
 };
 
+const defaultTicketForm: NewTicketForm = {
+  title: "",
+  description: "",
+  priority: "medium",
+  category: "incident",
+  assignee: "",
+  asset_ids_csv: "",
+  alert_source: "zabbix",
+  alert_key: "",
+  alert_title: "",
+  alert_severity: "warning",
+  workflow_template_id: "",
+  trigger_workflow: false
+};
+
 const lifecycleStatuses: LifecycleStatus[] = [
   "idle",
   "onboarding",
@@ -624,6 +719,7 @@ const consolePageSections: Record<ConsolePage, string[]> = {
     "section-discovery",
     "section-notifications"
   ],
+  tickets: ["section-tickets"],
   admin: ["section-admin"]
 };
 
@@ -634,6 +730,7 @@ const legacySectionToPage: Record<string, ConsolePage> = {
   "section-workflow": "workflow",
   "section-discovery": "workflow",
   "section-notifications": "workflow",
+  "section-tickets": "tickets",
   "section-monitoring-sources": "monitoring",
   "section-monitoring-metrics": "monitoring",
   "section-scan": "cmdb",
@@ -741,6 +838,19 @@ export function App() {
   const [workflowReportStatusFilter, setWorkflowReportStatusFilter] = useState("all");
   const [workflowReportTemplateFilter, setWorkflowReportTemplateFilter] = useState("all");
   const [workflowReportRequesterFilter, setWorkflowReportRequesterFilter] = useState("");
+  const [tickets, setTickets] = useState<TicketListItem[]>([]);
+  const [ticketDetail, setTicketDetail] = useState<TicketDetailResponse | null>(null);
+  const [loadingTickets, setLoadingTickets] = useState(false);
+  const [loadingTicketDetail, setLoadingTicketDetail] = useState(false);
+  const [creatingTicket, setCreatingTicket] = useState(false);
+  const [updatingTicketStatusId, setUpdatingTicketStatusId] = useState<number | null>(null);
+  const [ticketNotice, setTicketNotice] = useState<string | null>(null);
+  const [selectedTicketId, setSelectedTicketId] = useState<string>("");
+  const [ticketStatusFilter, setTicketStatusFilter] = useState("all");
+  const [ticketPriorityFilter, setTicketPriorityFilter] = useState("all");
+  const [ticketQueryFilter, setTicketQueryFilter] = useState("");
+  const [ticketStatusDraft, setTicketStatusDraft] = useState("open");
+  const [newTicket, setNewTicket] = useState<NewTicketForm>(defaultTicketForm);
   const [monitoringSources, setMonitoringSources] = useState<MonitoringSource[]>([]);
   const [loadingMonitoringSources, setLoadingMonitoringSources] = useState(false);
   const [creatingMonitoringSource, setCreatingMonitoringSource] = useState(false);
@@ -1215,6 +1325,65 @@ export function App() {
       return [];
     } finally {
       setLoadingWorkflowLogs(false);
+    }
+  }, []);
+
+  const loadTickets = useCallback(async () => {
+    setLoadingTickets(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "120"
+      });
+      if (ticketStatusFilter !== "all") {
+        params.set("status", ticketStatusFilter);
+      }
+      if (ticketPriorityFilter !== "all") {
+        params.set("priority", ticketPriorityFilter);
+      }
+      if (ticketQueryFilter.trim().length > 0) {
+        params.set("query", ticketQueryFilter.trim());
+      }
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/tickets?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TicketListResponse = await response.json();
+      setTickets(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setTickets([]);
+      return [];
+    } finally {
+      setLoadingTickets(false);
+    }
+  }, [ticketPriorityFilter, ticketQueryFilter, ticketStatusFilter]);
+
+  const loadTicketDetail = useCallback(async (ticketId: number) => {
+    if (!Number.isFinite(ticketId) || ticketId <= 0) {
+      setTicketDetail(null);
+      return null;
+    }
+
+    setLoadingTicketDetail(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/tickets/${ticketId}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TicketDetailResponse = await response.json();
+      setTicketDetail(payload);
+      setTicketStatusDraft(payload.ticket.status);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setTicketDetail(null);
+      return null;
+    } finally {
+      setLoadingTicketDetail(false);
     }
   }, []);
 
@@ -2206,6 +2375,134 @@ export function App() {
     }
   }, [canWriteCmdb, loadWorkflowLogs, loadWorkflowRequests, t]);
 
+  const createTicket = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const title = newTicket.title.trim();
+    if (!title) {
+      setError("Ticket title is required.");
+      return;
+    }
+
+    const normalizedAssetIds = newTicket.asset_ids_csv
+      .split(",")
+      .map((value) => Number.parseInt(value.trim(), 10))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    const assetIds = Array.from(new Set(normalizedAssetIds));
+    if (newTicket.asset_ids_csv.trim().length > 0 && assetIds.length === 0) {
+      setError("Asset IDs must be comma-separated positive integers.");
+      return;
+    }
+
+    const alertSource = newTicket.alert_source.trim();
+    const alertKey = newTicket.alert_key.trim();
+    if (!alertSource && alertKey) {
+      setError("Alert source is required when alert key is provided.");
+      return;
+    }
+    if (alertSource && !alertKey) {
+      setError("Alert key is required when alert source is provided.");
+      return;
+    }
+
+    const workflowTemplateId = Number.parseInt(newTicket.workflow_template_id.trim(), 10);
+    if (newTicket.workflow_template_id.trim().length > 0 && (!Number.isFinite(workflowTemplateId) || workflowTemplateId <= 0)) {
+      setError("Workflow template ID must be a positive integer.");
+      return;
+    }
+    if (newTicket.trigger_workflow && (!Number.isFinite(workflowTemplateId) || workflowTemplateId <= 0)) {
+      setError("Workflow template ID is required when auto-trigger workflow is enabled.");
+      return;
+    }
+
+    setCreatingTicket(true);
+    setTicketNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/tickets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          title,
+          description: newTicket.description.trim() || undefined,
+          priority: newTicket.priority,
+          category: newTicket.category.trim() || "incident",
+          assignee: newTicket.assignee.trim() || undefined,
+          asset_ids: assetIds,
+          alert_refs: alertSource && alertKey ? [{
+            source: alertSource,
+            alert_key: alertKey,
+            alert_title: newTicket.alert_title.trim() || undefined,
+            severity: newTicket.alert_severity.trim() || undefined
+          }] : [],
+          workflow_template_id:
+            Number.isFinite(workflowTemplateId) && workflowTemplateId > 0 ? workflowTemplateId : undefined,
+          trigger_workflow: newTicket.trigger_workflow
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TicketDetailResponse = await response.json();
+      setNewTicket((prev) => ({
+        ...defaultTicketForm,
+        category: prev.category,
+        priority: prev.priority,
+        alert_source: prev.alert_source,
+        alert_severity: prev.alert_severity
+      }));
+      setSelectedTicketId(String(payload.ticket.id));
+      setTicketDetail(payload);
+      setTicketStatusDraft(payload.ticket.status);
+      await loadTickets();
+      setTicketNotice(`Ticket ${payload.ticket.ticket_no} created.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setCreatingTicket(false);
+    }
+  }, [canWriteCmdb, loadTickets, newTicket, t]);
+
+  const updateTicketStatus = useCallback(async (ticketId: number, status: string) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    setUpdatingTicketStatusId(ticketId);
+    setTicketNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/tickets/${ticketId}/status`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          status,
+          note: "updated from web console"
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TicketDetailResponse = await response.json();
+      setTicketDetail(payload);
+      setTicketStatusDraft(payload.ticket.status);
+      await loadTickets();
+      setTicketNotice(`Ticket ${payload.ticket.ticket_no} moved to '${payload.ticket.status}'.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setUpdatingTicketStatusId(null);
+    }
+  }, [canWriteCmdb, loadTickets, t]);
+
   const createMonitoringSource = useCallback(async () => {
     if (!canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
@@ -2372,6 +2669,18 @@ export function App() {
   }, [selectedWorkflowRequestId, workflowRequests]);
 
   useEffect(() => {
+    if (tickets.length === 0) {
+      setSelectedTicketId("");
+      setTicketDetail(null);
+      return;
+    }
+    if (selectedTicketId) {
+      return;
+    }
+    setSelectedTicketId(String(tickets[0].id));
+  }, [selectedTicketId, tickets]);
+
+  useEffect(() => {
     setRelationNotice(null);
     setBindingNotice(null);
     setLifecycleNotice(null);
@@ -2471,6 +2780,14 @@ export function App() {
   const selectedWorkflowRequest = useMemo(
     () => workflowRequests.find((item) => item.id === selectedWorkflowRequestNumericId) ?? null,
     [selectedWorkflowRequestNumericId, workflowRequests]
+  );
+  const selectedTicketNumericId = useMemo(
+    () => Number.parseInt(selectedTicketId, 10),
+    [selectedTicketId]
+  );
+  const selectedTicketSummary = useMemo(
+    () => tickets.find((item) => item.id === selectedTicketNumericId) ?? null,
+    [selectedTicketNumericId, tickets]
   );
   const workflowStatusBuckets = useMemo(() => {
     const counters = new Map<string, number>();
@@ -3023,6 +3340,23 @@ export function App() {
     void Promise.all([loadWorkflowTemplates(), loadWorkflowRequests()]);
   }, [authIdentity, loadWorkflowRequests, loadWorkflowTemplates, visibleSections]);
   useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-tickets")) {
+      return;
+    }
+    void loadTickets();
+  }, [authIdentity, loadTickets, visibleSections]);
+  useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-tickets")) {
+      return;
+    }
+    const ticketId = Number.parseInt(selectedTicketId, 10);
+    if (!Number.isFinite(ticketId) || ticketId <= 0) {
+      setTicketDetail(null);
+      return;
+    }
+    void loadTicketDetail(ticketId);
+  }, [authIdentity, loadTicketDetail, selectedTicketId, visibleSections]);
+  useEffect(() => {
     if (!departmentWorkspaceOptions.includes(departmentWorkspace)) {
       setDepartmentWorkspace("all");
     }
@@ -3125,7 +3459,8 @@ export function App() {
       { page: "overview", label: t("auth.navigation.overview") },
       { page: "cmdb", label: t("auth.navigation.cmdb") },
       { page: "monitoring", label: t("auth.navigation.monitoring") },
-      { page: "workflow", label: t("auth.navigation.workflow") }
+      { page: "workflow", label: t("auth.navigation.workflow") },
+      { page: "tickets", label: t("auth.navigation.tickets") }
     ];
 
     if (canAccessAdmin) {
@@ -4330,6 +4665,331 @@ export function App() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-tickets") && (
+        <SectionCard
+          id="section-tickets"
+          title={t("cmdb.tickets.title")}
+          actions={(
+            <div className="toolbar-row">
+              <button onClick={() => void loadTickets()} disabled={loadingTickets}>
+                {loadingTickets ? t("cmdb.actions.loading") : t("cmdb.tickets.actions.refresh")}
+              </button>
+              <button onClick={() => void loadTickets()} disabled={loadingTickets}>
+                {t("cmdb.tickets.actions.applyFilters")}
+              </button>
+              <button
+                onClick={() => {
+                  setTicketStatusFilter("all");
+                  setTicketPriorityFilter("all");
+                  setTicketQueryFilter("");
+                }}
+              >
+                {t("cmdb.tickets.actions.resetFilters")}
+              </button>
+            </div>
+          )}
+        >
+          {ticketNotice && <p className="banner banner-success">{ticketNotice}</p>}
+          <p className="section-note">
+            {t("cmdb.tickets.summary", {
+              total: tickets.length,
+              selected: selectedTicketSummary?.ticket_no ?? "-"
+            })}
+          </p>
+          {!canWriteCmdb && <p className="inline-note">{t("cmdb.tickets.messages.readOnlyHint")}</p>}
+
+          <div className="filter-grid">
+            <label className="control-field">
+              <span>{t("cmdb.tickets.filters.status")}</span>
+              <select value={ticketStatusFilter} onChange={(event) => setTicketStatusFilter(event.target.value)}>
+                <option value="all">{t("cmdb.tickets.filters.all")}</option>
+                <option value="open">open</option>
+                <option value="in_progress">in_progress</option>
+                <option value="resolved">resolved</option>
+                <option value="closed">closed</option>
+                <option value="cancelled">cancelled</option>
+              </select>
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.tickets.filters.priority")}</span>
+              <select value={ticketPriorityFilter} onChange={(event) => setTicketPriorityFilter(event.target.value)}>
+                <option value="all">{t("cmdb.tickets.filters.all")}</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="critical">critical</option>
+              </select>
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.tickets.filters.query")}</span>
+              <input
+                value={ticketQueryFilter}
+                onChange={(event) => setTicketQueryFilter(event.target.value)}
+                placeholder={t("cmdb.tickets.filters.queryPlaceholder")}
+              />
+            </label>
+          </div>
+
+          {canWriteCmdb && (
+            <>
+              <h3 style={subSectionTitleStyle}>{t("cmdb.tickets.createTitle")}</h3>
+              <div className="form-grid">
+                <label className="control-field">
+                  <span>{t("cmdb.tickets.form.title")}</span>
+                  <input
+                    value={newTicket.title}
+                    onChange={(event) => setNewTicket((prev) => ({ ...prev, title: event.target.value }))}
+                    placeholder={t("cmdb.tickets.form.titlePlaceholder")}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.tickets.form.priority")}</span>
+                  <select
+                    value={newTicket.priority}
+                    onChange={(event) =>
+                      setNewTicket((prev) => ({ ...prev, priority: event.target.value as NewTicketForm["priority"] }))
+                    }
+                  >
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    <option value="critical">critical</option>
+                  </select>
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.tickets.form.category")}</span>
+                  <input
+                    value={newTicket.category}
+                    onChange={(event) => setNewTicket((prev) => ({ ...prev, category: event.target.value }))}
+                    placeholder="incident"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.tickets.form.assignee")}</span>
+                  <input
+                    value={newTicket.assignee}
+                    onChange={(event) => setNewTicket((prev) => ({ ...prev, assignee: event.target.value }))}
+                    placeholder="ops-oncall"
+                  />
+                </label>
+              </div>
+              <div className="form-grid" style={{ marginTop: "0.5rem" }}>
+                <label className="control-field">
+                  <span>{t("cmdb.tickets.form.assetIds")}</span>
+                  <input
+                    value={newTicket.asset_ids_csv}
+                    onChange={(event) => setNewTicket((prev) => ({ ...prev, asset_ids_csv: event.target.value }))}
+                    placeholder="1,2,3"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.tickets.form.alertSource")}</span>
+                  <input
+                    value={newTicket.alert_source}
+                    onChange={(event) => setNewTicket((prev) => ({ ...prev, alert_source: event.target.value }))}
+                    placeholder="zabbix"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.tickets.form.alertKey")}</span>
+                  <input
+                    value={newTicket.alert_key}
+                    onChange={(event) => setNewTicket((prev) => ({ ...prev, alert_key: event.target.value }))}
+                    placeholder="problemid:123456"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.tickets.form.alertSeverity")}</span>
+                  <input
+                    value={newTicket.alert_severity}
+                    onChange={(event) => setNewTicket((prev) => ({ ...prev, alert_severity: event.target.value }))}
+                    placeholder="warning"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.tickets.form.workflowTemplateId")}</span>
+                  <input
+                    value={newTicket.workflow_template_id}
+                    onChange={(event) => setNewTicket((prev) => ({ ...prev, workflow_template_id: event.target.value }))}
+                    placeholder="1"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>{t("cmdb.tickets.form.triggerWorkflow")}</span>
+                  <select
+                    value={newTicket.trigger_workflow ? "true" : "false"}
+                    onChange={(event) =>
+                      setNewTicket((prev) => ({ ...prev, trigger_workflow: event.target.value === "true" }))
+                    }
+                  >
+                    <option value="false">false</option>
+                    <option value="true">true</option>
+                  </select>
+                </label>
+              </div>
+              <label className="control-field" style={{ marginTop: "0.5rem" }}>
+                <span>{t("cmdb.tickets.form.alertTitle")}</span>
+                <input
+                  value={newTicket.alert_title}
+                  onChange={(event) => setNewTicket((prev) => ({ ...prev, alert_title: event.target.value }))}
+                  placeholder="Database CPU usage high"
+                />
+              </label>
+              <label className="control-field" style={{ marginTop: "0.5rem" }}>
+                <span>{t("cmdb.tickets.form.description")}</span>
+                <textarea
+                  rows={3}
+                  value={newTicket.description}
+                  onChange={(event) => setNewTicket((prev) => ({ ...prev, description: event.target.value }))}
+                  placeholder={t("cmdb.tickets.form.descriptionPlaceholder")}
+                />
+              </label>
+              <div className="toolbar-row" style={{ marginTop: "0.5rem" }}>
+                <button onClick={() => void createTicket()} disabled={creatingTicket}>
+                  {creatingTicket ? t("cmdb.actions.creating") : t("cmdb.tickets.actions.create")}
+                </button>
+              </div>
+            </>
+          )}
+
+          <h3 style={{ ...subSectionTitleStyle, marginTop: "0.8rem" }}>{t("cmdb.tickets.listTitle")}</h3>
+          {loadingTickets && tickets.length === 0 ? (
+            <p>{t("cmdb.tickets.messages.loading")}</p>
+          ) : tickets.length === 0 ? (
+            <p>{t("cmdb.tickets.messages.noTickets")}</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "1120px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={cellStyle}>{t("cmdb.tickets.table.id")}</th>
+                    <th style={cellStyle}>{t("cmdb.tickets.table.title")}</th>
+                    <th style={cellStyle}>{t("cmdb.tickets.table.status")}</th>
+                    <th style={cellStyle}>{t("cmdb.tickets.table.priority")}</th>
+                    <th style={cellStyle}>{t("cmdb.tickets.table.requester")}</th>
+                    <th style={cellStyle}>{t("cmdb.tickets.table.links")}</th>
+                    <th style={cellStyle}>{t("cmdb.tickets.table.workflow")}</th>
+                    <th style={cellStyle}>{t("cmdb.tickets.table.updatedAt")}</th>
+                    <th style={cellStyle}>{t("cmdb.tickets.table.actions")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tickets.map((ticket) => (
+                    <tr key={`ticket-row-${ticket.id}`}>
+                      <td style={cellStyle}>{ticket.ticket_no}</td>
+                      <td style={cellStyle}>{ticket.title}</td>
+                      <td style={cellStyle}>
+                        <span className={statusChipClass(ticket.status)}>{ticket.status}</span>
+                      </td>
+                      <td style={cellStyle}>{ticket.priority}</td>
+                      <td style={cellStyle}>{ticket.requester}</td>
+                      <td style={cellStyle}>
+                        assets:{ticket.asset_link_count} / alerts:{ticket.alert_link_count}
+                      </td>
+                      <td style={cellStyle}>
+                        {ticket.workflow_request_id ? `request #${ticket.workflow_request_id}` : "-"}
+                      </td>
+                      <td style={cellStyle}>{new Date(ticket.updated_at).toLocaleString()}</td>
+                      <td style={cellStyle}>
+                        <button
+                          onClick={() => {
+                            setSelectedTicketId(String(ticket.id));
+                            void loadTicketDetail(ticket.id);
+                          }}
+                        >
+                          {t("cmdb.tickets.actions.viewDetail")}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <h3 style={{ ...subSectionTitleStyle, marginTop: "0.8rem" }}>{t("cmdb.tickets.detailTitle")}</h3>
+          {!selectedTicketId ? (
+            <p>{t("cmdb.tickets.messages.selectTicket")}</p>
+          ) : loadingTicketDetail && !ticketDetail ? (
+            <p>{t("cmdb.tickets.messages.loadingDetail")}</p>
+          ) : !ticketDetail ? (
+            <p>{t("cmdb.tickets.messages.detailEmpty")}</p>
+          ) : (
+            <div className="detail-grid">
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{ticketDetail.ticket.ticket_no}</h3>
+                <p style={{ margin: "0.2rem 0 0.5rem 0" }}>{ticketDetail.ticket.title}</p>
+                <p className="section-note">
+                  {ticketDetail.ticket.description?.trim().length
+                    ? ticketDetail.ticket.description
+                    : t("cmdb.tickets.messages.noDescription")}
+                </p>
+                <div className="toolbar-row" style={{ marginTop: "0.5rem" }}>
+                  <span className={statusChipClass(ticketDetail.ticket.status)}>{ticketDetail.ticket.status}</span>
+                  <span className="status-chip">priority: {ticketDetail.ticket.priority}</span>
+                  <span className="status-chip">category: {ticketDetail.ticket.category}</span>
+                </div>
+                <p className="inline-note" style={{ marginTop: "0.45rem" }}>
+                  requester: {ticketDetail.ticket.requester} | assignee: {ticketDetail.ticket.assignee ?? "-"}
+                </p>
+                <p className="inline-note">
+                  updated: {new Date(ticketDetail.ticket.updated_at).toLocaleString()}
+                </p>
+                {canWriteCmdb && (
+                  <div className="toolbar-row" style={{ marginTop: "0.45rem" }}>
+                    <select value={ticketStatusDraft} onChange={(event) => setTicketStatusDraft(event.target.value)}>
+                      <option value="open">open</option>
+                      <option value="in_progress">in_progress</option>
+                      <option value="resolved">resolved</option>
+                      <option value="closed">closed</option>
+                      <option value="cancelled">cancelled</option>
+                    </select>
+                    <button
+                      onClick={() => void updateTicketStatus(ticketDetail.ticket.id, ticketStatusDraft)}
+                      disabled={updatingTicketStatusId === ticketDetail.ticket.id}
+                    >
+                      {updatingTicketStatusId === ticketDetail.ticket.id
+                        ? t("cmdb.actions.loading")
+                        : t("cmdb.tickets.actions.updateStatus")}
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.tickets.detail.assetLinks")}</h3>
+                {ticketDetail.asset_links.length === 0 ? (
+                  <p>{t("cmdb.tickets.messages.noAssetLinks")}</p>
+                ) : (
+                  ticketDetail.asset_links.map((link) => (
+                    <div key={`ticket-asset-${link.asset_id}`} className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                      <span>#{link.asset_id} {link.asset_name ?? "-"}</span>
+                      <span className="status-chip">{link.asset_class ?? "-"}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.tickets.detail.alertLinks")}</h3>
+                {ticketDetail.alert_links.length === 0 ? (
+                  <p>{t("cmdb.tickets.messages.noAlertLinks")}</p>
+                ) : (
+                  ticketDetail.alert_links.map((link) => (
+                    <div key={`ticket-alert-${link.alert_source}-${link.alert_key}`} style={{ marginBottom: "0.45rem" }}>
+                      <div>
+                        <strong>{link.alert_source}</strong> / {link.alert_key}
+                      </div>
+                      <div className="inline-note">
+                        {link.alert_title ?? "-"} | severity: {link.severity ?? "-"}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           )}
         </SectionCard>
@@ -6225,6 +6885,7 @@ function parseConsolePage(value: string): ConsolePage | null {
     case "cmdb":
     case "monitoring":
     case "workflow":
+    case "tickets":
     case "admin":
       return value.trim().toLowerCase() as ConsolePage;
     default:

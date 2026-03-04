@@ -25,10 +25,13 @@ This document is the permission coverage report/checklist for issue `V030-005`.
 | `workflow.requests.write` | Allow | Allow | Deny |
 | `workflow.approvals.read` | Allow | Allow | Allow |
 | `workflow.approvals.write` | Allow | Allow | Deny |
+| `tickets.read` | Allow | Allow | Allow |
+| `tickets.write` | Allow | Allow | Deny |
 
 Source of truth:
 
 - Migration seed policy: `services/api/migrations/202603020008_create_rbac_tables.sql`
+- Ticket permission extension: `services/api/migrations/202603040004_add_ticket_permissions.sql`
 
 ## 2. Endpoint Group Mapping
 
@@ -59,13 +62,17 @@ RBAC route mapping source:
 
 | Route Group | Permission |
 | --- | --- |
+| `/api/v1/tickets*` | `tickets.read` / `tickets.write` |
+
+### 2.4 Administration
+
+| Route Group | Permission |
+| --- | --- |
 | `/api/v1/iam/users*` | `system.admin` |
 | `/api/v1/iam/roles*` | `system.admin` |
 | `/api/v1/audit/logs*` | `system.admin` |
 
-### 2.4 Workflow (reserved mapping)
-
-Workflow APIs are not implemented yet, but RBAC mapping is already reserved:
+### 2.5 Workflow
 
 | Route Group | Permission |
 | --- | --- |

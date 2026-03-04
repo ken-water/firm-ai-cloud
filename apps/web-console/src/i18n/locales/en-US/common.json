@@ -26,6 +26,7 @@
       "monitoring": "Monitoring",
       "cockpit": "Cockpit",
       "workflow": "Workflow",
+      "tickets": "Tickets",
       "scan": "Scan",
       "discovery": "Discovery",
       "monitoringSources": "Monitoring Sources",
@@ -310,6 +311,69 @@
           "output": "Output",
           "time": "Finished At"
         }
+      }
+    },
+    "tickets": {
+      "title": "Ticket Center",
+      "summary": "Tickets: {{total}} | Selected: {{selected}}",
+      "createTitle": "Create Ticket",
+      "listTitle": "Ticket List",
+      "detailTitle": "Ticket Detail",
+      "actions": {
+        "refresh": "Refresh Tickets",
+        "applyFilters": "Apply Filters",
+        "resetFilters": "Reset Filters",
+        "create": "Create Ticket",
+        "viewDetail": "View Detail",
+        "updateStatus": "Update Status"
+      },
+      "filters": {
+        "status": "Status",
+        "priority": "Priority",
+        "query": "Search",
+        "queryPlaceholder": "ticket number, title, or description",
+        "all": "All"
+      },
+      "form": {
+        "title": "Title",
+        "titlePlaceholder": "Database latency is increasing in production",
+        "description": "Description",
+        "descriptionPlaceholder": "Add investigation context and expected mitigation",
+        "priority": "Priority",
+        "category": "Category",
+        "assignee": "Assignee (optional)",
+        "assetIds": "Asset IDs (comma separated)",
+        "alertSource": "Alert Source",
+        "alertKey": "Alert Key",
+        "alertTitle": "Alert Title (optional)",
+        "alertSeverity": "Alert Severity (optional)",
+        "workflowTemplateId": "Workflow Template ID (optional)"
+      },
+      "table": {
+        "id": "Ticket No",
+        "title": "Title",
+        "status": "Status",
+        "priority": "Priority",
+        "requester": "Requester",
+        "links": "Links",
+        "workflow": "Workflow",
+        "updatedAt": "Updated At",
+        "actions": "Actions"
+      },
+      "detail": {
+        "assetLinks": "Linked Assets",
+        "alertLinks": "Linked Alerts"
+      },
+      "messages": {
+        "readOnlyHint": "Read-only mode: ticket creation and status updates require operator or admin permission.",
+        "loading": "Loading tickets...",
+        "noTickets": "No tickets found.",
+        "selectTicket": "Select a ticket to view detail.",
+        "loadingDetail": "Loading ticket detail...",
+        "detailEmpty": "Ticket detail unavailable.",
+        "noDescription": "No description.",
+        "noAssetLinks": "No linked assets.",
+        "noAlertLinks": "No linked alerts."
       }
     },
     "scan": {

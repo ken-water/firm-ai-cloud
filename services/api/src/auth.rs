@@ -287,6 +287,8 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         "cmdb.assets"
     } else if matches_scope(&normalized, "/cmdb/assets") || matches_scope(&normalized, "/assets") {
         "cmdb.assets"
+    } else if matches_scope(&normalized, "/tickets") {
+        "tickets"
     } else if matches_scope(&normalized, "/workflow/templates")
         || matches_scope(&normalized, "/workflows/templates")
         || matches_scope(&normalized, "/templates")
@@ -517,7 +519,18 @@ mod tests {
         );
         assert_permission(Method::GET, "/templates", "workflow.requests.read");
         assert_permission(Method::GET, "/requests", "workflow.requests.read");
-        assert_permission(Method::POST, "/approvals/10/approve", "workflow.approvals.write");
+        assert_permission(
+            Method::POST,
+            "/approvals/10/approve",
+            "workflow.approvals.write",
+        );
+    }
+
+    #[test]
+    fn maps_ticket_permission() {
+        assert_permission(Method::GET, "/api/v1/tickets", "tickets.read");
+        assert_permission(Method::POST, "/api/v1/tickets", "tickets.write");
+        assert_permission(Method::PATCH, "/api/v1/tickets/1/status", "tickets.write");
     }
 
     #[test]
@@ -593,6 +606,10 @@ mod tests {
                 "/api/v1/workflow/approvals/1/approve",
                 "workflow.approvals.write",
             ),
+            (Method::GET, "/api/v1/tickets", "tickets.read"),
+            (Method::GET, "/api/v1/tickets/1", "tickets.read"),
+            (Method::POST, "/api/v1/tickets", "tickets.write"),
+            (Method::PATCH, "/api/v1/tickets/1/status", "tickets.write"),
             (
                 Method::DELETE,
                 "/api/v1/cmdb/relations/1",

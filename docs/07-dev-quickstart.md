@@ -455,6 +455,47 @@ curl -X POST http://127.0.0.1:8080/api/v1/cmdb/discovery/candidates/2/reject \
 curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/cmdb/discovery/events?asset_id=1&time_from=2026-03-02T00:00:00Z&time_to=2026-03-02T23:59:59Z"
 ```
 
+Ticket APIs:
+
+```bash
+# create one ticket with linked assets + alert ref and optional workflow trigger
+curl -X POST http://127.0.0.1:8080/api/v1/tickets \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "Investigate db node latency spike",
+    "description": "Observed high p95 latency on order-db.",
+    "priority": "high",
+    "category": "incident",
+    "asset_ids": [1, 2],
+    "alert_refs": [
+      {
+        "source": "zabbix",
+        "alert_key": "problemid:123456",
+        "alert_title": "Order DB CPU high",
+        "severity": "warning"
+      }
+    ],
+    "workflow_template_id": 1,
+    "trigger_workflow": true
+  }'
+
+# list tickets with filters
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/tickets?status=open&priority=high&limit=50"
+
+# get one ticket detail
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/tickets/1"
+
+# update ticket lifecycle status
+curl -X PATCH http://127.0.0.1:8080/api/v1/tickets/1/status \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "status": "in_progress",
+    "note": "accepted by platform-oncall"
+  }'
+```
+
 Container CMDB discovery (k8s seed example):
 
 ```bash
