@@ -762,3 +762,21 @@ Optional API base override:
 ```bash
 API_BASE_URL=http://127.0.0.1:8080 bash scripts/test-cmdb-loop.sh
 ```
+
+## 12. Performance and Reliability Baseline
+
+Run API benchmark baseline:
+
+```bash
+bash scripts/benchmark-api-load.sh
+```
+
+Run SSE burst stability smoke:
+
+```bash
+bash scripts/benchmark-sse-burst-smoke.sh
+```
+
+Baseline report and KPI comparison:
+
+- `docs/18-performance-reliability-baseline-v0.0.8.md`
