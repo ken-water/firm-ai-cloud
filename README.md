@@ -58,6 +58,12 @@ bash scripts/uninstall.sh
 
 # uninstall including persisted data volumes
 bash scripts/uninstall.sh --purge-data
+
+# create backup artifacts
+bash scripts/backup-stack.sh
+
+# restore stack data from backup artifacts
+bash scripts/restore-stack.sh --input-dir backups/stack-backup-<timestamp> --yes
 ```
 
 ## Fully Offline Delivery
@@ -103,6 +109,7 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [Security operations guide (v0.0.3)](docs/11-security-operations-v0.0.3.md)
 - [v0.0.4 UI iteration plan](docs/12-v0.0.4-ui-iteration-plan.md)
 - [v0.0.5 monitoring bootstrap plan](docs/14-v0.0.5-monitoring-bootstrap-plan.md)
+- [Disaster recovery runbook](docs/17-disaster-recovery-runbook.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 

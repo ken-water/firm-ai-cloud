@@ -139,7 +139,23 @@ Manual Zabbix bootstrap rerun:
 bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 ```
 
-## 8. Uninstall
+## 8. Backup and Restore
+
+Backup and restore scripts are included for operations baseline:
+
+```bash
+# Create one backup artifact set under backups/stack-backup-<timestamp>
+bash scripts/backup-stack.sh
+
+# Restore from a backup directory (destructive to current stack data)
+bash scripts/restore-stack.sh --input-dir backups/stack-backup-<timestamp> --yes
+```
+
+Detailed runbook:
+
+- `docs/17-disaster-recovery-runbook.md`
+
+## 9. Uninstall
 
 ```bash
 # Stop and remove containers, keep persisted data volumes
@@ -152,12 +168,12 @@ bash scripts/uninstall.sh --purge-data
 bash scripts/uninstall.sh --purge-data --remove-env
 ```
 
-## 9. Security Notes
+## 10. Security Notes
 
 - Default passwords in `deploy/.env.example` are for local development only.
 - Before production use, update all credentials and limit exposed ports.
 
-## 10. Air-Gapped Environments
+## 11. Air-Gapped Environments
 
 Use the dedicated offline flow documented in:
 
