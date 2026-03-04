@@ -53,6 +53,7 @@ What this command does:
 3. Prepares `deploy/.env` from `deploy/.env.offline`.
 4. Starts stack without pulling from external registries, including bundled Zabbix server/proxy/local-agent containers.
 5. Bootstraps Zabbix defaults (proxy + local agent host) automatically.
+6. Starts CloudOps API and CloudOps Web Console from bundled images.
 
 ## 5. Optional: Host Without Docker
 
@@ -98,9 +99,13 @@ Expected healthy containers:
 - `deploy_zabbix-web_1`
 - `deploy_zabbix-proxy_1`
 - `deploy_zabbix-agent-local_1`
+- `deploy_api_1`
+- `deploy_web_1`
 
 Bundled monitoring access defaults:
 
+- CloudOps Web Console: `http://127.0.0.1:8081`
+- CloudOps API: `http://127.0.0.1:8080`
 - Zabbix Web: `http://127.0.0.1:8082` (`Admin / zabbix`)
 - Zabbix Proxy listener for agents: `<host-ip>:10061`
 - Auto-provisioned local host: `cloudops-local-agent`

@@ -8,7 +8,7 @@ CloudOps One is an open-source operations platform focused on:
 - ticketing and workflow automation
 - unified authentication and RBAC
 
-## One-Click Install (Dependencies)
+## One-Click Install (Full Stack)
 
 From repository root:
 
@@ -20,8 +20,9 @@ What it does:
 
 1. Detects Docker.
 2. Installs Docker automatically if missing (Linux/macOS).
-3. Starts PostgreSQL, Redis, OpenSearch, MinIO, and bundled Zabbix stack (server/web/proxy/local agent) via Compose.
-4. Bootstraps Zabbix defaults: creates proxy `cloudops-proxy` and local host `cloudops-local-agent`.
+3. Builds CloudOps API/Web images if missing.
+4. Starts CloudOps API, CloudOps web console, PostgreSQL, Redis, OpenSearch, MinIO, and bundled Zabbix stack (server/web/proxy/local agent) via Compose.
+5. Bootstraps Zabbix defaults: creates proxy `cloudops-proxy` and local host `cloudops-local-agent`.
 
 More details: [docs/05-installation.md](docs/05-installation.md)
 
@@ -31,13 +32,19 @@ For China-network environments:
 bash scripts/install.sh --skip-docker-install --mirror cn
 ```
 
+For developer mode (dependencies only, local API/Web by source):
+
+```bash
+bash scripts/install.sh --skip-docker-install --mirror cn --dependencies-only
+```
+
 ## Manage Local Stack
 
 ```bash
 # install / bootstrap
 bash scripts/install.sh
 
-# upgrade dependency images and recreate services
+# upgrade dependency images, rebuild app images if needed, and recreate services
 bash scripts/upgrade.sh
 
 # start api + web for LAN access
@@ -71,6 +78,8 @@ Details: [docs/06-offline-installation.md](docs/06-offline-installation.md)
 
 Default bundled Zabbix access:
 
+- CloudOps Web Console: `http://127.0.0.1:8081`
+- CloudOps API: `http://127.0.0.1:8080`
 - Zabbix Web UI: `http://127.0.0.1:8082`
 - Default login: `Admin / zabbix`
 - Server trapper port: `10051` (for proxy uplink)

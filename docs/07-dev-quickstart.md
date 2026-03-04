@@ -16,8 +16,10 @@ Date: 2026-03-03
 If Docker is already installed:
 
 ```bash
-bash scripts/install.sh --skip-docker-install --mirror cn
+bash scripts/install.sh --skip-docker-install --mirror cn --dependencies-only
 ```
+
+`--dependencies-only` keeps API/web ports free for local `cargo run` and `npm run dev` workflows.
 
 Bundled Zabbix stack defaults after install:
 

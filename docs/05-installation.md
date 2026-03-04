@@ -12,7 +12,10 @@ Provide a one-click installation path for open-source users:
 
 ## 2. What Gets Installed
 
-The current installer starts core dependencies for MVP development:
+The current installer starts CloudOps One full stack for MVP development:
+
+- CloudOps API service
+- CloudOps Web Console
 
 - PostgreSQL
 - Redis
@@ -52,8 +55,9 @@ The installer will:
 2. Install Docker automatically if missing (unless disabled).
 3. Generate `deploy/.env` from `deploy/.env.example` if absent.
 4. Pull images.
-5. Start all services and wait for health checks.
-6. Bootstrap Zabbix defaults (proxy + local agent host) via API.
+5. Build CloudOps API/Web images locally if missing.
+6. Start all services and wait for health checks.
+7. Bootstrap Zabbix defaults (proxy + local agent host) via API.
 
 ## 4. Useful Options
 
@@ -64,6 +68,9 @@ bash scripts/install.sh --skip-docker-install
 # Skip image pulling and reuse local cache
 bash scripts/install.sh --no-pull
 
+# Start infra dependencies only (skip CloudOps API/Web)
+bash scripts/install.sh --dependencies-only
+
 # Explicit mode (same behavior as default for now)
 bash scripts/install.sh --mode container
 ```
@@ -72,6 +79,8 @@ bash scripts/install.sh --mode container
 
 After installation, default local endpoints are:
 
+- CloudOps API: `http://127.0.0.1:8080`
+- CloudOps Web Console: `http://127.0.0.1:8081`
 - PostgreSQL: `127.0.0.1:5432`
 - Redis: `127.0.0.1:6379`
 - OpenSearch: `http://127.0.0.1:9200`
@@ -101,7 +110,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs -f
 
 ## 7. Upgrade
 
-Upgrade dependency images and recreate services:
+Upgrade dependency images and recreate services (CloudOps API/Web images are rebuilt if missing):
 
 ```bash
 bash scripts/upgrade.sh

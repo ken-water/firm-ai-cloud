@@ -1,0 +1,8 @@
+.git
+.github
+.run
+dist
+target
+**/target
+**/node_modules
+apps/web-console/dist

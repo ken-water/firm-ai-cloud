@@ -120,6 +120,9 @@ resolve_settings() {
       ;;
   esac
 
+  CLOUDOPS_API_IMAGE="cloudops/api:0.0.8"
+  CLOUDOPS_WEB_IMAGE="cloudops/web-console:0.0.8"
+
   IMAGES=(
     "${POSTGRES_IMAGE}"
     "${REDIS_IMAGE}"
@@ -130,6 +133,8 @@ resolve_settings() {
     "${ZABBIX_WEB_IMAGE}"
     "${ZABBIX_PROXY_IMAGE}"
     "${ZABBIX_AGENT_IMAGE}"
+    "${CLOUDOPS_API_IMAGE}"
+    "${CLOUDOPS_WEB_IMAGE}"
   )
   BUNDLE_DIR="${OUTPUT_DIR}/${BUNDLE_NAME}"
   ARCHIVE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}.tar.gz"
@@ -147,9 +152,20 @@ pull_images_if_needed() {
   fi
 
   for img in "${IMAGES[@]}"; do
+    if [[ "${img}" == "${CLOUDOPS_API_IMAGE}" || "${img}" == "${CLOUDOPS_WEB_IMAGE}" ]]; then
+      continue
+    fi
     log "Pulling ${img}"
     docker pull "${img}"
   done
+}
+
+build_app_images() {
+  log "Building API image ${CLOUDOPS_API_IMAGE}"
+  docker build -t "${CLOUDOPS_API_IMAGE}" -f "${ROOT_DIR}/services/api/Dockerfile" "${ROOT_DIR}"
+
+  log "Building web image ${CLOUDOPS_WEB_IMAGE}"
+  docker build -t "${CLOUDOPS_WEB_IMAGE}" -f "${ROOT_DIR}/apps/web-console/Dockerfile" "${ROOT_DIR}/apps/web-console"
 }
 
 copy_bundle_files() {
@@ -215,6 +231,8 @@ zabbix_server_image=${ZABBIX_SERVER_IMAGE}
 zabbix_web_image=${ZABBIX_WEB_IMAGE}
 zabbix_proxy_image=${ZABBIX_PROXY_IMAGE}
 zabbix_agent_image=${ZABBIX_AGENT_IMAGE}
+cloudops_api_image=${CLOUDOPS_API_IMAGE}
+cloudops_web_image=${CLOUDOPS_WEB_IMAGE}
 install_command=bash scripts/install-offline.sh
 EOF
 }
@@ -260,6 +278,7 @@ main() {
   ensure_tools
   mkdir -p "${OUTPUT_DIR}"
   pull_images_if_needed
+  build_app_images
   copy_bundle_files
   write_offline_env
   save_images

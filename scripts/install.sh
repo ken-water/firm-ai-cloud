@@ -5,6 +5,7 @@ MODE="auto"
 SKIP_DOCKER_INSTALL=0
 NO_PULL=0
 MIRROR="auto"
+DEPENDENCIES_ONLY=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -14,6 +15,10 @@ ENV_EXAMPLE_FILE="${DEPLOY_DIR}/.env.example"
 ENV_CN_EXAMPLE_FILE="${DEPLOY_DIR}/.env.cn.example"
 ENV_FILE="${DEPLOY_DIR}/.env"
 ZABBIX_BOOTSTRAP_SCRIPT="${ROOT_DIR}/scripts/bootstrap-zabbix.sh"
+API_DOCKERFILE="${ROOT_DIR}/services/api/Dockerfile"
+WEB_DOCKERFILE="${ROOT_DIR}/apps/web-console/Dockerfile"
+DEFAULT_API_IMAGE="cloudops/api:0.0.8"
+DEFAULT_WEB_IMAGE="cloudops/web-console:0.0.8"
 
 COMPOSE_CMD=()
 
@@ -29,6 +34,7 @@ Options:
   --mirror auto|default|cn   Image mirror profile for deploy/.env (default: auto)
   --skip-docker-install      Do not auto-install Docker if missing
   --no-pull                  Skip image pulling before startup
+  --dependencies-only        Start infra dependencies only (skip CloudOps API/Web containers)
   -h, --help                 Show this help message
 EOF
 }
@@ -277,6 +283,18 @@ compose() {
   "${COMPOSE_CMD[@]}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
+get_env_value() {
+  local key="$1"
+  local fallback="$2"
+  local line
+  line="$(grep -E "^${key}=" "${ENV_FILE}" | tail -n 1 || true)"
+  if [[ -z "${line}" ]]; then
+    echo "${fallback}"
+    return
+  fi
+  echo "${line#*=}"
+}
+
 wait_for_service() {
   local service="$1"
   local timeout="${2:-240}"
@@ -306,14 +324,54 @@ wait_for_service() {
   done
 }
 
-start_stack() {
-  if [[ "${NO_PULL}" -eq 0 ]]; then
-    log "Pulling latest images..."
-    compose pull
+ensure_app_images() {
+  local api_image web_image
+  api_image="$(get_env_value "CLOUDOPS_API_IMAGE" "${DEFAULT_API_IMAGE}")"
+  web_image="$(get_env_value "CLOUDOPS_WEB_IMAGE" "${DEFAULT_WEB_IMAGE}")"
+
+  if ! docker image inspect "${api_image}" >/dev/null 2>&1; then
+    [[ -f "${API_DOCKERFILE}" ]] || fatal "Missing API Dockerfile: ${API_DOCKERFILE}"
+    log "Building API image ${api_image}..."
+    docker build -t "${api_image}" -f "${API_DOCKERFILE}" "${ROOT_DIR}"
+  else
+    log "Using existing API image ${api_image}."
   fi
 
-  log "Starting dependency stack..."
-  compose up -d
+  if ! docker image inspect "${web_image}" >/dev/null 2>&1; then
+    [[ -f "${WEB_DOCKERFILE}" ]] || fatal "Missing web Dockerfile: ${WEB_DOCKERFILE}"
+    log "Building web image ${web_image}..."
+    docker build -t "${web_image}" -f "${WEB_DOCKERFILE}" "${ROOT_DIR}/apps/web-console"
+  else
+    log "Using existing web image ${web_image}."
+  fi
+}
+
+start_stack() {
+  local infra_services=(
+    postgres
+    redis
+    opensearch
+    minio
+    zabbix-db
+    zabbix-server
+    zabbix-web
+    zabbix-proxy
+    zabbix-agent-local
+  )
+
+  if [[ "${NO_PULL}" -eq 0 ]]; then
+    log "Pulling dependency images..."
+    compose pull "${infra_services[@]}"
+  fi
+
+  if [[ "${DEPENDENCIES_ONLY}" -eq 1 ]]; then
+    log "Starting dependency services only..."
+    compose up -d "${infra_services[@]}"
+  else
+    ensure_app_images
+    log "Starting CloudOps One stack..."
+    compose up -d
+  fi
 
   wait_for_service postgres 180
   wait_for_service redis 120
@@ -324,6 +382,10 @@ start_stack() {
   wait_for_service zabbix-web 240
   wait_for_service zabbix-proxy 240
   wait_for_service zabbix-agent-local 180
+  if [[ "${DEPENDENCIES_ONLY}" -eq 0 ]]; then
+    wait_for_service api 240
+    wait_for_service web 180
+  fi
 }
 
 run_zabbix_bootstrap() {
@@ -342,9 +404,11 @@ run_zabbix_bootstrap() {
 print_summary() {
   cat <<'EOF'
 
-CloudOps One dependency stack is ready.
+CloudOps One stack is ready.
 
 Endpoints:
+  CloudOps API:      http://127.0.0.1:8080 (if --dependencies-only is not used)
+  CloudOps Web:      http://127.0.0.1:8081 (if --dependencies-only is not used)
   PostgreSQL:       127.0.0.1:5432
   Redis:            127.0.0.1:6379
   OpenSearch API:   http://127.0.0.1:9200
@@ -381,6 +445,10 @@ parse_args() {
         ;;
       --no-pull)
         NO_PULL=1
+        shift
+        ;;
+      --dependencies-only)
+        DEPENDENCIES_ONLY=1
         shift
         ;;
       -h|--help)

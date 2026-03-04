@@ -11,12 +11,16 @@ COMPOSE_FILE="${DEPLOY_DIR}/docker-compose.yml"
 ENV_EXAMPLE_FILE="${DEPLOY_DIR}/.env.example"
 ENV_FILE="${DEPLOY_DIR}/.env"
 ZABBIX_BOOTSTRAP_SCRIPT="${ROOT_DIR}/scripts/bootstrap-zabbix.sh"
+API_DOCKERFILE="${ROOT_DIR}/services/api/Dockerfile"
+WEB_DOCKERFILE="${ROOT_DIR}/apps/web-console/Dockerfile"
+DEFAULT_API_IMAGE="cloudops/api:0.0.8"
+DEFAULT_WEB_IMAGE="cloudops/web-console:0.0.8"
 
 COMPOSE_CMD=()
 
 usage() {
   cat <<'EOF'
-CloudOps One dependency stack upgrader
+CloudOps One stack upgrader
 
 Usage:
   scripts/upgrade.sh [options]
@@ -109,6 +113,18 @@ compose() {
   "${COMPOSE_CMD[@]}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
+get_env_value() {
+  local key="$1"
+  local fallback="$2"
+  local line
+  line="$(grep -E "^${key}=" "${ENV_FILE}" | tail -n 1 || true)"
+  if [[ -z "${line}" ]]; then
+    echo "${fallback}"
+    return
+  fi
+  echo "${line#*=}"
+}
+
 wait_for_service() {
   local service="$1"
   local timeout="${2:-240}"
@@ -138,11 +154,47 @@ wait_for_service() {
   done
 }
 
-run_upgrade() {
-  if [[ "${NO_PULL}" -eq 0 ]]; then
-    log "Pulling latest images..."
-    compose pull
+ensure_app_images() {
+  local api_image web_image
+  api_image="$(get_env_value "CLOUDOPS_API_IMAGE" "${DEFAULT_API_IMAGE}")"
+  web_image="$(get_env_value "CLOUDOPS_WEB_IMAGE" "${DEFAULT_WEB_IMAGE}")"
+
+  if ! docker image inspect "${api_image}" >/dev/null 2>&1; then
+    [[ -f "${API_DOCKERFILE}" ]] || fatal "Missing API Dockerfile: ${API_DOCKERFILE}"
+    log "Building API image ${api_image}..."
+    docker build -t "${api_image}" -f "${API_DOCKERFILE}" "${ROOT_DIR}"
+  else
+    log "Using existing API image ${api_image}."
   fi
+
+  if ! docker image inspect "${web_image}" >/dev/null 2>&1; then
+    [[ -f "${WEB_DOCKERFILE}" ]] || fatal "Missing web Dockerfile: ${WEB_DOCKERFILE}"
+    log "Building web image ${web_image}..."
+    docker build -t "${web_image}" -f "${WEB_DOCKERFILE}" "${ROOT_DIR}/apps/web-console"
+  else
+    log "Using existing web image ${web_image}."
+  fi
+}
+
+run_upgrade() {
+  local infra_services=(
+    postgres
+    redis
+    opensearch
+    minio
+    zabbix-db
+    zabbix-server
+    zabbix-web
+    zabbix-proxy
+    zabbix-agent-local
+  )
+
+  if [[ "${NO_PULL}" -eq 0 ]]; then
+    log "Pulling dependency images..."
+    compose pull "${infra_services[@]}"
+  fi
+
+  ensure_app_images
 
   log "Recreating stack with latest definitions..."
   compose up -d --remove-orphans
@@ -163,6 +215,8 @@ run_health_checks() {
   wait_for_service zabbix-web 240
   wait_for_service zabbix-proxy 240
   wait_for_service zabbix-agent-local 180
+  wait_for_service api 240
+  wait_for_service web 180
 }
 
 run_zabbix_bootstrap() {
@@ -181,7 +235,7 @@ run_zabbix_bootstrap() {
 print_summary() {
   cat <<'EOF'
 
-Dependency stack upgrade complete.
+CloudOps One stack upgrade complete.
 
 Useful commands:
   docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps

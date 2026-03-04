@@ -166,6 +166,54 @@ services:
       zabbix-proxy:
         condition: service_started
 
+  api:
+    image: ${CLOUDOPS_API_IMAGE:-cloudops/api:0.0.8}
+    restart: unless-stopped
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8080
+      RUST_LOG: ${CLOUDOPS_API_LOG_LEVEL:-info}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-20}
+      AUTH_RBAC_ENABLED: ${AUTH_RBAC_ENABLED:-true}
+      AUTH_OIDC_ENABLED: ${AUTH_OIDC_ENABLED:-false}
+      AUTH_OIDC_AUTHORIZATION_ENDPOINT: ${AUTH_OIDC_AUTHORIZATION_ENDPOINT:-}
+      AUTH_OIDC_TOKEN_ENDPOINT: ${AUTH_OIDC_TOKEN_ENDPOINT:-}
+      AUTH_OIDC_USERINFO_ENDPOINT: ${AUTH_OIDC_USERINFO_ENDPOINT:-}
+      AUTH_OIDC_CLIENT_ID: ${AUTH_OIDC_CLIENT_ID:-}
+      AUTH_OIDC_CLIENT_SECRET: ${AUTH_OIDC_CLIENT_SECRET:-}
+      AUTH_OIDC_REDIRECT_URI: ${AUTH_OIDC_REDIRECT_URI:-}
+      AUTH_OIDC_SCOPE: ${AUTH_OIDC_SCOPE:-openid profile email}
+      AUTH_OIDC_AUTO_PROVISION: ${AUTH_OIDC_AUTO_PROVISION:-false}
+      AUTH_SESSION_TTL_MINUTES: ${AUTH_SESSION_TTL_MINUTES:-480}
+      AUTH_OIDC_DEV_MODE_ENABLED: ${AUTH_OIDC_DEV_MODE_ENABLED:-false}
+      MONITORING_SYNC_WORKER_ENABLED: ${MONITORING_SYNC_WORKER_ENABLED:-true}
+      MONITORING_SYNC_POLL_SECONDS: ${MONITORING_SYNC_POLL_SECONDS:-15}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_started
+      zabbix-proxy:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${CLOUDOPS_API_PORT:-8080}:8080"
+
+  web:
+    image: ${CLOUDOPS_WEB_IMAGE:-cloudops/web-console:0.0.8}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${CLOUDOPS_WEB_PORT:-8081}:8080"
+
 volumes:
   postgres-data:
   redis-data:

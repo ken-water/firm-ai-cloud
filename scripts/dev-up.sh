@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${ROOT_DIR}"
 
-bash scripts/install.sh --skip-docker-install --mirror cn
+bash scripts/install.sh --skip-docker-install --mirror cn --dependencies-only
 
 echo "Starting api service on :8080"
 exec cargo run -p api
