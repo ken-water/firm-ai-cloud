@@ -4,6 +4,7 @@ set -Eeuo pipefail
 API_BASE_URL="${API_BASE_URL:-http://127.0.0.1:8080}"
 STAMP="$(date +%s)"
 LAST_BODY_FILE=""
+LAST_STATUS=""
 
 log() {
   echo "[oidc-dev] $*"
@@ -34,7 +35,7 @@ request_code() {
   if [[ -n "$body" ]]; then
     args+=(-H 'Content-Type: application/json' -d "$body")
   fi
-  curl "${args[@]}" "$url"
+  LAST_STATUS="$(curl "${args[@]}" "$url")"
 }
 
 require_tool curl
@@ -89,33 +90,33 @@ fi
 AUTHZ="Authorization: Bearer ${ACCESS_TOKEN}"
 
 log "Invalid bearer token should be denied"
-STATUS_INVALID="$(request_code GET "${API_BASE_URL}/api/v1/auth/me" "" "Authorization: Bearer invalid-token")"
-if [[ "$STATUS_INVALID" != "403" ]]; then
-  echo "ERROR: expected 403 for invalid bearer token, got ${STATUS_INVALID}" >&2
+request_code GET "${API_BASE_URL}/api/v1/auth/me" "" "Authorization: Bearer invalid-token"
+if [[ "$LAST_STATUS" != "403" ]]; then
+  echo "ERROR: expected 403 for invalid bearer token, got ${LAST_STATUS}" >&2
   cat "$LAST_BODY_FILE" >&2 || true
   exit 1
 fi
 
 log "Bearer token should access protected read APIs"
-STATUS_READ="$(request_code GET "${API_BASE_URL}/api/v1/cmdb/assets" "" "$AUTHZ")"
-if [[ "$STATUS_READ" != "200" ]]; then
-  echo "ERROR: expected 200 for cmdb assets read, got ${STATUS_READ}" >&2
+request_code GET "${API_BASE_URL}/api/v1/cmdb/assets" "" "$AUTHZ"
+if [[ "$LAST_STATUS" != "200" ]]; then
+  echo "ERROR: expected 200 for cmdb assets read, got ${LAST_STATUS}" >&2
   cat "$LAST_BODY_FILE" >&2 || true
   exit 1
 fi
 
 log "Viewer role should still be denied on write APIs"
-STATUS_WRITE="$(request_code POST "${API_BASE_URL}/api/v1/cmdb/assets" "{\"asset_class\":\"server\",\"name\":\"oidc-dev-write-${STAMP}\",\"status\":\"active\"}" "$AUTHZ")"
-if [[ "$STATUS_WRITE" != "403" ]]; then
-  echo "ERROR: expected 403 for cmdb assets write with viewer role, got ${STATUS_WRITE}" >&2
+request_code POST "${API_BASE_URL}/api/v1/cmdb/assets" "{\"asset_class\":\"server\",\"name\":\"oidc-dev-write-${STAMP}\",\"status\":\"active\"}" "$AUTHZ"
+if [[ "$LAST_STATUS" != "403" ]]; then
+  echo "ERROR: expected 403 for cmdb assets write with viewer role, got ${LAST_STATUS}" >&2
   cat "$LAST_BODY_FILE" >&2 || true
   exit 1
 fi
 
 log "Logout should revoke current session token"
-STATUS_LOGOUT="$(request_code POST "${API_BASE_URL}/api/v1/auth/logout" "" "$AUTHZ")"
-if [[ "$STATUS_LOGOUT" != "200" ]]; then
-  echo "ERROR: expected 200 on logout, got ${STATUS_LOGOUT}" >&2
+request_code POST "${API_BASE_URL}/api/v1/auth/logout" "" "$AUTHZ"
+if [[ "$LAST_STATUS" != "200" ]]; then
+  echo "ERROR: expected 200 on logout, got ${LAST_STATUS}" >&2
   cat "$LAST_BODY_FILE" >&2 || true
   exit 1
 fi
@@ -126,9 +127,9 @@ grep -q '"revoked"[[:space:]]*:[[:space:]]*true' "$LAST_BODY_FILE" || {
 }
 
 log "Revoked token should no longer authenticate"
-STATUS_REVOKED="$(request_code GET "${API_BASE_URL}/api/v1/auth/me" "" "$AUTHZ")"
-if [[ "$STATUS_REVOKED" != "403" ]]; then
-  echo "ERROR: expected 403 for revoked bearer token, got ${STATUS_REVOKED}" >&2
+request_code GET "${API_BASE_URL}/api/v1/auth/me" "" "$AUTHZ"
+if [[ "$LAST_STATUS" != "403" ]]; then
+  echo "ERROR: expected 403 for revoked bearer token, got ${LAST_STATUS}" >&2
   cat "$LAST_BODY_FILE" >&2 || true
   exit 1
 fi
