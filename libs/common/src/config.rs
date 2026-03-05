@@ -22,6 +22,10 @@ pub struct AppConfig {
     pub oidc_auto_provision: bool,
     pub oidc_session_ttl_minutes: u32,
     pub oidc_dev_mode_enabled: bool,
+    pub ldap_enabled: bool,
+    pub ldap_mode: String,
+    pub ldap_auto_provision: bool,
+    pub ldap_dev_users_json: Option<String>,
     pub monitoring_secret_encryption_key: Option<String>,
     pub monitoring_secret_inline_policy: String,
     pub workflow_execution_policy_mode: String,
@@ -51,6 +55,10 @@ impl AppConfig {
         let oidc_auto_provision = parse_bool_env("AUTH_OIDC_AUTO_PROVISION", false)?;
         let oidc_session_ttl_minutes = parse_u32_env("AUTH_SESSION_TTL_MINUTES", 480)?;
         let oidc_dev_mode_enabled = parse_bool_env("AUTH_OIDC_DEV_MODE_ENABLED", false)?;
+        let ldap_enabled = parse_bool_env("AUTH_LDAP_ENABLED", false)?;
+        let ldap_mode = parse_enum_env("AUTH_LDAP_MODE", "dev", &["dev", "live"])?;
+        let ldap_auto_provision = parse_bool_env("AUTH_LDAP_AUTO_PROVISION", false)?;
+        let ldap_dev_users_json = parse_optional_env("AUTH_LDAP_DEV_USERS_JSON");
         let monitoring_secret_encryption_key =
             parse_optional_env("MONITORING_SECRET_ENCRYPTION_KEY");
         let monitoring_secret_inline_policy = parse_enum_env(
@@ -85,6 +93,10 @@ impl AppConfig {
             oidc_auto_provision,
             oidc_session_ttl_minutes,
             oidc_dev_mode_enabled,
+            ldap_enabled,
+            ldap_mode,
+            ldap_auto_provision,
+            ldap_dev_users_json,
             monitoring_secret_encryption_key,
             monitoring_secret_inline_policy,
             workflow_execution_policy_mode,
@@ -224,6 +236,10 @@ mod tests {
         assert!(cfg.oidc_client_id.is_none());
         assert!(cfg.oidc_client_secret.is_none());
         assert!(cfg.oidc_redirect_uri.is_none());
+        assert!(!cfg.ldap_enabled);
+        assert_eq!(cfg.ldap_mode, "dev");
+        assert!(!cfg.ldap_auto_provision);
+        assert!(cfg.ldap_dev_users_json.is_none());
         assert!(cfg.monitoring_secret_encryption_key.is_none());
         assert_eq!(cfg.monitoring_secret_inline_policy, "allow");
         assert_eq!(cfg.workflow_execution_policy_mode, "disabled");

@@ -26,7 +26,9 @@ use common::config::AppConfig;
 use common::models::{HealthResponse, PingResponse};
 use error::AppResult;
 use sqlx::postgres::PgPoolOptions;
-use state::{AppState, MonitoringSecretSettings, OidcSettings, WorkflowExecutionSettings};
+use state::{
+    AppState, LdapSettings, MonitoringSecretSettings, OidcSettings, WorkflowExecutionSettings,
+};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -63,6 +65,12 @@ async fn main() -> anyhow::Result<()> {
             auto_provision: config.oidc_auto_provision,
             session_ttl_minutes: config.oidc_session_ttl_minutes,
             dev_mode_enabled: config.oidc_dev_mode_enabled,
+        },
+        ldap: LdapSettings {
+            enabled: config.ldap_enabled,
+            mode: config.ldap_mode,
+            auto_provision: config.ldap_auto_provision,
+            dev_users_json: config.ldap_dev_users_json,
         },
         monitoring_secret: MonitoringSecretSettings {
             encryption_key: config.monitoring_secret_encryption_key,

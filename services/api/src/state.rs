@@ -14,6 +14,14 @@ pub struct OidcSettings {
 }
 
 #[derive(Clone)]
+pub struct LdapSettings {
+    pub enabled: bool,
+    pub mode: String,
+    pub auto_provision: bool,
+    pub dev_users_json: Option<String>,
+}
+
+#[derive(Clone)]
 pub struct WorkflowExecutionSettings {
     pub policy_mode: String,
     pub allowlist: Vec<String>,
@@ -31,6 +39,7 @@ pub struct AppState {
     pub db: sqlx::PgPool,
     pub rbac_enabled: bool,
     pub oidc: OidcSettings,
+    pub ldap: LdapSettings,
     pub monitoring_secret: MonitoringSecretSettings,
     pub workflow_execution: WorkflowExecutionSettings,
 }

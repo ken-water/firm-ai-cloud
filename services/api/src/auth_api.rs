@@ -15,15 +15,17 @@ use crate::{
     audit::{AuditLogWriteInput, write_audit_log_best_effort},
     auth::{read_bearer_token, resolve_auth_user},
     error::{AppError, AppResult},
-    state::{AppState, OidcSettings},
+    state::{AppState, LdapSettings, OidcSettings},
 };
 
 const OIDC_AUTH_SOURCE: &str = "oidc";
+const LDAP_AUTH_SOURCE: &str = "ldap";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/oidc/start", get(start_oidc_login))
         .route("/oidc/callback", get(handle_oidc_callback))
+        .route("/ldap/login", post(login_ldap_user))
         .route("/me", get(get_current_identity))
         .route("/logout", post(logout_current_session))
 }
@@ -77,6 +79,24 @@ struct LogoutResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct LdapLoginRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LdapLoginResponse {
+    access_token: String,
+    token_type: &'static str,
+    expires_at: DateTime<Utc>,
+    user: AuthUserSummary,
+    roles: Vec<String>,
+    auth_source: &'static str,
+    subject: String,
+    groups: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct OidcTokenResponse {
     access_token: Option<String>,
 }
@@ -87,6 +107,26 @@ struct OidcUserInfo {
     email: Option<String>,
     preferred_username: Option<String>,
     name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LdapUserInfo {
+    sub: String,
+    username: String,
+    email: Option<String>,
+    display_name: Option<String>,
+    groups: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LdapDevUserRecord {
+    username: String,
+    password: String,
+    sub: String,
+    email: Option<String>,
+    display_name: Option<String>,
+    #[serde(default)]
+    groups: Vec<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -254,6 +294,126 @@ async fn handle_oidc_callback(
     }))
 }
 
+async fn login_ldap_user(
+    State(state): State<AppState>,
+    Json(payload): Json<LdapLoginRequest>,
+) -> AppResult<Json<LdapLoginResponse>> {
+    let username = required_trimmed("username", payload.username)?;
+    let password = required_trimmed("password", payload.password)?;
+    let actor = format!("ldap:{username}");
+
+    let profile = match authenticate_ldap_user(&state, &username, &password).await {
+        Ok(profile) => profile,
+        Err(err) => {
+            write_audit_log_best_effort(
+                &state.db,
+                AuditLogWriteInput {
+                    actor,
+                    action: "auth.ldap.login".to_string(),
+                    target_type: "ldap".to_string(),
+                    target_id: Some(username),
+                    result: "failed".to_string(),
+                    message: Some(err.to_string()),
+                    metadata: json!({}),
+                },
+            )
+            .await;
+            return Err(err);
+        }
+    };
+
+    let mapped_user = match map_ldap_profile_to_user(&state, &profile).await {
+        Ok(user) => user,
+        Err(err) => {
+            write_audit_log_best_effort(
+                &state.db,
+                AuditLogWriteInput {
+                    actor: format!("ldap:{}", profile.username),
+                    action: "auth.ldap.login".to_string(),
+                    target_type: "ldap".to_string(),
+                    target_id: Some(profile.sub.clone()),
+                    result: "failed".to_string(),
+                    message: Some(err.to_string()),
+                    metadata: json!({
+                        "email": profile.email,
+                        "groups": profile.groups
+                    }),
+                },
+            )
+            .await;
+            return Err(err);
+        }
+    };
+
+    if !mapped_user.is_enabled {
+        return Err(AppError::Forbidden(format!(
+            "mapped user '{}' is disabled",
+            mapped_user.username
+        )));
+    }
+
+    let roles = load_user_roles(&state, mapped_user.id).await?;
+    if roles.is_empty() {
+        return Err(AppError::Forbidden(
+            "LDAP user is mapped but has no role binding; ask admin to bind a role in /api/v1/iam/users/{id}/roles/{role_id}".to_string(),
+        ));
+    }
+
+    let session_id = Uuid::new_v4().to_string();
+    let expires_at = Utc::now() + Duration::minutes(state.oidc.session_ttl_minutes as i64);
+    sqlx::query(
+        "INSERT INTO auth_sessions (id, user_id, auth_source, expires_at, metadata)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&session_id)
+    .bind(mapped_user.id)
+    .bind(LDAP_AUTH_SOURCE)
+    .bind(expires_at)
+    .bind(json!({
+        "sub": profile.sub,
+        "email": profile.email,
+        "groups": profile.groups,
+        "username": profile.username
+    }))
+    .execute(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: mapped_user.username.clone(),
+            action: "auth.ldap.login".to_string(),
+            target_type: "auth_session".to_string(),
+            target_id: Some(session_id.clone()),
+            result: "success".to_string(),
+            message: None,
+            metadata: json!({
+                "user_id": mapped_user.id,
+                "subject": profile.sub,
+                "groups": profile.groups,
+                "roles": roles
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(LdapLoginResponse {
+        access_token: session_id,
+        token_type: "Bearer",
+        expires_at,
+        user: AuthUserSummary {
+            id: mapped_user.id,
+            username: mapped_user.username,
+            display_name: mapped_user.display_name,
+            email: mapped_user.email,
+        },
+        roles,
+        auth_source: LDAP_AUTH_SOURCE,
+        subject: profile.sub,
+        groups: profile.groups,
+    }))
+}
+
 async fn get_current_identity(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -321,6 +481,77 @@ fn ensure_oidc_enabled(state: &AppState) -> AppResult<&OidcSettings> {
         ));
     }
     Ok(&state.oidc)
+}
+
+fn ensure_ldap_enabled(state: &AppState) -> AppResult<&LdapSettings> {
+    if !state.ldap.enabled {
+        return Err(AppError::Validation(
+            "ldap is disabled; set AUTH_LDAP_ENABLED=true".to_string(),
+        ));
+    }
+    Ok(&state.ldap)
+}
+
+async fn authenticate_ldap_user(
+    state: &AppState,
+    username: &str,
+    password: &str,
+) -> AppResult<LdapUserInfo> {
+    let ldap = ensure_ldap_enabled(state)?;
+
+    match ldap.mode.as_str() {
+        "dev" => {
+            let payload = ldap.dev_users_json.as_deref().ok_or_else(|| {
+                AppError::Validation(
+                    "AUTH_LDAP_DEV_USERS_JSON is required when AUTH_LDAP_MODE=dev".to_string(),
+                )
+            })?;
+            authenticate_ldap_dev_user(payload, username, password)
+        }
+        "live" => Err(AppError::Validation(
+            "AUTH_LDAP_MODE=live is not implemented in this baseline; use AUTH_LDAP_MODE=dev for verification".to_string(),
+        )),
+        _ => Err(AppError::Validation(format!(
+            "unsupported AUTH_LDAP_MODE '{}'",
+            ldap.mode
+        ))),
+    }
+}
+
+fn authenticate_ldap_dev_user(
+    dev_users_json: &str,
+    username: &str,
+    password: &str,
+) -> AppResult<LdapUserInfo> {
+    let users: Vec<LdapDevUserRecord> = serde_json::from_str(dev_users_json).map_err(|_| {
+        AppError::Validation("AUTH_LDAP_DEV_USERS_JSON must be a valid JSON array".to_string())
+    })?;
+
+    let normalized_username = username.trim().to_ascii_lowercase();
+    let matched = users.into_iter().find(|item| {
+        item.username
+            .trim()
+            .eq_ignore_ascii_case(&normalized_username)
+            && item.password == password
+    });
+
+    let user = matched.ok_or_else(|| {
+        AppError::Forbidden("ldap authentication failed: invalid credentials".to_string())
+    })?;
+
+    let subject = required_trimmed("sub", user.sub)?;
+    Ok(LdapUserInfo {
+        sub: subject,
+        username: user.username.trim().to_ascii_lowercase(),
+        email: normalize_email(user.email),
+        display_name: trim_optional(user.display_name),
+        groups: user
+            .groups
+            .into_iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect(),
+    })
 }
 
 fn build_authorization_url(
@@ -483,7 +714,7 @@ async fn map_oidc_profile_to_user(
     state: &AppState,
     profile: &OidcUserInfo,
 ) -> AppResult<LocalUser> {
-    if let Some(item) = load_user_by_subject_link(state, &profile.sub).await? {
+    if let Some(item) = load_user_by_subject_link(state, OIDC_AUTH_SOURCE, &profile.sub).await? {
         if item.is_enabled {
             return Ok(item);
         }
@@ -496,7 +727,8 @@ async fn map_oidc_profile_to_user(
     let normalized_email = normalize_email(profile.email.clone());
     if let Some(email) = normalized_email.clone() {
         if let Some(item) = load_user_by_email(state, &email).await? {
-            upsert_subject_link(state, &profile.sub, item.id, Some(email)).await?;
+            upsert_subject_link(state, OIDC_AUTH_SOURCE, &profile.sub, item.id, Some(email))
+                .await?;
             return Ok(item);
         }
     }
@@ -520,19 +752,90 @@ async fn map_oidc_profile_to_user(
     .fetch_one(&state.db)
     .await?;
 
-    upsert_subject_link(state, &profile.sub, created.id, normalized_email).await?;
+    upsert_subject_link(
+        state,
+        OIDC_AUTH_SOURCE,
+        &profile.sub,
+        created.id,
+        normalized_email,
+    )
+    .await?;
     Ok(created)
 }
 
-async fn load_user_by_subject_link(state: &AppState, sub: &str) -> AppResult<Option<LocalUser>> {
+async fn map_ldap_profile_to_user(
+    state: &AppState,
+    profile: &LdapUserInfo,
+) -> AppResult<LocalUser> {
+    if let Some(item) = load_user_by_subject_link(state, LDAP_AUTH_SOURCE, &profile.sub).await? {
+        if item.is_enabled {
+            return Ok(item);
+        }
+        return Err(AppError::Forbidden(format!(
+            "mapped user '{}' is disabled",
+            item.username
+        )));
+    }
+
+    let normalized_email = normalize_email(profile.email.clone());
+    if let Some(email) = normalized_email.clone() {
+        if let Some(item) = load_user_by_email(state, &email).await? {
+            upsert_subject_link(state, LDAP_AUTH_SOURCE, &profile.sub, item.id, Some(email))
+                .await?;
+            return Ok(item);
+        }
+    }
+
+    if !state.ldap.auto_provision {
+        return Err(AppError::Forbidden(
+            "LDAP user is not mapped; ask admin to map by email or subject".to_string(),
+        ));
+    }
+
+    let username = generate_provision_username_from_hint(
+        state,
+        Some(profile.username.as_str()),
+        normalized_email.as_deref(),
+        profile.sub.as_str(),
+    )
+    .await?;
+    let display_name = trim_optional(profile.display_name.clone());
+    let created: LocalUser = sqlx::query_as(
+        "INSERT INTO iam_users (username, display_name, email, auth_source, is_enabled)
+         VALUES ($1, $2, $3, 'ldap', TRUE)
+         RETURNING id, username, display_name, email, is_enabled",
+    )
+    .bind(username)
+    .bind(display_name)
+    .bind(normalized_email.clone())
+    .fetch_one(&state.db)
+    .await?;
+
+    upsert_subject_link(
+        state,
+        LDAP_AUTH_SOURCE,
+        &profile.sub,
+        created.id,
+        normalized_email,
+    )
+    .await?;
+    Ok(created)
+}
+
+async fn load_user_by_subject_link(
+    state: &AppState,
+    auth_source: &str,
+    sub: &str,
+) -> AppResult<Option<LocalUser>> {
     let user: Option<LocalUser> = sqlx::query_as(
         "SELECT u.id, u.username, u.display_name, u.email, u.is_enabled
          FROM iam_external_identities l
          INNER JOIN iam_users u ON u.id = l.user_id
-         WHERE l.auth_source = 'oidc'
-           AND l.external_subject = $1
+         WHERE l.auth_source = $1
+           AND l.external_subject = $2
          LIMIT 1",
     )
+    .bind(auth_source)
     .bind(sub)
     .fetch_optional(&state.db)
     .await?;
@@ -581,19 +884,21 @@ async fn load_user_roles(state: &AppState, user_id: i64) -> AppResult<Vec<String
 
 async fn upsert_subject_link(
     state: &AppState,
+    auth_source: &str,
     sub: &str,
     user_id: i64,
     email_snapshot: Option<String>,
 ) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO iam_external_identities (auth_source, external_subject, user_id, email_snapshot)
-         VALUES ('oidc', $1, $2, $3)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (auth_source, external_subject)
          DO UPDATE SET
              user_id = EXCLUDED.user_id,
              email_snapshot = EXCLUDED.email_snapshot,
              updated_at = NOW()",
     )
+    .bind(auth_source)
     .bind(sub)
     .bind(user_id)
     .bind(email_snapshot)
@@ -607,8 +912,22 @@ async fn generate_provision_username(
     state: &AppState,
     profile: &OidcUserInfo,
 ) -> AppResult<String> {
-    let base = choose_base_username(profile)?;
+    generate_provision_username_from_hint(
+        state,
+        profile.preferred_username.as_deref(),
+        profile.email.as_deref(),
+        profile.sub.as_str(),
+    )
+    .await
+}
 
+async fn generate_provision_username_from_hint(
+    state: &AppState,
+    preferred: Option<&str>,
+    secondary: Option<&str>,
+    fallback: &str,
+) -> AppResult<String> {
+    let base = choose_base_username(preferred, secondary, fallback)?;
     for index in 0..50 {
         let candidate = if index == 0 {
             base.clone()
@@ -627,17 +946,16 @@ async fn generate_provision_username(
     }
 
     Err(AppError::Validation(
-        "failed to provision unique oidc username".to_string(),
+        "failed to provision unique username".to_string(),
     ))
 }
 
-fn choose_base_username(profile: &OidcUserInfo) -> AppResult<String> {
-    let raw = profile
-        .preferred_username
-        .as_ref()
-        .or(profile.email.as_ref())
-        .map(|item| item.as_str())
-        .unwrap_or(profile.sub.as_str());
+fn choose_base_username(
+    preferred: Option<&str>,
+    secondary: Option<&str>,
+    fallback: &str,
+) -> AppResult<String> {
+    let raw = preferred.or(secondary).unwrap_or(fallback);
 
     let mut base = String::new();
     for ch in raw.chars() {
@@ -651,7 +969,7 @@ fn choose_base_username(profile: &OidcUserInfo) -> AppResult<String> {
 
     if base.is_empty() {
         return Err(AppError::Validation(
-            "cannot derive username from oidc profile".to_string(),
+            "cannot derive username from identity profile".to_string(),
         ));
     }
 
@@ -693,4 +1011,81 @@ fn normalize_email(value: Option<String>) -> Option<String> {
             Some(trimmed.to_ascii_lowercase())
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{authenticate_ldap_dev_user, choose_base_username};
+    use crate::error::AppError;
+
+    #[test]
+    fn authenticates_ldap_dev_user_successfully() {
+        let payload = r#"
+[
+  {
+    "username": "ops-admin",
+    "password": "dev-pass-1",
+    "sub": "cn=ops-admin,ou=users,dc=example,dc=local",
+    "email": "ops-admin@example.local",
+    "display_name": "Ops Admin",
+    "groups": ["ops-admins", "oncall"]
+  }
+]
+"#;
+        let profile =
+            authenticate_ldap_dev_user(payload, "ops-admin", "dev-pass-1").expect("must pass");
+
+        assert_eq!(profile.username, "ops-admin");
+        assert_eq!(
+            profile.sub,
+            "cn=ops-admin,ou=users,dc=example,dc=local".to_string()
+        );
+        assert_eq!(profile.email, Some("ops-admin@example.local".to_string()));
+        assert_eq!(profile.groups, vec!["ops-admins", "oncall"]);
+    }
+
+    #[test]
+    fn rejects_ldap_dev_user_with_invalid_password() {
+        let payload = r#"
+[
+  {
+    "username": "ops-admin",
+    "password": "dev-pass-1",
+    "sub": "cn=ops-admin,ou=users,dc=example,dc=local",
+    "email": "ops-admin@example.local"
+  }
+]
+"#;
+        let err = authenticate_ldap_dev_user(payload, "ops-admin", "wrong-pass")
+            .expect_err("invalid password must fail");
+        match err {
+            AppError::Forbidden(message) => {
+                assert!(message.contains("invalid credentials"));
+            }
+            _ => panic!("unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_ldap_dev_user_payload() {
+        let err = authenticate_ldap_dev_user("{}", "ops-admin", "dev-pass-1")
+            .expect_err("invalid json must fail");
+        match err {
+            AppError::Validation(message) => {
+                assert!(message.contains("AUTH_LDAP_DEV_USERS_JSON"));
+            }
+            _ => panic!("unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn derives_username_from_priority_order() {
+        let picked = choose_base_username(Some("Ops-Admin"), Some("x@y.z"), "fallback")
+            .expect("preferred should be used");
+        assert_eq!(picked, "ops-admin");
+
+        let picked = choose_base_username(None, Some("User.Name@example.local"), "fallback")
+            .expect("secondary should be used");
+        assert_eq!(picked, "user.nameexample.local");
+    }
 }

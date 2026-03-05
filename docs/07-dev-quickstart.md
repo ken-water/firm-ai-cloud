@@ -49,10 +49,11 @@ cargo run -p api
 
 RBAC is enabled by default (`AUTH_RBAC_ENABLED=true`).
 For local development, a bootstrap admin user `admin` is created automatically by migration.
-Protected APIs support two auth modes:
+Protected APIs support three auth modes:
 
 - Legacy dev header mode (for local bootstrap and scripts)
 - OIDC session bearer token mode (recommended baseline for SSO flow)
+- LDAP dev-session bearer mode (enterprise identity simulation baseline)
 
 For legacy header mode:
 
@@ -75,6 +76,24 @@ export AUTH_OIDC_ENABLED=true
 export AUTH_OIDC_DEV_MODE_ENABLED=true
 export AUTH_OIDC_REDIRECT_URI='http://127.0.0.1:8080/api/v1/auth/oidc/callback'
 export AUTH_OIDC_AUTO_PROVISION=false
+```
+
+Minimal LDAP dev settings (optional):
+
+```bash
+export AUTH_LDAP_ENABLED=true
+export AUTH_LDAP_MODE=dev
+export AUTH_LDAP_AUTO_PROVISION=false
+export AUTH_LDAP_DEV_USERS_JSON='[
+  {
+    "username": "ldap.ops",
+    "password": "dev-pass-1",
+    "sub": "cn=ldap.ops,ou=users,dc=example,dc=local",
+    "email": "ldap.ops@example.local",
+    "display_name": "LDAP Ops",
+    "groups": ["ops-admins", "oncall"]
+  }
+]'
 ```
 
 Discovery scheduler worker env settings (enabled by default):
@@ -704,6 +723,15 @@ curl -H "$BEARER_HEADER" http://127.0.0.1:8080/api/v1/auth/me
 
 # revoke current bearer session
 curl -X POST -H "$BEARER_HEADER" http://127.0.0.1:8080/api/v1/auth/logout
+```
+
+LDAP auth API (dev connector mode):
+
+```bash
+# login with ldap dev identity and receive bearer token
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"ldap.ops","password":"dev-pass-1"}' \
+  http://127.0.0.1:8080/api/v1/auth/ldap/login
 ```
 
 ## 4. Run Frontend
