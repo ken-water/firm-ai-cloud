@@ -277,6 +277,11 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         || matches_scope(&normalized, "/field-definitions")
     {
         "cmdb.field_definitions"
+    } else if matches_scope(&normalized, "/topology/maps")
+        || matches_scope(&normalized, "/topology")
+        || matches_scope(&normalized, "/maps")
+    {
+        "cmdb.relations"
     } else if matches_scope(&normalized, "/cmdb/relations")
         || matches_scope(&normalized, "/relations")
     {
@@ -444,6 +449,11 @@ mod tests {
             "monitoring.sources.read",
         );
         assert_permission(
+            Method::GET,
+            "/api/v1/streams/metrics",
+            "monitoring.sources.read",
+        );
+        assert_permission(
             Method::POST,
             "/api/v1/monitoring/sources",
             "monitoring.sources.write",
@@ -458,6 +468,7 @@ mod tests {
         assert_permission(Method::GET, "/layers/hardware", "monitoring.sources.read");
         assert_permission(Method::GET, "/metrics", "monitoring.sources.read");
         assert_permission(Method::GET, "/sse", "monitoring.sources.read");
+        assert_permission(Method::GET, "/streams/metrics", "monitoring.sources.read");
     }
 
     #[test]
@@ -534,6 +545,16 @@ mod tests {
     }
 
     #[test]
+    fn maps_topology_permission() {
+        assert_permission(
+            Method::GET,
+            "/api/v1/topology/maps/site:dc-a",
+            "cmdb.relations.read",
+        );
+        assert_permission(Method::GET, "/maps/site:dc-a", "cmdb.relations.read");
+    }
+
+    #[test]
     fn permission_matrix_covers_existing_protected_endpoints() {
         let coverage = vec![
             (Method::GET, "/api/v1/cmdb/assets", "cmdb.assets.read"),
@@ -586,6 +607,11 @@ mod tests {
                 "cmdb.field_definitions.write",
             ),
             (Method::GET, "/api/v1/cmdb/relations", "cmdb.relations.read"),
+            (
+                Method::GET,
+                "/api/v1/topology/maps/global",
+                "cmdb.relations.read",
+            ),
             (
                 Method::POST,
                 "/api/v1/cmdb/relations",
@@ -708,6 +734,11 @@ mod tests {
             (
                 Method::GET,
                 "/api/v1/streams/sse",
+                "monitoring.sources.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/streams/metrics",
                 "monitoring.sources.read",
             ),
             (

@@ -261,9 +261,23 @@ curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/monitoring/layers/hardware?
 curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/monitoring/metrics?asset_id=1&window_minutes=60"
 ```
 
-Web-console topology deep drill is available at:
+Web-console topology entry points:
 
-- `http://127.0.0.1:5173/#section-topology`
+- Topology workspace page: `http://127.0.0.1:5173/#/topology`
+- Legacy CMDB topology section: `http://127.0.0.1:5173/#section-topology`
+
+Topology map API baseline:
+
+```bash
+# global scope
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/topology/maps/global?limit=200&offset=0"
+
+# scoped by path key
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/topology/maps/site:dc-a?limit=200&offset=0"
+
+# scoped by path + query filter
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/topology/maps/department:platform?site=dc-a&limit=100&offset=0"
+```
 
 Monitoring overview/layer API conventions:
 
@@ -314,6 +328,12 @@ Reconnect and stale-state semantics:
 - `stream.stale` means no matching alert events arrived within stale window.
 - `stream.recovered` means fresh alert events resumed after stale state.
 
+SSE lag metrics endpoint:
+
+```bash
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/streams/metrics?site=dc-a&window_minutes=60&sample_limit=5000"
+```
+
 Web-console monitoring source UX baseline:
 
 - Open section: `Monitoring Sources` in the left navigation.
@@ -334,6 +354,10 @@ Troubleshooting notes:
   - `monitoring_proxy`
   - `monitoring_host_group`
   - `monitoring_template` or `monitoring_templates`
+- Worker burst tuning envs:
+  - `MONITORING_SYNC_POLL_SECONDS` (default `3`)
+  - `MONITORING_SYNC_BATCH_SIZE` (default `20`, range `1-200`)
+  - `MONITORING_SYNC_MAX_PARALLEL` (default `4`, range `1-16`)
 
 CMDB binding and lifecycle APIs:
 
@@ -775,6 +799,20 @@ Run SSE burst stability smoke:
 
 ```bash
 bash scripts/benchmark-sse-burst-smoke.sh
+```
+
+Run threshold gate against benchmark artifacts:
+
+```bash
+bash scripts/benchmark-threshold-gate.sh \
+  --api-summary .run/benchmarks/api-<run-id>/summary.csv \
+  --sse-summary .run/benchmarks/sse-<run-id>/summary.json
+```
+
+Run quarterly DR drill automation:
+
+```bash
+bash scripts/dr-drill.sh --env-file deploy/.env --output-dir .run/dr-drill/<run-id> --yes
 ```
 
 Baseline report and KPI comparison:

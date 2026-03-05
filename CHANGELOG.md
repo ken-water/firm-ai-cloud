@@ -10,10 +10,35 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - v0.0.9 planning document: `docs/19-v0.0.9-topology-reliability-plan.md`.
 - v0.0.9 issue baseline: GitHub issues `#64` to `#71` (topology, stream metrics, perf, CI gate, DR, release closure).
+- Topology map API baseline:
+  - `GET /api/v1/topology/maps/{scope}` with `site`/`department` scope filters
+  - windowing via `limit`/`offset`
+  - deterministic node/edge payload with `empty` marker and health normalization
+- Stream lag metrics API:
+  - `GET /api/v1/streams/metrics`
+  - lag summary (`samples`, `p50`, `p95`, `p99`, `max`) and lag buckets
+- Web-console topology workspace route:
+  - `#/topology` navigation entry
+  - graph drill canvas with node/edge detail drawer
+- Benchmark threshold gate tooling:
+  - policy file: `scripts/benchmark-threshold-policy.json`
+  - gate script: `scripts/benchmark-threshold-gate.sh`
+  - machine-readable (`gate-summary.json`) and markdown (`gate-summary.md`) outputs
+- DR drill automation:
+  - `scripts/dr-drill.sh`
+  - report artifacts: `report.json`, `report.md`, `logs/*.log`
+  - runbook updates in `docs/17-disaster-recovery-runbook.md`
 
 ### Changed
 
-- None yet.
+- Monitoring-sync worker burst path now supports configurable batch claim + parallel processing:
+  - `MONITORING_SYNC_BATCH_SIZE` (default `20`)
+  - `MONITORING_SYNC_MAX_PARALLEL` (default `4`)
+  - queue depth and throughput telemetry logs for each worker batch
+- Manual CI now supports optional benchmark gate via `workflow_dispatch` input (`run_bench`):
+  - runs sequential+concurrency API benchmarks and SSE burst benchmark
+  - executes threshold gate script and uploads benchmark artifacts
+- Developer quickstart now documents topology map API, stream lag metrics, threshold gate usage, and DR drill command.
 
 ### Fixed
 

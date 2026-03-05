@@ -1,6 +1,6 @@
 export type MenuAxis = "function" | "department" | "business" | "screen";
 export type FunctionWorkspace = "full" | "cmdb" | "monitoring" | "workflow";
-export type ConsolePage = "overview" | "cmdb" | "monitoring" | "workflow" | "tickets" | "admin";
+export type ConsolePage = "overview" | "cmdb" | "monitoring" | "topology" | "workflow" | "tickets" | "admin";
 
 export const defaultConsolePage: ConsolePage = "overview";
 
@@ -16,6 +16,7 @@ export const consolePageSections: Record<ConsolePage, string[]> = {
     "section-assets"
   ],
   monitoring: ["section-cockpit", "section-monitoring-sources", "section-monitoring-metrics", "section-topology"],
+  topology: ["section-topology-workspace"],
   workflow: [
     "section-workflow-cockpit",
     "section-workflow-reports",
@@ -37,6 +38,7 @@ const legacySectionToPage: Record<string, ConsolePage> = {
   "section-tickets": "tickets",
   "section-monitoring-sources": "monitoring",
   "section-monitoring-metrics": "monitoring",
+  "section-topology-workspace": "topology",
   "section-scan": "cmdb",
   "section-fields": "cmdb",
   "section-relations": "cmdb",
@@ -79,6 +81,7 @@ function parseConsolePage(value: string): ConsolePage | null {
     case "overview":
     case "cmdb":
     case "monitoring":
+    case "topology":
     case "workflow":
     case "tickets":
     case "admin":

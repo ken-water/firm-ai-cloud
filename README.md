@@ -64,6 +64,14 @@ bash scripts/backup-stack.sh
 
 # restore stack data from backup artifacts
 bash scripts/restore-stack.sh --input-dir backups/stack-backup-<timestamp> --yes
+
+# run end-to-end DR drill and generate report artifacts
+bash scripts/dr-drill.sh --env-file deploy/.env --output-dir .run/dr-drill/<run-id> --yes
+
+# run benchmark threshold gate from benchmark artifacts
+bash scripts/benchmark-threshold-gate.sh \
+  --api-summary .run/benchmarks/api-<run-id>/summary.csv \
+  --sse-summary .run/benchmarks/sse-<run-id>/summary.json
 ```
 
 ## Fully Offline Delivery

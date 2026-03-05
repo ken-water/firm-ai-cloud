@@ -57,6 +57,7 @@ import {
 import { CmdbSections } from "./pages/cmdb-sections";
 import { IntegrationMonitoringSections } from "./pages/integration-monitoring-sections";
 import { OverviewAdminSections } from "./pages/overview-admin-sections";
+import { TopologyWorkspaceSections } from "./pages/topology-workspace-sections";
 import { WorkflowTicketSections } from "./pages/workflow-ticket-sections";
 
 type Asset = {
@@ -227,6 +228,53 @@ type AssetImpactResponse = {
   edges: ImpactEdge[];
   affected_business_services: ImpactNode[];
   affected_owners: ImpactNode[];
+};
+
+type TopologyMapNode = {
+  id: number;
+  name: string;
+  asset_class: string;
+  status: string;
+  site: string | null;
+  department: string | null;
+  monitoring_status: string | null;
+  latest_job_status: string | null;
+  health: string;
+};
+
+type TopologyMapEdge = {
+  id: number;
+  src_asset_id: number;
+  dst_asset_id: number;
+  relation_type: string;
+  source: string;
+};
+
+type TopologyMapScope = {
+  scope_key: string;
+  site: string | null;
+  department: string | null;
+};
+
+type TopologyMapWindow = {
+  limit: number;
+  offset: number;
+};
+
+type TopologyMapStats = {
+  total_nodes: number;
+  window_nodes: number;
+  window_edges: number;
+};
+
+type TopologyMapResponse = {
+  generated_at: string;
+  scope: TopologyMapScope;
+  window: TopologyMapWindow;
+  stats: TopologyMapStats;
+  nodes: TopologyMapNode[];
+  edges: TopologyMapEdge[];
+  empty: boolean;
 };
 
 type DiscoveryJob = {
@@ -797,6 +845,18 @@ export function App() {
   const [loadingAssetImpact, setLoadingAssetImpact] = useState(false);
   const [impactNotice, setImpactNotice] = useState<string | null>(null);
   const [selectedTopologyEdgeKey, setSelectedTopologyEdgeKey] = useState<string | null>(null);
+  const [topologyMap, setTopologyMap] = useState<TopologyMapResponse | null>(null);
+  const [loadingTopologyMap, setLoadingTopologyMap] = useState(false);
+  const [topologyMapNotice, setTopologyMapNotice] = useState<string | null>(null);
+  const [topologyScopeInput, setTopologyScopeInput] = useState("global");
+  const [topologySiteFilter, setTopologySiteFilter] = useState("");
+  const [topologyDepartmentFilter, setTopologyDepartmentFilter] = useState("");
+  const [topologyWindowLimit, setTopologyWindowLimit] = useState("200");
+  const [topologyWindowOffset, setTopologyWindowOffset] = useState("0");
+  const [selectedTopologyMapNodeId, setSelectedTopologyMapNodeId] = useState<string>("");
+  const [selectedTopologyMapEdgeKey, setSelectedTopologyMapEdgeKey] = useState<string | null>(
+    null
+  );
   const [discoveryJobs, setDiscoveryJobs] = useState<DiscoveryJob[]>([]);
   const [discoveryCandidates, setDiscoveryCandidates] = useState<DiscoveryCandidate[]>([]);
   const [loadingDiscoveryJobs, setLoadingDiscoveryJobs] = useState(false);
@@ -1171,6 +1231,79 @@ export function App() {
       setLoadingAssetImpact(false);
     }
   }, []);
+
+  const loadTopologyMap = useCallback(async () => {
+    setLoadingTopologyMap(true);
+    setError(null);
+    setTopologyMapNotice(null);
+
+    try {
+      const normalizedScope = trimToNull(topologyScopeInput) ?? "global";
+      const normalizedSite = trimToNull(topologySiteFilter);
+      const normalizedDepartment = trimToNull(topologyDepartmentFilter);
+
+      const limitParsed = Number.parseInt(topologyWindowLimit.trim(), 10);
+      const offsetParsed = Number.parseInt(topologyWindowOffset.trim(), 10);
+      if (!Number.isFinite(limitParsed) || limitParsed < 10 || limitParsed > 500) {
+        throw new Error(t("topology.workspace.messages.invalidLimit"));
+      }
+      if (!Number.isFinite(offsetParsed) || offsetParsed < 0) {
+        throw new Error(t("topology.workspace.messages.invalidOffset"));
+      }
+
+      const params = new URLSearchParams({
+        limit: String(limitParsed),
+        offset: String(offsetParsed)
+      });
+      if (normalizedSite) {
+        params.set("site", normalizedSite);
+      }
+      if (normalizedDepartment) {
+        params.set("department", normalizedDepartment);
+      }
+
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/topology/maps/${encodeURIComponent(normalizedScope)}?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: TopologyMapResponse = await response.json();
+      setTopologyMap(payload);
+      if (payload.nodes.length > 0) {
+        setSelectedTopologyMapNodeId(String(payload.nodes[0].id));
+      } else {
+        setSelectedTopologyMapNodeId("");
+      }
+      setSelectedTopologyMapEdgeKey(null);
+
+      if (payload.empty) {
+        setTopologyMapNotice(t("topology.workspace.messages.emptyScope"));
+      } else {
+        setTopologyMapNotice(
+          t("topology.workspace.messages.loaded", {
+            nodes: payload.stats.window_nodes,
+            edges: payload.stats.window_edges
+          })
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setTopologyMap(null);
+      setSelectedTopologyMapNodeId("");
+      setSelectedTopologyMapEdgeKey(null);
+    } finally {
+      setLoadingTopologyMap(false);
+    }
+  }, [
+    t,
+    topologyDepartmentFilter,
+    topologyScopeInput,
+    topologySiteFilter,
+    topologyWindowLimit,
+    topologyWindowOffset
+  ]);
 
   const loadDiscoveryJobs = useCallback(async () => {
     setLoadingDiscoveryJobs(true);
@@ -3222,6 +3355,64 @@ export function App() {
     }
     return (assetImpact?.edges ?? []).find((edge) => topologyEdgeKey(edge) === selectedTopologyEdgeKey) ?? null;
   }, [assetImpact?.edges, selectedTopologyEdgeKey]);
+  const topologyMapEdgesForRender = useMemo(
+    () => (topologyMap?.edges ?? []).map((edge) => ({ ...edge, direction: "scope" })),
+    [topologyMap?.edges]
+  );
+  const topologyMapLayoutNodes = useMemo(
+    () =>
+      (topologyMap?.nodes ?? []).map((node, index) => ({
+        id: node.id,
+        status: node.health,
+        depth: Math.floor(index / 24) + 1
+      })),
+    [topologyMap?.nodes]
+  );
+  const topologyMapRootId = useMemo(() => {
+    const parsed = Number.parseInt(selectedTopologyMapNodeId, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+    return topologyMap?.nodes[0]?.id ?? 0;
+  }, [selectedTopologyMapNodeId, topologyMap?.nodes]);
+  const topologyMapNodePositions = useMemo(
+    () => buildTopologyNodePositions(topologyMapLayoutNodes, topologyMapRootId, 1080, 620, 52),
+    [topologyMapLayoutNodes, topologyMapRootId]
+  );
+  const topologyMapEdgeRenderMeta = useMemo(
+    () => buildParallelEdgeMeta(topologyMapEdgesForRender),
+    [topologyMapEdgesForRender]
+  );
+  const selectedTopologyMapNode = useMemo(() => {
+    const nodeId = Number.parseInt(selectedTopologyMapNodeId, 10);
+    if (!Number.isFinite(nodeId) || nodeId <= 0) {
+      return null;
+    }
+    return (topologyMap?.nodes ?? []).find((node) => node.id === nodeId) ?? null;
+  }, [selectedTopologyMapNodeId, topologyMap?.nodes]);
+  const selectedTopologyMapEdge = useMemo(() => {
+    if (!selectedTopologyMapEdgeKey) {
+      return null;
+    }
+    return topologyMapEdgesForRender.find((edge) => topologyEdgeKey(edge) === selectedTopologyMapEdgeKey) ?? null;
+  }, [selectedTopologyMapEdgeKey, topologyMapEdgesForRender]);
+  const topologyMapNodeEdgeSummary = useMemo(() => {
+    const nodeId = selectedTopologyMapNode?.id;
+    if (!nodeId) {
+      return { outbound: 0, inbound: 0, total: 0 };
+    }
+    let outbound = 0;
+    let inbound = 0;
+    for (const edge of topologyMap?.edges ?? []) {
+      if (edge.src_asset_id === nodeId) {
+        outbound += 1;
+      }
+      if (edge.dst_asset_id === nodeId) {
+        inbound += 1;
+      }
+    }
+    return { outbound, inbound, total: outbound + inbound };
+  }, [selectedTopologyMapNode?.id, topologyMap?.edges]);
   const monitoringSourceStats = useMemo(() => {
     let enabled = 0;
     let reachable = 0;
@@ -3351,6 +3542,15 @@ export function App() {
     void loadTicketDetail(ticketId);
   }, [authIdentity, loadTicketDetail, selectedTicketId, visibleSections]);
   useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-topology-workspace")) {
+      return;
+    }
+    if (topologyMap) {
+      return;
+    }
+    void loadTopologyMap();
+  }, [authIdentity, loadTopologyMap, topologyMap, visibleSections]);
+  useEffect(() => {
     if (!departmentWorkspaceOptions.includes(departmentWorkspace)) {
       setDepartmentWorkspace("all");
     }
@@ -3453,6 +3653,7 @@ export function App() {
       { page: "overview", label: t("auth.navigation.overview") },
       { page: "cmdb", label: t("auth.navigation.cmdb") },
       { page: "monitoring", label: t("auth.navigation.monitoring") },
+      { page: "topology", label: t("auth.navigation.topology") },
       { page: "workflow", label: t("auth.navigation.workflow") },
       { page: "tickets", label: t("auth.navigation.tickets") }
     ];
@@ -3823,6 +4024,40 @@ export function App() {
     visibleSections
   };
 
+  const topologyWorkspaceSectionsProps = {
+    buildTopologyEdgePath,
+    canWriteCmdb,
+    loadTopologyMap,
+    loadingTopologyMap,
+    relationTypeColor,
+    selectedTopologyMapEdge,
+    selectedTopologyMapEdgeKey,
+    selectedTopologyMapNode,
+    selectedTopologyMapNodeId,
+    setSelectedTopologyMapEdgeKey,
+    setSelectedTopologyMapNodeId,
+    setTopologyDepartmentFilter,
+    setTopologyScopeInput,
+    setTopologySiteFilter,
+    setTopologyWindowLimit,
+    setTopologyWindowOffset,
+    t,
+    topologyDepartmentFilter,
+    topologyEdgeKey,
+    topologyMap,
+    topologyMapEdgeRenderMeta,
+    topologyMapEdgesForRender,
+    topologyMapNodeEdgeSummary,
+    topologyMapNodePositions,
+    topologyMapNotice,
+    topologyScopeInput,
+    topologySiteFilter,
+    topologyWindowLimit,
+    topologyWindowOffset,
+    truncateTopologyLabel,
+    visibleSections
+  };
+
   const overviewAdminSectionsProps = {
     activePage,
     assetStats,
@@ -3901,6 +4136,7 @@ export function App() {
       <OverviewAdminSections {...overviewAdminSectionsProps} />
       <WorkflowTicketSections {...workflowTicketSectionsProps} />
       <IntegrationMonitoringSections {...integrationMonitoringSectionsProps} />
+      <TopologyWorkspaceSections {...topologyWorkspaceSectionsProps} />
       <CmdbSections {...cmdbSectionsProps} />
     </AppShell>
   );

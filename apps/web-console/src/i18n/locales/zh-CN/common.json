@@ -834,5 +834,45 @@
       "customFields": "Custom Fields",
       "updatedAt": "Updated At"
     }
+  },
+  "topology": {
+    "workspace": {
+      "title": "拓扑工作区",
+      "summary": "范围={{scope}} | 总节点={{total}} | 窗口节点={{windowNodes}} | 窗口边={{windowEdges}} | Limit={{limit}} | Offset={{offset}}",
+      "actions": {
+        "refresh": "刷新工作区",
+        "focusSource": "定位源节点",
+        "focusTarget": "定位目标节点",
+        "useNodeSite": "使用节点站点",
+        "useNodeDepartment": "使用节点部门",
+        "useNodeScope": "使用节点范围"
+      },
+      "filters": {
+        "scope": "Scope Key",
+        "site": "站点过滤",
+        "department": "部门过滤",
+        "limit": "节点上限 (10-500)",
+        "offset": "节点偏移"
+      },
+      "messages": {
+        "loading": "正在加载拓扑工作区...",
+        "noData": "尚未加载拓扑工作区数据。",
+        "emptyScope": "当前范围没有拓扑节点。",
+        "loaded": "拓扑工作区已加载：节点 {{nodes}}，边 {{edges}}。",
+        "invalidLimit": "节点上限必须是 10 到 500 的整数。",
+        "invalidOffset": "节点偏移必须是大于等于 0 的整数。",
+        "selectNode": "请选择一个节点查看范围与关系详情。",
+        "selectEdge": "请选择一条边查看关系钻取详情。",
+        "readOnlyHint": "当前为只读模式：可进行拓扑钻取，但不展示写操作。"
+      },
+      "drawer": {
+        "nodeTitle": "节点详情",
+        "nodeSummary": "节点 #{{id}} | 类别={{class}} | 状态={{status}} | 健康={{health}}",
+        "nodeScope": "站点={{site}} | 部门={{department}}",
+        "nodeEdges": "关联边：出向={{outbound}}，入向={{inbound}}，总计={{total}}",
+        "edgeTitle": "边详情",
+        "edgeSummary": "边 #{{id}}: {{src}} -> {{dst}} | 类型={{relationType}} | 来源={{source}}"
+      }
+    }
   }
 }

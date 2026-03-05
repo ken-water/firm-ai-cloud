@@ -1,9 +1,12 @@
-use std::{env, time::Duration};
+use std::{
+    env,
+    time::{Duration, Instant},
+};
 
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde_json::{Map, Value, json};
 use sqlx::FromRow;
-use tokio::time::sleep;
+use tokio::{task::JoinSet, time::sleep};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -36,15 +39,22 @@ pub fn start(state: AppState) {
 }
 
 async fn run_loop(state: AppState) -> AppResult<()> {
-    info!("monitoring sync worker started");
     let poll_interval = Duration::from_secs(poll_interval_seconds());
+    let batch_size = worker_batch_size();
+    let max_parallel = worker_max_parallel();
+    info!(
+        poll_interval_seconds = poll_interval.as_secs(),
+        batch_size, max_parallel, "monitoring sync worker started"
+    );
 
     loop {
-        match process_next_job(&state).await {
-            Ok(processed) => {
-                if !processed {
+        match claim_pending_jobs(&state, batch_size).await {
+            Ok(jobs) => {
+                if jobs.is_empty() {
                     sleep(poll_interval).await;
+                    continue;
                 }
+                process_claimed_jobs(&state, jobs, max_parallel).await?;
             }
             Err(err) => {
                 warn!(error = %err, "monitoring sync worker loop error");
@@ -54,68 +64,179 @@ async fn run_loop(state: AppState) -> AppResult<()> {
     }
 }
 
-async fn process_next_job(state: &AppState) -> AppResult<bool> {
+async fn claim_pending_jobs(state: &AppState, batch_size: i64) -> AppResult<Vec<SyncJobRecord>> {
     let mut tx = state.db.begin().await?;
-    let job: Option<SyncJobRecord> = sqlx::query_as(
+    let mut jobs: Vec<SyncJobRecord> = sqlx::query_as(
         "SELECT id, asset_id, trigger_source, attempt, max_attempts
          FROM cmdb_monitoring_sync_jobs
          WHERE status = 'pending'
            AND run_after <= NOW()
          ORDER BY run_after ASC, id ASC
-         LIMIT 1
+         LIMIT $1
          FOR UPDATE SKIP LOCKED",
     )
-    .fetch_optional(&mut *tx)
+    .bind(batch_size)
+    .fetch_all(&mut *tx)
     .await?;
 
-    let Some(job) = job else {
+    if jobs.is_empty() {
         tx.rollback().await?;
-        return Ok(false);
-    };
-
-    let next_attempt = job.attempt + 1;
-    sqlx::query(
-        "UPDATE cmdb_monitoring_sync_jobs
-         SET status = $2,
-             attempt = $3,
-             started_at = COALESCE(started_at, NOW()),
-             updated_at = NOW()
-         WHERE id = $1",
-    )
-    .bind(job.id)
-    .bind(STATUS_RUNNING)
-    .bind(next_attempt)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        "INSERT INTO cmdb_monitoring_bindings (asset_id, source_system, last_sync_status, last_sync_message, last_sync_at, mapping)
-         VALUES ($1, 'zabbix', $2, $3, NOW(), '{}'::jsonb)
-         ON CONFLICT (asset_id) DO UPDATE
-         SET last_sync_status = EXCLUDED.last_sync_status,
-             last_sync_message = EXCLUDED.last_sync_message,
-             last_sync_at = NOW(),
-             updated_at = NOW()",
-    )
-    .bind(job.asset_id)
-    .bind(STATUS_RUNNING)
-    .bind(format!("sync job #{} running (attempt {})", job.id, next_attempt))
-    .execute(&mut *tx)
-    .await?;
-
-    tx.commit().await?;
-
-    let outcome = process_job(state, &job).await;
-    match outcome {
-        Ok(result) => {
-            mark_job_success(state, &job, next_attempt, &result).await?;
-        }
-        Err(err) => {
-            mark_job_failure(state, &job, next_attempt, &err.to_string()).await?;
-        }
+        return Ok(Vec::new());
     }
 
-    Ok(true)
+    for job in &mut jobs {
+        let next_attempt = job.attempt + 1;
+        sqlx::query(
+            "UPDATE cmdb_monitoring_sync_jobs
+             SET status = $2,
+                 attempt = $3,
+                 started_at = COALESCE(started_at, NOW()),
+                 updated_at = NOW()
+             WHERE id = $1",
+        )
+        .bind(job.id)
+        .bind(STATUS_RUNNING)
+        .bind(next_attempt)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO cmdb_monitoring_bindings (asset_id, source_system, last_sync_status, last_sync_message, last_sync_at, mapping)
+             VALUES ($1, 'zabbix', $2, $3, NOW(), '{}'::jsonb)
+             ON CONFLICT (asset_id) DO UPDATE
+             SET last_sync_status = EXCLUDED.last_sync_status,
+                 last_sync_message = EXCLUDED.last_sync_message,
+                 last_sync_at = NOW(),
+                 updated_at = NOW()",
+        )
+        .bind(job.asset_id)
+        .bind(STATUS_RUNNING)
+        .bind(format!("sync job #{} running (attempt {})", job.id, next_attempt))
+        .execute(&mut *tx)
+        .await?;
+        job.attempt = next_attempt;
+    }
+
+    tx.commit().await?;
+    Ok(jobs)
+}
+
+async fn process_claimed_jobs(
+    state: &AppState,
+    jobs: Vec<SyncJobRecord>,
+    max_parallel: usize,
+) -> AppResult<()> {
+    let depth_before = load_queue_depth(&state.db).await.unwrap_or_default();
+    let batch_started = Instant::now();
+    info!(
+        claimed_jobs = jobs.len(),
+        queue_pending_ready = depth_before.pending_ready,
+        queue_pending_total = depth_before.pending_total,
+        queue_running_total = depth_before.running_total,
+        queue_dead_letter_total = depth_before.dead_letter_total,
+        "monitoring sync worker claimed job batch"
+    );
+
+    let mut join_set = JoinSet::new();
+    let mut success_count = 0_usize;
+    let mut failed_count = 0_usize;
+    let mut panicked_count = 0_usize;
+
+    for job in jobs {
+        while join_set.len() >= max_parallel {
+            collect_job_outcome(
+                join_set.join_next().await,
+                &mut success_count,
+                &mut failed_count,
+                &mut panicked_count,
+            );
+        }
+
+        let state_cloned = state.clone();
+        join_set.spawn(async move { process_claimed_job(state_cloned, job).await });
+    }
+
+    while !join_set.is_empty() {
+        collect_job_outcome(
+            join_set.join_next().await,
+            &mut success_count,
+            &mut failed_count,
+            &mut panicked_count,
+        );
+    }
+
+    let elapsed = batch_started.elapsed();
+    let processed_total = success_count + failed_count + panicked_count;
+    let throughput = if elapsed.as_secs_f64() <= f64::EPSILON {
+        processed_total as f64
+    } else {
+        processed_total as f64 / elapsed.as_secs_f64()
+    };
+    let depth_after = load_queue_depth(&state.db).await.unwrap_or_default();
+    info!(
+        processed_total,
+        success_count,
+        failed_count,
+        panicked_count,
+        elapsed_ms = elapsed.as_millis(),
+        throughput_jobs_per_second = format!("{throughput:.2}"),
+        queue_pending_ready = depth_after.pending_ready,
+        queue_pending_total = depth_after.pending_total,
+        queue_running_total = depth_after.running_total,
+        queue_dead_letter_total = depth_after.dead_letter_total,
+        "monitoring sync worker finished job batch"
+    );
+
+    Ok(())
+}
+
+async fn process_claimed_job(state: AppState, job: SyncJobRecord) -> AppResult<bool> {
+    let outcome = process_job(&state, &job).await;
+    match outcome {
+        Ok(result) => {
+            mark_job_success(&state, &job, job.attempt, &result).await?;
+            Ok(true)
+        }
+        Err(err) => {
+            mark_job_failure(&state, &job, job.attempt, &err.to_string()).await?;
+            Ok(false)
+        }
+    }
+}
+
+fn collect_job_outcome(
+    outcome: Option<Result<AppResult<bool>, tokio::task::JoinError>>,
+    success_count: &mut usize,
+    failed_count: &mut usize,
+    panicked_count: &mut usize,
+) {
+    match outcome {
+        Some(Ok(Ok(true))) => *success_count += 1,
+        Some(Ok(Ok(false))) => *failed_count += 1,
+        Some(Ok(Err(err))) => {
+            warn!(error = %err, "monitoring sync worker failed to finalize claimed job");
+            *failed_count += 1;
+        }
+        Some(Err(err)) => {
+            warn!(error = %err, "monitoring sync worker task join error");
+            *panicked_count += 1;
+        }
+        None => {}
+    }
+}
+
+async fn load_queue_depth(db: &sqlx::PgPool) -> AppResult<QueueDepthRow> {
+    sqlx::query_as(
+        "SELECT
+            COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_total,
+            COALESCE(SUM(CASE WHEN status = 'pending' AND run_after <= NOW() THEN 1 ELSE 0 END), 0) AS pending_ready,
+            COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running_total,
+            COALESCE(SUM(CASE WHEN status = 'dead_letter' THEN 1 ELSE 0 END), 0) AS dead_letter_total
+         FROM cmdb_monitoring_sync_jobs",
+    )
+    .fetch_one(db)
+    .await
+    .map_err(AppError::from)
 }
 
 async fn process_job(state: &AppState, job: &SyncJobRecord) -> AppResult<SyncSuccessResult> {
@@ -345,13 +466,21 @@ async fn mark_job_failure(
     Ok(())
 }
 
-#[derive(Debug, FromRow)]
+#[derive(Debug, Clone, FromRow)]
 struct SyncJobRecord {
     id: i64,
     asset_id: i64,
     trigger_source: String,
     attempt: i32,
     max_attempts: i32,
+}
+
+#[derive(Debug, Default, FromRow)]
+struct QueueDepthRow {
+    pending_total: i64,
+    pending_ready: i64,
+    running_total: i64,
+    dead_letter_total: i64,
 }
 
 #[derive(Debug, FromRow)]
@@ -1080,6 +1209,22 @@ fn poll_interval_seconds() -> u64 {
         .and_then(|value| value.parse::<u64>().ok())
         .map(|value| value.clamp(1, 60))
         .unwrap_or(3)
+}
+
+fn worker_batch_size() -> i64 {
+    env::var("MONITORING_SYNC_BATCH_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .map(|value| value.clamp(1, 200))
+        .unwrap_or(20)
+}
+
+fn worker_max_parallel() -> usize {
+    env::var("MONITORING_SYNC_MAX_PARALLEL")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, 16))
+        .unwrap_or(4)
 }
 
 fn default_proxy_name() -> Option<String> {

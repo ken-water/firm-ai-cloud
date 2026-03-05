@@ -101,12 +101,27 @@ If full stack startup fails (for example, app images are not locally available a
 
 ## 7. Recovery Drill (Recommended Quarterly)
 
-1. Prepare a non-production recovery host.
-2. Copy latest backup directory to recovery host.
-3. Execute restore command with target env/project.
-4. Run verification checklist (section 8).
-5. Record drill timestamp, duration, result, and failures.
-6. Create remediation tasks for any checklist failure.
+Use one command in a non-production environment:
+
+```bash
+bash scripts/dr-drill.sh --env-file deploy/.env --output-dir .run/dr-drill/<run-id> --yes
+```
+
+The drill automation performs:
+
+1. backup (`scripts/backup-stack.sh`)
+2. restore (`scripts/restore-stack.sh`)
+3. verification checks (compose status, API/web/Zabbix reachability, CMDB/monitoring query)
+4. report generation with explicit pass/fail per check
+
+Generated drill artifacts:
+
+- `report.json` (machine-readable)
+- `report.md` (human-readable summary)
+- `logs/*.log` (per-check command outputs for failure diagnosis)
+- `backup/` (backup artifacts produced during this drill)
+
+If any check fails, script exits non-zero and report includes actionable failure references.
 
 ## 8. Verification Checklist
 

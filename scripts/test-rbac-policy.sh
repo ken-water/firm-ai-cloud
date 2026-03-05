@@ -115,6 +115,7 @@ assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/monitoring/sources"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/monitoring/overview"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/monitoring/layers/hardware"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/topology/maps/site:dc-a"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/monitoring/sources" \
   "{\"name\":\"rbac-op-monitor-${STAMP}\",\"source_type\":\"zabbix\",\"endpoint\":\"http://127.0.0.1:8080/health\",\"secret_ref\":\"dev/rbac-op-monitor-${STAMP}\"}"
 OPERATOR_MONITOR_SOURCE_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
@@ -139,6 +140,8 @@ assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/monitoring/sources"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/monitoring/overview"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/monitoring/layers/service"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/topology/maps/site:dc-a"
+assert_code 403 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/topology/maps/global"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/monitoring/sources" \
   "{\"name\":\"rbac-viewer-monitor-${STAMP}\",\"source_type\":\"zabbix\",\"endpoint\":\"http://127.0.0.1:8080/health\",\"secret_ref\":\"dev/rbac-viewer-monitor-${STAMP}\"}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/cmdb/discovery/jobs"

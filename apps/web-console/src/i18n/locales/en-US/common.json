@@ -834,5 +834,45 @@
       "customFields": "Custom Fields",
       "updatedAt": "Updated At"
     }
+  },
+  "topology": {
+    "workspace": {
+      "title": "Topology Workspace",
+      "summary": "Scope={{scope}} | Total Nodes={{total}} | Window Nodes={{windowNodes}} | Window Edges={{windowEdges}} | Limit={{limit}} | Offset={{offset}}",
+      "actions": {
+        "refresh": "Refresh Workspace",
+        "focusSource": "Focus Source Node",
+        "focusTarget": "Focus Target Node",
+        "useNodeSite": "Use Node Site",
+        "useNodeDepartment": "Use Node Department",
+        "useNodeScope": "Use Node Scope"
+      },
+      "filters": {
+        "scope": "Scope Key",
+        "site": "Site Filter",
+        "department": "Department Filter",
+        "limit": "Node Limit (10-500)",
+        "offset": "Node Offset"
+      },
+      "messages": {
+        "loading": "Loading topology workspace...",
+        "noData": "Topology workspace has not been loaded yet.",
+        "emptyScope": "Scope returned no topology nodes.",
+        "loaded": "Topology workspace loaded: {{nodes}} nodes, {{edges}} edges.",
+        "invalidLimit": "Topology node limit must be an integer between 10 and 500.",
+        "invalidOffset": "Topology node offset must be an integer >= 0.",
+        "selectNode": "Select one node to view scope and relation details.",
+        "selectEdge": "Select one edge to view relation drill details.",
+        "readOnlyHint": "Read-only mode: topology drill actions are available, but no write operation is exposed."
+      },
+      "drawer": {
+        "nodeTitle": "Node Detail",
+        "nodeSummary": "Node #{{id}} | class={{class}} | status={{status}} | health={{health}}",
+        "nodeScope": "Site={{site}} | Department={{department}}",
+        "nodeEdges": "Related edges: outbound={{outbound}}, inbound={{inbound}}, total={{total}}",
+        "edgeTitle": "Edge Detail",
+        "edgeSummary": "Edge #{{id}}: {{src}} -> {{dst}} | type={{relationType}} | source={{source}}"
+      }
+    }
   }
 }

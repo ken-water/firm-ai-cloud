@@ -1,8 +1,8 @@
-use std::{convert::Infallible, time::Duration};
+use std::{collections::HashMap, convert::Infallible, time::Duration};
 
 use async_stream::stream;
 use axum::{
-    Router,
+    Json, Router,
     extract::{Query, State},
     http::HeaderMap,
     response::sse::{Event, KeepAlive, Sse},
@@ -24,11 +24,16 @@ use crate::{
 const STREAM_HEARTBEAT_SECONDS: u64 = 5;
 const STREAM_STALE_AFTER_SECONDS: i64 = 15;
 const STREAM_RECONNECT_AFTER_MS: u64 = 3_000;
+const STREAM_METRICS_DEFAULT_WINDOW_MINUTES: u32 = 60;
+const STREAM_METRICS_DEFAULT_SAMPLE_LIMIT: u32 = 5_000;
+const STREAM_METRICS_DEFAULT_SCOPE_LIMIT: u32 = 50;
 const AUTH_SITE_HEADER: &str = "x-auth-site";
 const AUTH_DEPARTMENT_HEADER: &str = "x-auth-department";
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/sse", get(stream_sse))
+    Router::new()
+        .route("/sse", get(stream_sse))
+        .route("/metrics", get(stream_metrics))
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -36,6 +41,15 @@ struct StreamSseQuery {
     site: Option<String>,
     department: Option<String>,
     severity: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct StreamMetricsQuery {
+    site: Option<String>,
+    department: Option<String>,
+    window_minutes: Option<u32>,
+    sample_limit: Option<u32>,
+    scope_limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +88,55 @@ struct StreamAlertRow {
     max_attempts: i32,
     requested_at: DateTime<Utc>,
     last_error: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct StreamLagSampleRow {
+    asset_site: Option<String>,
+    asset_department: Option<String>,
+    lag_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamMetricsScope {
+    site: Option<String>,
+    department: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamLagSummary {
+    samples: usize,
+    p50: f64,
+    p95: f64,
+    p99: f64,
+    max: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamScopeLagSummary {
+    site: Option<String>,
+    department: Option<String>,
+    summary: StreamLagSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamLagBucket {
+    bucket: String,
+    min_ms: u64,
+    max_ms: Option<u64>,
+    samples: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamMetricsResponse {
+    generated_at: DateTime<Utc>,
+    window_minutes: u32,
+    sample_limit: u32,
+    scope: StreamMetricsScope,
+    summary: StreamLagSummary,
+    scopes: Vec<StreamScopeLagSummary>,
+    buckets: Vec<StreamLagBucket>,
+    empty: bool,
 }
 
 async fn stream_sse(
@@ -253,6 +316,89 @@ async fn stream_sse(
     ))
 }
 
+async fn stream_metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<StreamMetricsQuery>,
+) -> AppResult<Json<StreamMetricsResponse>> {
+    let user = resolve_auth_user(&state, &headers).await?;
+    let roles = load_user_roles(&state.db, &user).await?;
+
+    let window_minutes = query
+        .window_minutes
+        .unwrap_or(STREAM_METRICS_DEFAULT_WINDOW_MINUTES)
+        .clamp(5, 1_440);
+    let sample_limit = query
+        .sample_limit
+        .unwrap_or(STREAM_METRICS_DEFAULT_SAMPLE_LIMIT)
+        .clamp(100, 20_000);
+    let scope_limit = query
+        .scope_limit
+        .unwrap_or(STREAM_METRICS_DEFAULT_SCOPE_LIMIT)
+        .clamp(1, 200);
+
+    let mut scope = StreamScope {
+        site: normalize_scope_value(query.site, "site", 128)?,
+        department: normalize_scope_value(query.department, "department", 128)?,
+        severity: "all".to_string(),
+    };
+    enforce_scope_access(&roles, &headers, &mut scope)?;
+
+    let samples = fetch_stream_lag_samples(
+        &state.db,
+        scope.site.as_deref(),
+        scope.department.as_deref(),
+        window_minutes,
+        sample_limit as i64,
+    )
+    .await?;
+
+    let lag_values = samples.iter().map(|item| item.lag_ms).collect::<Vec<_>>();
+    let summary = build_lag_summary(lag_values.as_slice());
+    let buckets = build_lag_buckets(lag_values.as_slice());
+
+    let mut scope_groups: HashMap<(Option<String>, Option<String>), Vec<i64>> = HashMap::new();
+    for item in samples {
+        scope_groups
+            .entry((item.asset_site, item.asset_department))
+            .or_default()
+            .push(item.lag_ms);
+    }
+
+    let mut scopes = scope_groups
+        .into_iter()
+        .map(|((site, department), values)| StreamScopeLagSummary {
+            site,
+            department,
+            summary: build_lag_summary(values.as_slice()),
+        })
+        .collect::<Vec<_>>();
+
+    scopes.sort_by(|left, right| {
+        right
+            .summary
+            .samples
+            .cmp(&left.summary.samples)
+            .then_with(|| left.site.cmp(&right.site))
+            .then_with(|| left.department.cmp(&right.department))
+    });
+    scopes.truncate(scope_limit as usize);
+
+    Ok(Json(StreamMetricsResponse {
+        generated_at: Utc::now(),
+        window_minutes,
+        sample_limit,
+        scope: StreamMetricsScope {
+            site: scope.site,
+            department: scope.department,
+        },
+        summary,
+        scopes,
+        buckets,
+        empty: lag_values.is_empty(),
+    }))
+}
+
 fn encode_sse_event(event_id: u64, envelope: StreamEventEnvelope) -> Result<Event, Infallible> {
     let event_name = envelope.event_type.clone();
     let body = match serde_json::to_string(&envelope) {
@@ -271,6 +417,99 @@ fn encode_sse_event(event_id: u64, envelope: StreamEventEnvelope) -> Result<Even
         .id(event_id.to_string())
         .event(event_name)
         .data(body))
+}
+
+async fn fetch_stream_lag_samples(
+    db: &sqlx::PgPool,
+    site: Option<&str>,
+    department: Option<&str>,
+    window_minutes: u32,
+    sample_limit: i64,
+) -> AppResult<Vec<StreamLagSampleRow>> {
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT
+            a.site AS asset_site,
+            a.department AS asset_department,
+            GREATEST((EXTRACT(EPOCH FROM (NOW() - j.requested_at)) * 1000)::BIGINT, 0) AS lag_ms
+         FROM cmdb_monitoring_sync_jobs j
+         INNER JOIN assets a ON a.id = j.asset_id
+         WHERE j.requested_at >= NOW() - make_interval(mins => ",
+    );
+    qb.push_bind(window_minutes as i32);
+    qb.push(")");
+    append_scope_filters(&mut qb, site, department);
+    qb.push(" ORDER BY j.requested_at DESC, j.id DESC LIMIT ")
+        .push_bind(sample_limit);
+
+    qb.build_query_as()
+        .fetch_all(db)
+        .await
+        .map_err(AppError::from)
+}
+
+fn build_lag_summary(values: &[i64]) -> StreamLagSummary {
+    let mut normalized = values
+        .iter()
+        .map(|value| (*value).max(0) as u64)
+        .collect::<Vec<_>>();
+    normalized.sort_unstable();
+
+    StreamLagSummary {
+        samples: normalized.len(),
+        p50: percentile_from_sorted(normalized.as_slice(), 50),
+        p95: percentile_from_sorted(normalized.as_slice(), 95),
+        p99: percentile_from_sorted(normalized.as_slice(), 99),
+        max: normalized.last().copied().unwrap_or(0) as f64,
+    }
+}
+
+fn percentile_from_sorted(values: &[u64], percentile: usize) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+
+    let index = ((values.len() * percentile + 99) / 100).clamp(1, values.len()) - 1;
+    values[index] as f64
+}
+
+fn build_lag_buckets(values: &[i64]) -> Vec<StreamLagBucket> {
+    let normalized = values
+        .iter()
+        .map(|value| (*value).max(0) as u64)
+        .collect::<Vec<_>>();
+    let bucket_defs = [
+        ("0_100ms", 0_u64, Some(100_u64)),
+        ("100_500ms", 100_u64, Some(500_u64)),
+        ("500_1000ms", 500_u64, Some(1_000_u64)),
+        ("1000_3000ms", 1_000_u64, Some(3_000_u64)),
+        ("3000_10000ms", 3_000_u64, Some(10_000_u64)),
+        ("10000ms_plus", 10_000_u64, None),
+    ];
+
+    bucket_defs
+        .into_iter()
+        .map(|(bucket, min_ms, max_ms)| {
+            let samples = normalized
+                .iter()
+                .filter(|value| {
+                    if **value < min_ms {
+                        return false;
+                    }
+                    match max_ms {
+                        Some(max) => **value < max,
+                        None => true,
+                    }
+                })
+                .count();
+
+            StreamLagBucket {
+                bucket: bucket.to_string(),
+                min_ms,
+                max_ms,
+                samples,
+            }
+        })
+        .collect()
 }
 
 fn normalize_scope(query: StreamSseQuery) -> AppResult<StreamScope> {
@@ -517,8 +756,8 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
     use super::{
-        AUTH_SITE_HEADER, StreamScope, enforce_scope_access, normalize_scope_value,
-        normalize_severity_filter,
+        AUTH_SITE_HEADER, StreamScope, build_lag_buckets, build_lag_summary, enforce_scope_access,
+        normalize_scope_value, normalize_severity_filter,
     };
 
     #[test]
@@ -577,5 +816,31 @@ mod tests {
         let headers = HeaderMap::new();
         let roles = vec!["admin".to_string()];
         assert!(enforce_scope_access(&roles, &headers, &mut scope).is_ok());
+    }
+
+    #[test]
+    fn lag_summary_contains_expected_percentiles() {
+        let summary = build_lag_summary(&[10, 20, 30, 40, 50]);
+        assert_eq!(summary.samples, 5);
+        assert_eq!(summary.p50, 30.0);
+        assert_eq!(summary.p95, 50.0);
+        assert_eq!(summary.p99, 50.0);
+        assert_eq!(summary.max, 50.0);
+    }
+
+    #[test]
+    fn lag_bucket_distribution_is_stable() {
+        let buckets = build_lag_buckets(&[12, 95, 100, 450, 980, 3050, 9999, 15000]);
+        let counts = buckets
+            .iter()
+            .map(|item| (item.bucket.clone(), item.samples))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert_eq!(counts.get("0_100ms"), Some(&2));
+        assert_eq!(counts.get("100_500ms"), Some(&2));
+        assert_eq!(counts.get("500_1000ms"), Some(&1));
+        assert_eq!(counts.get("1000_3000ms"), Some(&0));
+        assert_eq!(counts.get("3000_10000ms"), Some(&2));
+        assert_eq!(counts.get("10000ms_plus"), Some(&1));
     }
 }

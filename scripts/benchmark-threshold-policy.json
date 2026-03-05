@@ -1,0 +1,52 @@
+{
+  "api": {
+    "default": {
+      "success_rate_min": 99.0,
+      "p95_ms_max": 1200.0,
+      "p99_ms_max": 2000.0
+    },
+    "endpoints": {
+      "health": {
+        "success_rate_min": 100.0,
+        "p95_ms_max": 180.0,
+        "p99_ms_max": 300.0
+      },
+      "cmdb_assets": {
+        "success_rate_min": 99.0,
+        "p95_ms_max": 800.0,
+        "p99_ms_max": 1400.0
+      },
+      "cmdb_asset_stats": {
+        "success_rate_min": 99.0,
+        "p95_ms_max": 900.0,
+        "p99_ms_max": 1500.0
+      },
+      "monitoring_overview": {
+        "success_rate_min": 99.0,
+        "p95_ms_max": 900.0,
+        "p99_ms_max": 1500.0
+      },
+      "monitoring_layer_hardware": {
+        "success_rate_min": 99.0,
+        "p95_ms_max": 950.0,
+        "p99_ms_max": 1600.0
+      },
+      "workflow_requests": {
+        "success_rate_min": 99.0,
+        "p95_ms_max": 900.0,
+        "p99_ms_max": 1500.0
+      }
+    }
+  },
+  "sse": {
+    "lag_ms": {
+      "p95_ms_max": 12000.0,
+      "p99_ms_max": 18000.0,
+      "max_ms_max": 30000.0
+    },
+    "stream_error_max": 0,
+    "alert_sync_min": 1,
+    "heartbeat_min": 2,
+    "connected_min": 1
+  }
+}

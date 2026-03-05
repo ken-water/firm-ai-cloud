@@ -11,6 +11,7 @@ mod secrets;
 mod state;
 mod streams;
 mod tickets;
+mod topology;
 mod workflow;
 
 use std::net::SocketAddr;
@@ -149,6 +150,14 @@ fn build_router(state: AppState) -> Router {
         ));
     }
 
+    let mut topology_routes = topology::routes();
+    if state.rbac_enabled {
+        topology_routes = topology_routes.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::rbac_guard,
+        ));
+    }
+
     let mut workflow_routes = workflow::routes();
     if state.rbac_enabled {
         workflow_routes = workflow_routes.route_layer(axum::middleware::from_fn_with_state(
@@ -174,6 +183,7 @@ fn build_router(state: AppState) -> Router {
         .nest("/api/v1/workflow", workflow_routes)
         .nest("/api/v1", ticket_routes)
         .nest("/api/v1/streams", stream_routes)
+        .nest("/api/v1/topology", topology_routes)
         .nest("/api/v1/iam", iam_routes)
         .nest("/api/v1/audit", audit_routes)
         .with_state(state)
