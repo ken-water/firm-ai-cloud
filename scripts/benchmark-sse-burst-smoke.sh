@@ -7,6 +7,8 @@ ASSET_ID="${ASSET_ID:-}"
 STREAM_DURATION_SECONDS="${STREAM_DURATION_SECONDS:-35}"
 BURST_EVENTS="${BURST_EVENTS:-30}"
 BURST_INTERVAL_MS="${BURST_INTERVAL_MS:-120}"
+PROFILE_LABEL="${BENCHMARK_PROFILE:-smoke}"
+PROFILE_SCALE_HINT_ASSETS="${PROFILE_SCALE_HINT_ASSETS:-100}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUTPUT_DIR="${OUTPUT_DIR:-.run/benchmarks/sse-${RUN_ID}}"
 RAW_FILE="${OUTPUT_DIR}/sse.raw"
@@ -16,8 +18,13 @@ EVENT_TYPES_FILE="${OUTPUT_DIR}/event-types.txt"
 LAG_FILE="${OUTPUT_DIR}/alert-monitoring-sync-lag-ms.txt"
 SUMMARY_JSON="${OUTPUT_DIR}/summary.json"
 SUMMARY_MD="${OUTPUT_DIR}/summary.md"
+PROFILE_JSON="${OUTPUT_DIR}/profile.json"
 
 CREATED_ASSET_ID=""
+PROFILE_EXPLICIT=0
+if [[ -n "${BENCHMARK_PROFILE:-}" ]]; then
+  PROFILE_EXPLICIT=1
+fi
 
 log() {
   printf '[benchmark-sse] %s\n' "$*" >&2
@@ -28,8 +35,51 @@ fatal() {
   exit 1
 }
 
+usage() {
+  cat <<'USAGE'
+SSE burst smoke benchmark
+
+Usage:
+  bash scripts/benchmark-sse-burst-smoke.sh [options]
+
+Options:
+  --profile <label>        Benchmark profile: smoke, scale-1k, scale-5k
+  --burst-count <num>      Override burst event count
+  --burst-interval-ms <n>  Override burst interval milliseconds
+  --stream-duration <sec>  Override stream capture duration
+  -h, --help               Show this help
+USAGE
+}
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fatal "missing required command: $1"
+}
+
+apply_profile_defaults() {
+  local profile="$1"
+  case "${profile}" in
+    smoke)
+      BURST_EVENTS=30
+      BURST_INTERVAL_MS=120
+      STREAM_DURATION_SECONDS=35
+      PROFILE_SCALE_HINT_ASSETS=100
+      ;;
+    scale-1k)
+      BURST_EVENTS=180
+      BURST_INTERVAL_MS=80
+      STREAM_DURATION_SECONDS=65
+      PROFILE_SCALE_HINT_ASSETS=1000
+      ;;
+    scale-5k)
+      BURST_EVENTS=360
+      BURST_INTERVAL_MS=60
+      STREAM_DURATION_SECONDS=95
+      PROFILE_SCALE_HINT_ASSETS=5000
+      ;;
+    *)
+      fatal "unsupported profile: ${profile} (supported: smoke, scale-1k, scale-5k)"
+      ;;
+  esac
 }
 
 percentile_from_sorted() {
@@ -211,6 +261,8 @@ generate_summary() {
 
   jq -n \
     --arg run_id "${RUN_ID}" \
+    --arg profile "${PROFILE_LABEL}" \
+    --argjson scale_hint_assets "${PROFILE_SCALE_HINT_ASSETS}" \
     --arg api_base_url "${API_BASE_URL}" \
     --arg auth_user "${AUTH_USER}" \
     --argjson stream_duration_seconds "${STREAM_DURATION_SECONDS}" \
@@ -238,6 +290,8 @@ generate_summary() {
     --argjson pass "${pass}" \
     '{
       run_id: $run_id,
+      profile: $profile,
+      scale_hint_assets: $scale_hint_assets,
       api_base_url: $api_base_url,
       auth_user: $auth_user,
       stream_duration_seconds: $stream_duration_seconds,
@@ -280,6 +334,8 @@ generate_summary() {
 # SSE Burst Smoke Summary
 
 - Run ID: ${RUN_ID}
+- Profile: ${PROFILE_LABEL}
+- Target Asset Scale Hint: ${PROFILE_SCALE_HINT_ASSETS}
 - API Base URL: ${API_BASE_URL}
 - Auth User: ${AUTH_USER}
 - Asset ID: ${ASSET_ID}
@@ -310,6 +366,7 @@ generate_summary() {
 | Lag max (ms) | ${lag_max} |
 
 Artifacts:
+- profile metadata: \`${PROFILE_JSON}\`
 - summary json: \`${SUMMARY_JSON}\`
 - raw sse output: \`${RAW_FILE}\`
 - stderr log: \`${ERR_FILE}\`
@@ -321,6 +378,30 @@ MARKDOWN
   fi
 }
 
+write_profile_metadata() {
+  jq -n \
+    --arg run_id "${RUN_ID}" \
+    --arg profile "${PROFILE_LABEL}" \
+    --argjson scale_hint_assets "${PROFILE_SCALE_HINT_ASSETS}" \
+    --arg api_base_url "${API_BASE_URL}" \
+    --arg auth_user "${AUTH_USER}" \
+    --argjson stream_duration_seconds "${STREAM_DURATION_SECONDS}" \
+    --argjson burst_events "${BURST_EVENTS}" \
+    --argjson burst_interval_ms "${BURST_INTERVAL_MS}" \
+    '{
+      run_id: $run_id,
+      profile: $profile,
+      scale_hint_assets: $scale_hint_assets,
+      api_base_url: $api_base_url,
+      auth_user: $auth_user,
+      knobs: {
+        stream_duration_seconds: $stream_duration_seconds,
+        burst_events: $burst_events,
+        burst_interval_ms: $burst_interval_ms
+      }
+    }' >"${PROFILE_JSON}"
+}
+
 main() {
   require_cmd curl
   require_cmd jq
@@ -328,28 +409,56 @@ main() {
   require_cmd timeout
   require_cmd date
 
+  local override_burst_count=""
+  local override_burst_interval_ms=""
+  local override_stream_duration=""
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --profile)
+        [[ $# -ge 2 ]] || fatal "--profile requires a label"
+        PROFILE_LABEL="$2"
+        PROFILE_EXPLICIT=1
+        shift 2
+        ;;
       --burst-count)
         [[ $# -ge 2 ]] || fatal "--burst-count requires a numeric value"
-        BURST_EVENTS="$2"
+        override_burst_count="$2"
         shift 2
         ;;
       --burst-interval-ms)
         [[ $# -ge 2 ]] || fatal "--burst-interval-ms requires a numeric value"
-        BURST_INTERVAL_MS="$2"
+        override_burst_interval_ms="$2"
         shift 2
         ;;
       --stream-duration)
         [[ $# -ge 2 ]] || fatal "--stream-duration requires a numeric value"
-        STREAM_DURATION_SECONDS="$2"
+        override_stream_duration="$2"
         shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
         ;;
       *)
         fatal "unknown argument: $1"
         ;;
     esac
   done
+
+  if (( PROFILE_EXPLICIT == 1 )); then
+    apply_profile_defaults "${PROFILE_LABEL}"
+  fi
+
+  if [[ -n "${override_burst_count}" ]]; then
+    BURST_EVENTS="${override_burst_count}"
+  fi
+  if [[ -n "${override_burst_interval_ms}" ]]; then
+    BURST_INTERVAL_MS="${override_burst_interval_ms}"
+  fi
+  if [[ -n "${override_stream_duration}" ]]; then
+    STREAM_DURATION_SECONDS="${override_stream_duration}"
+  fi
 
   [[ "${BURST_EVENTS}" =~ ^[0-9]+$ ]] || fatal "BURST_EVENTS must be a positive integer"
   [[ "${BURST_INTERVAL_MS}" =~ ^[0-9]+$ ]] || fatal "BURST_INTERVAL_MS must be a positive integer"
@@ -366,6 +475,7 @@ main() {
   fi
 
   mkdir -p "${OUTPUT_DIR}"
+  write_profile_metadata
 
   log "Health check: ${API_BASE_URL}/health"
   curl -fsS "${API_BASE_URL}/health" >/dev/null || fatal "api health check failed"

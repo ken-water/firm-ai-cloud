@@ -8,11 +8,14 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- None yet.
+- Scale benchmark profile orchestration script: `scripts/benchmark-scale-profiles.sh`.
 
 ### Changed
 
-- None yet.
+- Benchmark scripts now support profile presets (`smoke`, `scale-1k`, `scale-5k`) with profile metadata artifacts:
+  - `scripts/benchmark-api-load.sh`
+  - `scripts/benchmark-sse-burst-smoke.sh`
+- Developer quickstart benchmark section now includes profile-aware commands and one-command profile run flow.
 
 ### Fixed
 

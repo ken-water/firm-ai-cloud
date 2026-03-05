@@ -7,21 +7,22 @@ REQUESTS_PER_ENDPOINT="${REQUESTS_PER_ENDPOINT:-80}"
 WARMUP_REQUESTS="${WARMUP_REQUESTS:-10}"
 REQUEST_TIMEOUT_SECONDS="${REQUEST_TIMEOUT_SECONDS:-8}"
 CONCURRENCY="${CONCURRENCY:-1}"
+PROFILE_LABEL="${BENCHMARK_PROFILE:-smoke}"
+PROFILE_SCALE_HINT_ASSETS="${PROFILE_SCALE_HINT_ASSETS:-100}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUTPUT_DIR="${OUTPUT_DIR:-.run/benchmarks/api-${RUN_ID}}"
 RAW_DIR="${OUTPUT_DIR}/raw"
 SUMMARY_CSV="${OUTPUT_DIR}/summary.csv"
 SUMMARY_MD="${OUTPUT_DIR}/summary.md"
 UTILIZATION_CSV="${OUTPUT_DIR}/utilization.csv"
-
-ENDPOINT_SPECS=(
-  "health|GET|/health|none"
-  "cmdb_assets|GET|/api/v1/cmdb/assets?limit=50&offset=0|auth"
-  "cmdb_asset_stats|GET|/api/v1/cmdb/assets/stats|auth"
-  "monitoring_overview|GET|/api/v1/monitoring/overview|auth"
-  "monitoring_layer_hardware|GET|/api/v1/monitoring/layers/hardware?limit=20&offset=0|auth"
-  "workflow_requests|GET|/api/v1/workflow/requests?limit=20|auth"
-)
+PROFILE_JSON="${OUTPUT_DIR}/profile.json"
+CMDB_ASSETS_LIMIT=50
+MONITORING_LAYER_LIMIT=20
+WORKFLOW_REQUESTS_LIMIT=20
+PROFILE_EXPLICIT=0
+if [[ -n "${BENCHMARK_PROFILE:-}" ]]; then
+  PROFILE_EXPLICIT=1
+fi
 
 log() {
   printf '[benchmark-api] %s\n' "$*"
@@ -32,8 +33,75 @@ fatal() {
   exit 1
 }
 
+usage() {
+  cat <<'USAGE'
+API load benchmark
+
+Usage:
+  bash scripts/benchmark-api-load.sh [options]
+
+Options:
+  --profile <label>        Benchmark profile: smoke, scale-1k, scale-5k
+  --concurrency <num>      Override concurrent in-flight requests
+  --requests <num>         Override requests per endpoint
+  --warmup <num>           Override warmup requests per endpoint
+  --timeout <seconds>      Override per-request timeout in seconds
+  -h, --help               Show this help
+USAGE
+}
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fatal "missing required command: $1"
+}
+
+apply_profile_defaults() {
+  local profile="$1"
+  case "${profile}" in
+    smoke)
+      REQUESTS_PER_ENDPOINT=80
+      WARMUP_REQUESTS=10
+      REQUEST_TIMEOUT_SECONDS=8
+      CONCURRENCY=1
+      PROFILE_SCALE_HINT_ASSETS=100
+      CMDB_ASSETS_LIMIT=50
+      MONITORING_LAYER_LIMIT=20
+      WORKFLOW_REQUESTS_LIMIT=20
+      ;;
+    scale-1k)
+      REQUESTS_PER_ENDPOINT=180
+      WARMUP_REQUESTS=20
+      REQUEST_TIMEOUT_SECONDS=12
+      CONCURRENCY=8
+      PROFILE_SCALE_HINT_ASSETS=1000
+      CMDB_ASSETS_LIMIT=120
+      MONITORING_LAYER_LIMIT=80
+      WORKFLOW_REQUESTS_LIMIT=60
+      ;;
+    scale-5k)
+      REQUESTS_PER_ENDPOINT=260
+      WARMUP_REQUESTS=30
+      REQUEST_TIMEOUT_SECONDS=15
+      CONCURRENCY=16
+      PROFILE_SCALE_HINT_ASSETS=5000
+      CMDB_ASSETS_LIMIT=300
+      MONITORING_LAYER_LIMIT=200
+      WORKFLOW_REQUESTS_LIMIT=120
+      ;;
+    *)
+      fatal "unsupported profile: ${profile} (supported: smoke, scale-1k, scale-5k)"
+      ;;
+  esac
+}
+
+set_endpoint_specs() {
+  ENDPOINT_SPECS=(
+    "health|GET|/health|none"
+    "cmdb_assets|GET|/api/v1/cmdb/assets?limit=${CMDB_ASSETS_LIMIT}&offset=0|auth"
+    "cmdb_asset_stats|GET|/api/v1/cmdb/assets/stats|auth"
+    "monitoring_overview|GET|/api/v1/monitoring/overview|auth"
+    "monitoring_layer_hardware|GET|/api/v1/monitoring/layers/hardware?limit=${MONITORING_LAYER_LIMIT}&offset=0|auth"
+    "workflow_requests|GET|/api/v1/workflow/requests?limit=${WORKFLOW_REQUESTS_LIMIT}|auth"
+  )
 }
 
 to_ms() {
@@ -183,6 +251,8 @@ write_markdown_report() {
 # API Load Benchmark Summary
 
 - Run ID: ${RUN_ID}
+- Profile: ${PROFILE_LABEL}
+- Target Asset Scale Hint: ${PROFILE_SCALE_HINT_ASSETS}
 - API Base URL: ${API_BASE_URL}
 - Auth User: ${AUTH_USER}
 - Requests per endpoint: ${REQUESTS_PER_ENDPOINT}
@@ -202,6 +272,7 @@ MARKDOWN
   {
     echo
     echo "Raw artifacts:"
+    echo "- profile metadata: \`${PROFILE_JSON}\`"
     echo "- summary csv: \`${SUMMARY_CSV}\`"
     echo "- per-endpoint raw files: \`${RAW_DIR}\`"
     echo "- utilization snapshot csv: \`${UTILIZATION_CSV}\`"
@@ -217,6 +288,40 @@ MARKDOWN
       "${stage}" "${timestamp}" "${load1}" "${load5}" "${load15}" "${mem_used}" "${mem_total}" "${db_cpu}" "${db_mem}" \
       >>"${SUMMARY_MD}"
   done
+}
+
+write_profile_metadata() {
+  jq -n \
+    --arg run_id "${RUN_ID}" \
+    --arg profile "${PROFILE_LABEL}" \
+    --argjson scale_hint_assets "${PROFILE_SCALE_HINT_ASSETS}" \
+    --arg api_base_url "${API_BASE_URL}" \
+    --arg auth_user "${AUTH_USER}" \
+    --argjson requests_per_endpoint "${REQUESTS_PER_ENDPOINT}" \
+    --argjson warmup_requests "${WARMUP_REQUESTS}" \
+    --argjson request_timeout_seconds "${REQUEST_TIMEOUT_SECONDS}" \
+    --argjson concurrency "${CONCURRENCY}" \
+    --argjson cmdb_assets_limit "${CMDB_ASSETS_LIMIT}" \
+    --argjson monitoring_layer_limit "${MONITORING_LAYER_LIMIT}" \
+    --argjson workflow_requests_limit "${WORKFLOW_REQUESTS_LIMIT}" \
+    '{
+      run_id: $run_id,
+      profile: $profile,
+      scale_hint_assets: $scale_hint_assets,
+      api_base_url: $api_base_url,
+      auth_user: $auth_user,
+      knobs: {
+        requests_per_endpoint: $requests_per_endpoint,
+        warmup_requests: $warmup_requests,
+        request_timeout_seconds: $request_timeout_seconds,
+        concurrency: $concurrency
+      },
+      endpoint_limits: {
+        cmdb_assets: $cmdb_assets_limit,
+        monitoring_layer_hardware: $monitoring_layer_limit,
+        workflow_requests: $workflow_requests_limit
+      }
+    }' >"${PROFILE_JSON}"
 }
 
 capture_utilization_snapshot() {
@@ -255,13 +360,44 @@ main() {
   require_cmd awk
   require_cmd sort
   require_cmd sed
+  require_cmd jq
+
+  local override_concurrency=""
+  local override_requests=""
+  local override_warmup=""
+  local override_timeout=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --profile)
+        [[ $# -ge 2 ]] || fatal "--profile requires a label"
+        PROFILE_LABEL="$2"
+        PROFILE_EXPLICIT=1
+        shift 2
+        ;;
       --concurrency)
         [[ $# -ge 2 ]] || fatal "--concurrency requires a numeric value"
-        CONCURRENCY="$2"
+        override_concurrency="$2"
         shift 2
+        ;;
+      --requests)
+        [[ $# -ge 2 ]] || fatal "--requests requires a numeric value"
+        override_requests="$2"
+        shift 2
+        ;;
+      --warmup)
+        [[ $# -ge 2 ]] || fatal "--warmup requires a numeric value"
+        override_warmup="$2"
+        shift 2
+        ;;
+      --timeout)
+        [[ $# -ge 2 ]] || fatal "--timeout requires a numeric value"
+        override_timeout="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
         ;;
       *)
         fatal "unknown argument: $1"
@@ -269,10 +405,36 @@ main() {
     esac
   done
 
+  if (( PROFILE_EXPLICIT == 1 )); then
+    apply_profile_defaults "${PROFILE_LABEL}"
+  fi
+
+  if [[ -n "${override_concurrency}" ]]; then
+    CONCURRENCY="${override_concurrency}"
+  fi
+  if [[ -n "${override_requests}" ]]; then
+    REQUESTS_PER_ENDPOINT="${override_requests}"
+  fi
+  if [[ -n "${override_warmup}" ]]; then
+    WARMUP_REQUESTS="${override_warmup}"
+  fi
+  if [[ -n "${override_timeout}" ]]; then
+    REQUEST_TIMEOUT_SECONDS="${override_timeout}"
+  fi
+
+  [[ "${REQUESTS_PER_ENDPOINT}" =~ ^[0-9]+$ ]] || fatal "REQUESTS_PER_ENDPOINT must be a positive integer"
+  (( REQUESTS_PER_ENDPOINT > 0 )) || fatal "REQUESTS_PER_ENDPOINT must be >= 1"
+  [[ "${WARMUP_REQUESTS}" =~ ^[0-9]+$ ]] || fatal "WARMUP_REQUESTS must be a non-negative integer"
+  [[ "${REQUEST_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || fatal "REQUEST_TIMEOUT_SECONDS must be a positive integer"
+  (( REQUEST_TIMEOUT_SECONDS > 0 )) || fatal "REQUEST_TIMEOUT_SECONDS must be >= 1"
   [[ "${CONCURRENCY}" =~ ^[0-9]+$ ]] || fatal "CONCURRENCY must be a positive integer"
   (( CONCURRENCY > 0 )) || fatal "CONCURRENCY must be >= 1"
 
+  set_endpoint_specs
+
+  mkdir -p "${OUTPUT_DIR}"
   mkdir -p "${RAW_DIR}"
+  write_profile_metadata
 
   log "Health check: ${API_BASE_URL}/health"
   curl -fsS "${API_BASE_URL}/health" >/dev/null || fatal "api health check failed"

@@ -869,18 +869,37 @@ Run API benchmark baseline:
 bash scripts/benchmark-api-load.sh
 ```
 
+Run scale profile API benchmark (`scale-1k` / `scale-5k`):
+
+```bash
+bash scripts/benchmark-api-load.sh --profile scale-1k
+```
+
 Run SSE burst stability smoke:
 
 ```bash
 bash scripts/benchmark-sse-burst-smoke.sh
 ```
 
+Run scale profile SSE burst benchmark:
+
+```bash
+bash scripts/benchmark-sse-burst-smoke.sh --profile scale-5k
+```
+
+Run one-command profile orchestration (API + SSE + gate):
+
+```bash
+bash scripts/benchmark-scale-profiles.sh --profile scale-1k
+```
+
 Run threshold gate against benchmark artifacts:
 
 ```bash
 bash scripts/benchmark-threshold-gate.sh \
-  --api-summary .run/benchmarks/api-<run-id>/summary.csv \
-  --sse-summary .run/benchmarks/sse-<run-id>/summary.json
+  --profile scale-1k \
+  --api-summary .run/benchmarks/profile-scale-1k-<run-id>/api/summary.csv \
+  --sse-summary .run/benchmarks/profile-scale-1k-<run-id>/sse/summary.json
 ```
 
 Run quarterly DR drill automation:
