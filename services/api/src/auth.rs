@@ -269,9 +269,12 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         || matches_scope(&normalized, "/sse")
     {
         "monitoring.sources"
-    } else if matches_scope(&normalized, "/setup") {
+    } else if matches_scope(&normalized, "/setup")
+        || normalized == "/preflight"
+        || normalized == "/checklist"
+    {
         "ops.setup"
-    } else if matches_scope(&normalized, "/alerts") {
+    } else if matches_scope(&normalized, "/alerts") || is_alert_subroute_path(&normalized) {
         "alerts"
     } else if matches_scope(&normalized, "/cmdb/discovery")
         || matches_scope(&normalized, "/discovery")
@@ -350,6 +353,15 @@ fn matches_scope(path: &str, scope: &str) -> bool {
 
 fn is_read_method(method: &Method) -> bool {
     matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+fn is_alert_subroute_path(path: &str) -> bool {
+    if path == "/" || matches_scope(path, "/bulk") || matches_scope(path, "/policies") {
+        return true;
+    }
+
+    let first_segment = path.trim_start_matches('/').split('/').next().unwrap_or("");
+    first_segment.parse::<i64>().ok().is_some_and(|value| value > 0)
 }
 
 async fn check_permission(
@@ -480,6 +492,8 @@ mod tests {
         assert_permission(Method::GET, "/api/v1/setup/preflight", "ops.setup.read");
         assert_permission(Method::GET, "/api/v1/setup/checklist", "ops.setup.read");
         assert_permission(Method::GET, "/setup/preflight", "ops.setup.read");
+        assert_permission(Method::GET, "/preflight", "ops.setup.read");
+        assert_permission(Method::GET, "/checklist", "ops.setup.read");
     }
 
     #[test]
@@ -492,6 +506,11 @@ mod tests {
         assert_permission(Method::POST, "/api/v1/alerts/bulk/ack", "alerts.write");
         assert_permission(Method::PATCH, "/api/v1/alerts/policies/1", "alerts.write");
         assert_permission(Method::GET, "/alerts", "alerts.read");
+        assert_permission(Method::GET, "/", "alerts.read");
+        assert_permission(Method::GET, "/1", "alerts.read");
+        assert_permission(Method::POST, "/1/ack", "alerts.write");
+        assert_permission(Method::POST, "/bulk/ack", "alerts.write");
+        assert_permission(Method::GET, "/policies", "alerts.read");
     }
 
     #[test]
