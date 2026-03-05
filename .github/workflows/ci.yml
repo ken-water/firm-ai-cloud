@@ -67,15 +67,23 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Build API binary
+        run: cargo build -p api
+
       - name: Start API service
         run: |
-          cargo run -p api >/tmp/api.log 2>&1 &
+          target/debug/api >/tmp/api.log 2>&1 &
           echo $! >/tmp/api.pid
 
-          for i in $(seq 1 60); do
+          for i in $(seq 1 180); do
             if curl -fsS http://127.0.0.1:8080/health >/dev/null; then
               echo "API is ready"
               exit 0
+            fi
+            if [[ -f /tmp/api.pid ]] && ! kill -0 "$(cat /tmp/api.pid)" >/dev/null 2>&1; then
+              echo "ERROR: API process exited before readiness" >&2
+              cat /tmp/api.log >&2 || true
+              exit 1
             fi
             sleep 1
           done

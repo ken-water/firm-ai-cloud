@@ -111,6 +111,7 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.0.5 monitoring bootstrap plan](docs/14-v0.0.5-monitoring-bootstrap-plan.md)
 - [Disaster recovery runbook](docs/17-disaster-recovery-runbook.md)
 - [Performance and reliability baseline (v0.0.8)](docs/18-performance-reliability-baseline-v0.0.8.md)
+- [v0.0.9 topology + reliability plan](docs/19-v0.0.9-topology-reliability-plan.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 

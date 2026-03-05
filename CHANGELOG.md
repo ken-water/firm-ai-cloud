@@ -8,7 +8,8 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- None yet.
+- v0.0.9 planning document: `docs/19-v0.0.9-topology-reliability-plan.md`.
+- v0.0.9 issue baseline: GitHub issues `#64` to `#71` (topology, stream metrics, perf, CI gate, DR, release closure).
 
 ### Changed
 
@@ -16,7 +17,9 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Fixed
 
-- None yet.
+- CI `auth-rbac-integration` startup stability:
+  - build API binary before startup and run `target/debug/api` directly
+  - increase readiness wait budget and fail fast if API process exits early
 
 ## [0.0.8] - 2026-03-05
 
