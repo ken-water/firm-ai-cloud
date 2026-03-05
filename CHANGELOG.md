@@ -18,6 +18,49 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.1] - 2026-03-05
+
+### Added
+
+- Playbook catalog and safe execution baseline:
+  - migration: `202603050004_create_playbook_catalog_and_execution_logs.sql`
+  - built-in catalog entries with risk metadata and parameter schemas
+  - APIs:
+    - `GET /api/v1/workflow/playbooks`
+    - `GET /api/v1/workflow/playbooks/{key}`
+    - `POST /api/v1/workflow/playbooks/{key}/dry-run`
+    - `POST /api/v1/workflow/playbooks/{key}/execute`
+    - `GET /api/v1/workflow/playbooks/executions`
+    - `GET /api/v1/workflow/playbooks/executions/{id}`
+    - `POST /api/v1/workflow/playbooks/executions/{id}/replay`
+- Daily operations cockpit aggregation:
+  - migration: `202603050005_add_ops_cockpit_permission.sql`
+  - API: `GET /api/v1/ops/cockpit/queue`
+  - deterministic queue ordering with rationale and action metadata
+- Topology diagnostics context API:
+  - `GET /api/v1/topology/diagnostics/edges/{edge_id}`
+  - trend, alert, change, impacted-hint, checklist, and quick-action payloads
+- Web console v0.1.1 experience:
+  - Playbook library section (`#/workflow`)
+  - Daily operations cockpit section (`#/overview`, `#/monitoring`)
+  - Topology diagnostics panel (`#/topology`)
+- Validation and rollout docs:
+  - `scripts/qa-v0.1.1.sh`
+  - `docs/21-v0.1.1-validation-suite.md`
+  - `docs/22-v0.1.1-operator-runbook.md`
+
+### Changed
+
+- RBAC matrix now includes `workflow.playbooks.read`, `workflow.playbooks.write`, and `ops.cockpit.read`.
+- RBAC integration script now validates playbook and cockpit allow/deny paths for operator and viewer users.
+- Developer quickstart now includes v0.1.1 operator simplicity API smoke examples.
+- Topology workspace UI now includes diagnostics context loading, checklist, and quick actions from selected edges.
+
+### Fixed
+
+- Cockpit ranking order is now deterministic across refreshes by score/time/key sorting.
+- Topology diagnostics query validation now rejects out-of-range window values early.
+
 ## [0.1.0] - 2026-03-05
 
 ### Added

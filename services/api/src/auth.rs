@@ -274,6 +274,8 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         || normalized == "/checklist"
     {
         "ops.setup"
+    } else if matches_scope(&normalized, "/ops/cockpit") || matches_scope(&normalized, "/cockpit") {
+        "ops.cockpit"
     } else if matches_scope(&normalized, "/alerts") || is_alert_subroute_path(&normalized) {
         "alerts"
     } else if matches_scope(&normalized, "/cmdb/discovery")
@@ -301,6 +303,11 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         "cmdb.assets"
     } else if matches_scope(&normalized, "/tickets") {
         "tickets"
+    } else if matches_scope(&normalized, "/workflow/playbooks")
+        || matches_scope(&normalized, "/workflows/playbooks")
+        || matches_scope(&normalized, "/playbooks")
+    {
+        "workflow.playbooks"
     } else if matches_scope(&normalized, "/workflow/templates")
         || matches_scope(&normalized, "/workflows/templates")
         || matches_scope(&normalized, "/templates")
@@ -500,6 +507,12 @@ mod tests {
     }
 
     #[test]
+    fn maps_ops_cockpit_permissions() {
+        assert_permission(Method::GET, "/api/v1/ops/cockpit/queue", "ops.cockpit.read");
+        assert_permission(Method::GET, "/cockpit/queue", "ops.cockpit.read");
+    }
+
+    #[test]
     fn maps_alert_permissions() {
         assert_permission(Method::GET, "/api/v1/alerts", "alerts.read");
         assert_permission(Method::GET, "/api/v1/alerts/1", "alerts.read");
@@ -580,6 +593,22 @@ mod tests {
             "/approvals/10/approve",
             "workflow.approvals.write",
         );
+        assert_permission(
+            Method::GET,
+            "/api/v1/workflow/playbooks",
+            "workflow.playbooks.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/workflow/playbooks/restart-service-safe/dry-run",
+            "workflow.playbooks.write",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/workflow/playbooks/executions/10/replay",
+            "workflow.playbooks.write",
+        );
+        assert_permission(Method::GET, "/playbooks", "workflow.playbooks.read");
     }
 
     #[test]
@@ -594,6 +623,11 @@ mod tests {
         assert_permission(
             Method::GET,
             "/api/v1/topology/maps/site:dc-a",
+            "cmdb.relations.read",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/topology/diagnostics/edges/12",
             "cmdb.relations.read",
         );
         assert_permission(Method::GET, "/maps/site:dc-a", "cmdb.relations.read");
@@ -658,6 +692,11 @@ mod tests {
                 "cmdb.relations.read",
             ),
             (
+                Method::GET,
+                "/api/v1/topology/diagnostics/edges/1",
+                "cmdb.relations.read",
+            ),
+            (
                 Method::POST,
                 "/api/v1/cmdb/relations",
                 "cmdb.relations.write",
@@ -677,6 +716,17 @@ mod tests {
                 "/api/v1/workflow/approvals/1/approve",
                 "workflow.approvals.write",
             ),
+            (
+                Method::GET,
+                "/api/v1/workflow/playbooks",
+                "workflow.playbooks.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/workflow/playbooks/restart-service-safe/dry-run",
+                "workflow.playbooks.write",
+            ),
+            (Method::GET, "/api/v1/ops/cockpit/queue", "ops.cockpit.read"),
             (Method::GET, "/api/v1/tickets", "tickets.read"),
             (Method::GET, "/api/v1/tickets/1", "tickets.read"),
             (Method::POST, "/api/v1/tickets", "tickets.write"),

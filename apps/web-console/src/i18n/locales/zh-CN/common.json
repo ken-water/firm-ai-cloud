@@ -126,6 +126,33 @@
         "loadingOverview": "Loading monitoring overview..."
       }
     },
+    "dailyCockpit": {
+      "title": "每日运维驾驶舱",
+      "summary": "总队列={{total}} | 当前显示={{visible}}",
+      "actions": {
+        "refresh": "刷新队列"
+      },
+      "filters": {
+        "site": "站点过滤",
+        "department": "部门过滤"
+      },
+      "messages": {
+        "loading": "正在加载每日运维队列...",
+        "noData": "尚未加载每日运维队列。",
+        "empty": "当前范围暂无待处理运维项。",
+        "loaded": "每日队列已加载：总计 {{total}}，当前 {{visible}}。",
+        "actionDone": "动作 '{{action}}' 已完成。",
+        "readOnlyHint": "当前为只读模式：写操作可见但不可执行。"
+      },
+      "table": {
+        "type": "类型",
+        "priority": "优先级",
+        "rationale": "原因说明",
+        "scope": "范围",
+        "time": "观察时间",
+        "actions": "下一步动作"
+      }
+    },
     "workflow": {
       "title": "Workflow and Ticket Automation",
       "summary": "Templates: {{templates}} | Requests: {{requests}}",
@@ -319,6 +346,74 @@
           "duration": "Duration (ms)",
           "output": "Output",
           "time": "Finished At"
+        }
+      }
+    },
+    "playbooks": {
+      "title": "Playbook 库",
+      "summary": "目录={{catalog}} | 最近执行={{executions}} | 当前选择={{selected}}",
+      "actions": {
+        "refreshCatalog": "刷新目录",
+        "refreshExecutions": "刷新执行记录",
+        "select": "选择",
+        "selected": "已选中",
+        "dryRun": "预演 Dry-Run",
+        "execute": "执行"
+      },
+      "filters": {
+        "category": "分类",
+        "allCategories": "全部分类",
+        "query": "搜索",
+        "queryPlaceholder": "按 key/名称/描述过滤"
+      },
+      "form": {
+        "title": "执行参数",
+        "assetRef": "资产引用",
+        "playbookHint": "Playbook={{key}} | 风险={{risk}}",
+        "selectOption": "请选择",
+        "confirmationToken": "确认令牌"
+      },
+      "messages": {
+        "readOnlyHint": "当前为只读模式：viewer 仅可查看目录与历史，不能执行 playbook。",
+        "loadingCatalog": "正在加载 playbook 目录...",
+        "noCatalog": "当前筛选条件下没有 playbook。",
+        "selectPlaybook": "请先选择一个 playbook。",
+        "noParams": "该 playbook 无需输入参数。",
+        "confirmationRequired": "该 playbook 为高风险，执行前必须先 dry-run 并填写确认令牌。",
+        "dryRunReady": "Playbook '{{key}}' 的 dry-run 已生成（执行 #{{id}}）。",
+        "executionSucceeded": "Playbook '{{key}}' 执行成功（执行 #{{id}}）。",
+        "loadingExecutions": "正在加载 playbook 执行记录...",
+        "noExecutions": "暂无 playbook 执行记录。"
+      },
+      "results": {
+        "title": "预演与执行结果",
+        "noDryRun": "请先执行 dry-run 预览步骤与风险摘要。",
+        "dryRunSummary": "Dry-run #{{id}} 已就绪（风险={{risk}}）。",
+        "confirmationHint": "高风险执行前请使用令牌 {{token}}（过期时间 {{expiresAt}}）。",
+        "noExecution": "暂无执行结果。",
+        "executionSummary": "执行 #{{id}} 状态={{status}}。",
+        "executionActor": "执行人={{actor}} | 完成时间={{finishedAt}}"
+      },
+      "history": {
+        "title": "执行历史"
+      },
+      "table": {
+        "catalog": {
+          "key": "Key",
+          "name": "名称",
+          "category": "分类",
+          "risk": "风险",
+          "confirmation": "需确认",
+          "actions": "操作"
+        },
+        "history": {
+          "id": "执行 ID",
+          "playbook": "Playbook",
+          "mode": "模式",
+          "status": "状态",
+          "actor": "执行人",
+          "asset": "资产",
+          "createdAt": "创建时间"
         }
       }
     },
@@ -863,6 +958,9 @@
         "loaded": "拓扑工作区已加载：节点 {{nodes}}，边 {{edges}}。",
         "invalidLimit": "节点上限必须是 10 到 500 的整数。",
         "invalidOffset": "节点偏移必须是大于等于 0 的整数。",
+        "invalidDiagnosticsWindow": "诊断窗口必须是 15 到 1440 分钟之间的整数。",
+        "diagnosticsLoaded": "诊断上下文已加载：告警 {{alerts}}，变更 {{changes}}。",
+        "diagnosticsActionDone": "诊断动作 '{{action}}' 已完成。",
         "selectNode": "请选择一个节点查看范围与关系详情。",
         "selectEdge": "请选择一条边查看关系钻取详情。",
         "readOnlyHint": "当前为只读模式：可进行拓扑钻取，但不展示写操作。"
@@ -874,6 +972,20 @@
         "nodeEdges": "关联边：出向={{outbound}}，入向={{inbound}}，总计={{total}}",
         "edgeTitle": "边详情",
         "edgeSummary": "边 #{{id}}: {{src}} -> {{dst}} | 类型={{relationType}} | 来源={{source}}"
+      },
+      "diagnostics": {
+        "windowLabel": "诊断窗口（分钟）",
+        "refresh": "刷新诊断",
+        "loading": "正在加载边诊断上下文...",
+        "empty": "请选择一条边以加载诊断上下文。",
+        "summary": "趋势点={{trend}} | 活跃告警={{alerts}} | 最近变更={{changes}}",
+        "trendTitle": "近期趋势",
+        "noTrend": "当前窗口没有趋势点。",
+        "alertTitle": "活跃告警",
+        "noAlerts": "该边当前没有活跃告警。",
+        "checklistTitle": "排障清单",
+        "noChecklist": "暂无排障清单项。",
+        "actionsTitle": "快捷动作"
       }
     }
   },

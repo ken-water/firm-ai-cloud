@@ -121,6 +121,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [Performance and reliability baseline (v0.0.8)](docs/18-performance-reliability-baseline-v0.0.8.md)
 - [v0.0.9 topology + reliability plan](docs/19-v0.0.9-topology-reliability-plan.md)
 - [v0.1.x operator simplicity + efficiency plan](docs/20-v0.1x-operator-simplicity-plan.md)
+- [v0.1.1 validation suite](docs/21-v0.1.1-validation-suite.md)
+- [v0.1.1 operator runbook](docs/22-v0.1.1-operator-runbook.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 

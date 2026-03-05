@@ -8,6 +8,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use sqlx::{Postgres, QueryBuilder};
 
 use crate::{
@@ -20,10 +21,17 @@ const AUTH_SITE_HEADER: &str = "x-auth-site";
 const AUTH_DEPARTMENT_HEADER: &str = "x-auth-department";
 const TOPOLOGY_LIMIT_DEFAULT: u32 = 200;
 const TOPOLOGY_OFFSET_DEFAULT: u32 = 0;
+const DIAGNOSTICS_WINDOW_MINUTES_DEFAULT: u32 = 120;
+const DIAGNOSTICS_WINDOW_MINUTES_MAX: u32 = 1_440;
 const TOPOLOGY_RELATION_TYPES: [&str; 4] = ["contains", "depends_on", "runs_service", "owned_by"];
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/maps/{scope}", get(get_topology_map))
+    Router::new()
+        .route("/maps/{scope}", get(get_topology_map))
+        .route(
+            "/diagnostics/edges/{edge_id}",
+            axum::routing::get(get_edge_diagnostics),
+        )
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -32,6 +40,11 @@ struct TopologyMapQuery {
     department: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct EdgeDiagnosticsQuery {
+    window_minutes: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,6 +121,112 @@ struct TopologyMapEdgeRow {
     source: String,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct EdgeDiagnosticsContextRow {
+    edge_id: i64,
+    src_asset_id: i64,
+    dst_asset_id: i64,
+    relation_type: String,
+    source: String,
+    src_name: String,
+    dst_name: String,
+    src_site: Option<String>,
+    src_department: Option<String>,
+    dst_site: Option<String>,
+    dst_department: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct EdgeDiagnosticsResponse {
+    generated_at: DateTime<Utc>,
+    window_minutes: u32,
+    relation: EdgeDiagnosticsRelation,
+    trend: Vec<EdgeDiagnosticsTrendPoint>,
+    alerts: Vec<EdgeDiagnosticsAlert>,
+    recent_changes: Vec<EdgeDiagnosticsChange>,
+    impacted: EdgeDiagnosticsImpactedHints,
+    checklist: Vec<EdgeDiagnosticsChecklistStep>,
+    quick_actions: Vec<EdgeDiagnosticsQuickAction>,
+}
+
+#[derive(Debug, Serialize)]
+struct EdgeDiagnosticsRelation {
+    edge_id: i64,
+    src_asset_id: i64,
+    src_name: String,
+    dst_asset_id: i64,
+    dst_name: String,
+    relation_type: String,
+    source: String,
+    site: Option<String>,
+    department: Option<String>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct EdgeDiagnosticsTrendPoint {
+    bucket_at: DateTime<Utc>,
+    total_jobs: i64,
+    failed_jobs: i64,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct EdgeDiagnosticsAlert {
+    id: i64,
+    alert_source: String,
+    alert_key: String,
+    title: String,
+    severity: String,
+    status: String,
+    asset_id: Option<i64>,
+    last_seen_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct EdgeDiagnosticsChange {
+    id: i64,
+    actor: String,
+    action: String,
+    target_type: String,
+    target_id: Option<String>,
+    result: String,
+    message: Option<String>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct EdgeDiagnosticsImpactedHints {
+    services: Vec<EdgeDiagnosticsAssetHint>,
+    owners: Vec<EdgeDiagnosticsAssetHint>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct EdgeDiagnosticsAssetHint {
+    id: i64,
+    name: String,
+    asset_class: String,
+    site: Option<String>,
+    department: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct EdgeDiagnosticsChecklistStep {
+    key: String,
+    title: String,
+    done: bool,
+    hint: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EdgeDiagnosticsQuickAction {
+    key: String,
+    label: String,
+    href: Option<String>,
+    api_path: Option<String>,
+    method: Option<String>,
+    body: Option<Value>,
+    requires_write: bool,
+}
+
 async fn get_topology_map(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -155,6 +274,322 @@ async fn get_topology_map(
         nodes,
         edges,
     }))
+}
+
+async fn get_edge_diagnostics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(edge_id): Path<i64>,
+    Query(query): Query<EdgeDiagnosticsQuery>,
+) -> AppResult<Json<EdgeDiagnosticsResponse>> {
+    if edge_id <= 0 {
+        return Err(AppError::Validation(
+            "edge_id must be a positive integer".to_string(),
+        ));
+    }
+
+    let window_minutes = normalize_diagnostics_window_minutes(query.window_minutes)?;
+    let user = resolve_auth_user(&state, &headers).await?;
+    let roles = load_user_roles(&state.db, &user).await?;
+
+    let context = load_edge_diagnostics_context(&state.db, edge_id).await?;
+
+    let mut site = context
+        .src_site
+        .clone()
+        .or_else(|| context.dst_site.clone());
+    let mut department = context
+        .src_department
+        .clone()
+        .or_else(|| context.dst_department.clone());
+    enforce_scope_access(&roles, &headers, &mut site, &mut department)?;
+
+    let asset_ids = vec![context.src_asset_id, context.dst_asset_id];
+    let trend = load_edge_diagnostics_trend(&state.db, &asset_ids, window_minutes).await?;
+    let alerts = load_edge_diagnostics_alerts(&state.db, &asset_ids).await?;
+    let recent_changes = load_edge_diagnostics_changes(&state.db, edge_id, &asset_ids).await?;
+    let impacted = load_edge_diagnostics_impacted_hints(&state.db, &asset_ids).await?;
+    let checklist =
+        build_edge_diagnostics_checklist(&context.relation_type, &trend, &alerts, &recent_changes);
+    let quick_actions = build_edge_diagnostics_quick_actions(edge_id);
+
+    Ok(Json(EdgeDiagnosticsResponse {
+        generated_at: Utc::now(),
+        window_minutes,
+        relation: EdgeDiagnosticsRelation {
+            edge_id: context.edge_id,
+            src_asset_id: context.src_asset_id,
+            src_name: context.src_name,
+            dst_asset_id: context.dst_asset_id,
+            dst_name: context.dst_name,
+            relation_type: context.relation_type,
+            source: context.source,
+            site,
+            department,
+        },
+        trend,
+        alerts,
+        recent_changes,
+        impacted,
+        checklist,
+        quick_actions,
+    }))
+}
+
+fn normalize_diagnostics_window_minutes(value: Option<u32>) -> AppResult<u32> {
+    let value = value.unwrap_or(DIAGNOSTICS_WINDOW_MINUTES_DEFAULT);
+    if value < 15 || value > DIAGNOSTICS_WINDOW_MINUTES_MAX {
+        return Err(AppError::Validation(format!(
+            "window_minutes must be between 15 and {DIAGNOSTICS_WINDOW_MINUTES_MAX}"
+        )));
+    }
+    Ok(value)
+}
+
+async fn load_edge_diagnostics_context(
+    db: &sqlx::PgPool,
+    edge_id: i64,
+) -> AppResult<EdgeDiagnosticsContextRow> {
+    let row: Option<EdgeDiagnosticsContextRow> = sqlx::query_as(
+        "SELECT
+            r.id AS edge_id,
+            r.src_asset_id,
+            r.dst_asset_id,
+            r.relation_type,
+            r.source,
+            src.name AS src_name,
+            dst.name AS dst_name,
+            src.site AS src_site,
+            src.department AS src_department,
+            dst.site AS dst_site,
+            dst.department AS dst_department
+         FROM asset_relations r
+         INNER JOIN assets src ON src.id = r.src_asset_id
+         INNER JOIN assets dst ON dst.id = r.dst_asset_id
+         WHERE r.id = $1",
+    )
+    .bind(edge_id)
+    .fetch_optional(db)
+    .await?;
+
+    row.ok_or_else(|| AppError::NotFound(format!("topology edge {edge_id} not found")))
+}
+
+async fn load_edge_diagnostics_trend(
+    db: &sqlx::PgPool,
+    asset_ids: &[i64],
+    window_minutes: u32,
+) -> AppResult<Vec<EdgeDiagnosticsTrendPoint>> {
+    sqlx::query_as(
+        "SELECT
+            date_trunc('hour', requested_at) AS bucket_at,
+            COUNT(*)::BIGINT AS total_jobs,
+            COUNT(*) FILTER (WHERE status IN ('failed', 'dead_letter'))::BIGINT AS failed_jobs
+         FROM cmdb_monitoring_sync_jobs
+         WHERE asset_id = ANY($1)
+           AND requested_at >= NOW() - ($2::int * INTERVAL '1 minute')
+         GROUP BY date_trunc('hour', requested_at)
+         ORDER BY bucket_at DESC
+         LIMIT 48",
+    )
+    .bind(asset_ids)
+    .bind(window_minutes as i32)
+    .fetch_all(db)
+    .await
+    .map_err(AppError::from)
+}
+
+async fn load_edge_diagnostics_alerts(
+    db: &sqlx::PgPool,
+    asset_ids: &[i64],
+) -> AppResult<Vec<EdgeDiagnosticsAlert>> {
+    sqlx::query_as(
+        "SELECT
+            id,
+            alert_source,
+            alert_key,
+            title,
+            severity,
+            status,
+            asset_id,
+            last_seen_at
+         FROM unified_alerts
+         WHERE asset_id = ANY($1)
+           AND status IN ('open', 'acknowledged')
+         ORDER BY last_seen_at DESC, id DESC
+         LIMIT 20",
+    )
+    .bind(asset_ids)
+    .fetch_all(db)
+    .await
+    .map_err(AppError::from)
+}
+
+async fn load_edge_diagnostics_changes(
+    db: &sqlx::PgPool,
+    edge_id: i64,
+    asset_ids: &[i64],
+) -> AppResult<Vec<EdgeDiagnosticsChange>> {
+    let asset_ids_text = asset_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    sqlx::query_as(
+        "SELECT
+            id,
+            actor,
+            action,
+            target_type,
+            target_id,
+            result,
+            message,
+            created_at
+         FROM audit_logs
+         WHERE (target_type = 'asset_relation' AND target_id = $1)
+            OR (target_type = 'asset' AND target_id = ANY($2))
+         ORDER BY created_at DESC, id DESC
+         LIMIT 30",
+    )
+    .bind(edge_id.to_string())
+    .bind(asset_ids_text)
+    .fetch_all(db)
+    .await
+    .map_err(AppError::from)
+}
+
+async fn load_edge_diagnostics_impacted_hints(
+    db: &sqlx::PgPool,
+    asset_ids: &[i64],
+) -> AppResult<EdgeDiagnosticsImpactedHints> {
+    let services = sqlx::query_as(
+        "SELECT DISTINCT a.id, a.name, a.asset_class, a.site, a.department
+         FROM asset_relations r
+         INNER JOIN assets a
+            ON (
+                (r.src_asset_id = ANY($1) AND a.id = r.dst_asset_id)
+                OR (r.dst_asset_id = ANY($1) AND a.id = r.src_asset_id)
+            )
+         WHERE r.relation_type = 'runs_service'
+         ORDER BY a.name ASC
+         LIMIT 20",
+    )
+    .bind(asset_ids)
+    .fetch_all(db)
+    .await?;
+
+    let owners = sqlx::query_as(
+        "SELECT DISTINCT a.id, a.name, a.asset_class, a.site, a.department
+         FROM asset_relations r
+         INNER JOIN assets a
+            ON (
+                (r.src_asset_id = ANY($1) AND a.id = r.dst_asset_id)
+                OR (r.dst_asset_id = ANY($1) AND a.id = r.src_asset_id)
+            )
+         WHERE r.relation_type = 'owned_by'
+         ORDER BY a.name ASC
+         LIMIT 20",
+    )
+    .bind(asset_ids)
+    .fetch_all(db)
+    .await?;
+
+    Ok(EdgeDiagnosticsImpactedHints { services, owners })
+}
+
+fn build_edge_diagnostics_checklist(
+    relation_type: &str,
+    trend: &[EdgeDiagnosticsTrendPoint],
+    alerts: &[EdgeDiagnosticsAlert],
+    recent_changes: &[EdgeDiagnosticsChange],
+) -> Vec<EdgeDiagnosticsChecklistStep> {
+    let failed_jobs = trend.iter().map(|item| item.failed_jobs).sum::<i64>();
+    let has_critical_alert = alerts.iter().any(|item| item.severity == "critical");
+    let has_recent_write = recent_changes.iter().any(|item| item.result == "success");
+
+    vec![
+        EdgeDiagnosticsChecklistStep {
+            key: "scope-confirmed".to_string(),
+            title: "Confirm affected scope".to_string(),
+            done: true,
+            hint: format!("relation_type={relation_type}"),
+        },
+        EdgeDiagnosticsChecklistStep {
+            key: "alerts-triaged".to_string(),
+            title: "Triage active alerts".to_string(),
+            done: !has_critical_alert,
+            hint: if has_critical_alert {
+                "Critical alerts are still open around this edge.".to_string()
+            } else {
+                "No critical alerts remain open.".to_string()
+            },
+        },
+        EdgeDiagnosticsChecklistStep {
+            key: "sync-health-reviewed".to_string(),
+            title: "Review sync failure trend".to_string(),
+            done: failed_jobs == 0,
+            hint: format!("failed_jobs_last_window={failed_jobs}"),
+        },
+        EdgeDiagnosticsChecklistStep {
+            key: "changes-correlated".to_string(),
+            title: "Correlate with recent changes".to_string(),
+            done: has_recent_write,
+            hint: if has_recent_write {
+                "Recent successful change activity exists and should be correlated.".to_string()
+            } else {
+                "No recent write activity found for this relation/assets.".to_string()
+            },
+        },
+    ]
+}
+
+fn build_edge_diagnostics_quick_actions(edge_id: i64) -> Vec<EdgeDiagnosticsQuickAction> {
+    vec![
+        EdgeDiagnosticsQuickAction {
+            key: "open-alert-center".to_string(),
+            label: "Open Alert Center".to_string(),
+            href: Some("#/alerts".to_string()),
+            api_path: None,
+            method: None,
+            body: None,
+            requires_write: false,
+        },
+        EdgeDiagnosticsQuickAction {
+            key: "open-ticket-center".to_string(),
+            label: "Open Ticket Center".to_string(),
+            href: Some("#/tickets".to_string()),
+            api_path: None,
+            method: None,
+            body: None,
+            requires_write: false,
+        },
+        EdgeDiagnosticsQuickAction {
+            key: "open-playbook-library".to_string(),
+            label: "Open Playbook Library".to_string(),
+            href: Some("#/workflow".to_string()),
+            api_path: None,
+            method: None,
+            body: None,
+            requires_write: true,
+        },
+        EdgeDiagnosticsQuickAction {
+            key: "run-diagnostics-playbook".to_string(),
+            label: "Dry-Run Topology Diagnostics Playbook".to_string(),
+            href: None,
+            api_path: Some(
+                "/api/v1/workflow/playbooks/collect-topology-diagnostics/dry-run".to_string(),
+            ),
+            method: Some("POST".to_string()),
+            body: Some(json!({
+                "params": {
+                    "edge_id": edge_id,
+                    "window_minutes": DIAGNOSTICS_WINDOW_MINUTES_DEFAULT,
+                    "include_changes": true
+                }
+            })),
+            requires_write: true,
+        },
+    ]
 }
 
 fn parse_scope_key(scope: &str) -> AppResult<(Option<String>, Option<String>, String)> {
@@ -481,7 +916,10 @@ fn resolve_health_status(
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::{enforce_scope_access, merge_scope_filter, parse_scope_key, resolve_health_status};
+    use super::{
+        build_edge_diagnostics_quick_actions, enforce_scope_access, merge_scope_filter,
+        normalize_diagnostics_window_minutes, parse_scope_key, resolve_health_status,
+    };
 
     #[test]
     fn parses_scope_key_variants() {
@@ -539,5 +977,26 @@ mod tests {
         assert_eq!(resolve_health_status(Some("dead_letter"), None), "critical");
         assert_eq!(resolve_health_status(Some("skipped"), None), "unknown");
         assert_eq!(resolve_health_status(None, Some("failed")), "critical");
+    }
+
+    #[test]
+    fn diagnostics_window_range_is_enforced() {
+        assert_eq!(
+            normalize_diagnostics_window_minutes(None).expect("default"),
+            120
+        );
+        assert!(normalize_diagnostics_window_minutes(Some(10)).is_err());
+        assert!(normalize_diagnostics_window_minutes(Some(2_000)).is_err());
+    }
+
+    #[test]
+    fn diagnostics_quick_actions_include_playbook_and_ticket_links() {
+        let actions = build_edge_diagnostics_quick_actions(9);
+        assert!(actions.iter().any(|item| item.key == "open-ticket-center"));
+        assert!(
+            actions
+                .iter()
+                .any(|item| item.key == "run-diagnostics-playbook")
+        );
     }
 }

@@ -28,9 +28,13 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   formatSignedDelta,
   loadTicketDetail,
   loadTickets,
+  loadPlaybookCatalog,
+  loadPlaybookExecutions,
   loadWorkflowLogs,
   loadWorkflowRequests,
   loadWorkflowTemplates,
+  loadingPlaybookCatalog,
+  loadingPlaybookExecutions,
   loadingTicketDetail,
   loadingTickets,
   loadingWorkflowLogs,
@@ -43,12 +47,36 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   newWorkflowTemplateDescription,
   newWorkflowTemplateName,
   newWorkflowTemplateSteps,
+  playbookAssetRef,
+  playbookCatalog,
+  playbookCategoryFilter,
+  playbookCategoryOptions,
+  playbookConfirmationToken,
+  playbookDryRunResponse,
+  playbookExecutionResult,
+  playbookExecutions,
+  playbookNotice,
+  playbookParamsDraft,
+  playbookQuery,
   rejectWorkflowRequest,
   rejectingWorkflowRequestId,
   removeWorkflowStepFromDraft,
+  runPlaybookDryRun,
+  runPlaybookExecute,
+  runningPlaybookDryRun,
+  runningPlaybookExecute,
+  selectedPlaybook,
+  selectedPlaybookKey,
+  selectedPlaybookParamFields,
   selectedTicketId,
   selectedTicketSummary,
   selectedWorkflowRequest,
+  setPlaybookAssetRef,
+  setPlaybookCategoryFilter,
+  setPlaybookConfirmationToken,
+  setPlaybookParamsDraft,
+  setPlaybookQuery,
+  setSelectedPlaybookKey,
   setNewTicket,
   setNewWorkflowRequest,
   setNewWorkflowStep,
@@ -638,6 +666,279 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
                       <td style={cellStyle}>{new Date(item.created_at).toLocaleString()}</td>
                       <td style={cellStyle}>{new Date(item.updated_at).toLocaleString()}</td>
                       <td style={cellStyle}>{item.last_error ?? "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-playbook-library") && (
+        <SectionCard
+          id="section-playbook-library"
+          title={t("cmdb.playbooks.title")}
+          actions={(
+            <div className="toolbar-row">
+              <button onClick={() => void loadPlaybookCatalog()} disabled={loadingPlaybookCatalog}>
+                {loadingPlaybookCatalog ? t("cmdb.actions.loading") : t("cmdb.playbooks.actions.refreshCatalog")}
+              </button>
+              <button onClick={() => void loadPlaybookExecutions()} disabled={loadingPlaybookExecutions}>
+                {loadingPlaybookExecutions ? t("cmdb.actions.loading") : t("cmdb.playbooks.actions.refreshExecutions")}
+              </button>
+            </div>
+          )}
+        >
+          {playbookNotice && <p className="banner banner-success">{playbookNotice}</p>}
+          <p className="section-note">
+            {t("cmdb.playbooks.summary", {
+              catalog: playbookCatalog.length,
+              executions: playbookExecutions.length,
+              selected: selectedPlaybookKey || "-"
+            })}
+          </p>
+          {!canWriteCmdb && <p className="inline-note">{t("cmdb.playbooks.messages.readOnlyHint")}</p>}
+
+          <div className="filter-grid" style={{ marginBottom: "0.75rem" }}>
+            <label className="control-field">
+              <span>{t("cmdb.playbooks.filters.category")}</span>
+              <select value={playbookCategoryFilter} onChange={(event) => setPlaybookCategoryFilter(event.target.value)}>
+                <option value="all">{t("cmdb.playbooks.filters.allCategories")}</option>
+                {playbookCategoryOptions.map((category: string) => (
+                  <option key={`playbook-category-${category}`} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.playbooks.filters.query")}</span>
+              <input
+                value={playbookQuery}
+                onChange={(event) => setPlaybookQuery(event.target.value)}
+                placeholder={t("cmdb.playbooks.filters.queryPlaceholder")}
+              />
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.playbooks.form.assetRef")}</span>
+              <input
+                value={playbookAssetRef}
+                onChange={(event) => setPlaybookAssetRef(event.target.value)}
+                placeholder="asset-101"
+              />
+            </label>
+          </div>
+
+          {loadingPlaybookCatalog && playbookCatalog.length === 0 ? (
+            <p>{t("cmdb.playbooks.messages.loadingCatalog")}</p>
+          ) : playbookCatalog.length === 0 ? (
+            <p>{t("cmdb.playbooks.messages.noCatalog")}</p>
+          ) : (
+            <div style={{ overflowX: "auto", marginBottom: "1rem" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.catalog.key")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.catalog.name")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.catalog.category")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.catalog.risk")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.catalog.confirmation")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.catalog.actions")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {playbookCatalog.map((item: any) => (
+                    <tr key={`playbook-catalog-${item.key}`}>
+                      <td style={cellStyle}>{item.key}</td>
+                      <td style={cellStyle}>{item.name}</td>
+                      <td style={cellStyle}>{item.category}</td>
+                      <td style={cellStyle}>
+                        <span className={statusChipClass(item.risk_level)}>{item.risk_level}</span>
+                      </td>
+                      <td style={cellStyle}>{item.requires_confirmation ? "yes" : "no"}</td>
+                      <td style={cellStyle}>
+                        <button onClick={() => setSelectedPlaybookKey(item.key)}>
+                          {selectedPlaybookKey === item.key
+                            ? t("cmdb.playbooks.actions.selected")
+                            : t("cmdb.playbooks.actions.select")}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {!selectedPlaybook ? (
+            <p>{t("cmdb.playbooks.messages.selectPlaybook")}</p>
+          ) : (
+            <div className="detail-grid" style={{ marginBottom: "1rem" }}>
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.playbooks.form.title")}</h3>
+                <p className="section-note">
+                  {t("cmdb.playbooks.form.playbookHint", {
+                    key: selectedPlaybook.key,
+                    risk: selectedPlaybook.risk_level
+                  })}
+                </p>
+                {selectedPlaybookParamFields.length === 0 ? (
+                  <p>{t("cmdb.playbooks.messages.noParams")}</p>
+                ) : (
+                  <div className="form-grid">
+                    {selectedPlaybookParamFields.map((field: any) => (
+                      <label key={`playbook-param-${field.key}`} className="control-field">
+                        <span>
+                          {field.key}
+                          {field.required ? " *" : ""}
+                        </span>
+                        {field.type === "enum" ? (
+                          <select
+                            value={playbookParamsDraft[field.key] ?? ""}
+                            onChange={(event) =>
+                              setPlaybookParamsDraft((prev: any) => ({ ...prev, [field.key]: event.target.value }))
+                            }
+                          >
+                            <option value="">{t("cmdb.playbooks.form.selectOption")}</option>
+                            {(field.options ?? []).map((option: string) => (
+                              <option key={`playbook-param-${field.key}-${option}`} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+                        ) : field.type === "boolean" ? (
+                          <select
+                            value={playbookParamsDraft[field.key] ?? ""}
+                            onChange={(event) =>
+                              setPlaybookParamsDraft((prev: any) => ({ ...prev, [field.key]: event.target.value }))
+                            }
+                          >
+                            <option value="">{t("cmdb.playbooks.form.selectOption")}</option>
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                          </select>
+                        ) : (
+                          <input
+                            type={field.type === "integer" || field.type === "number" ? "number" : "text"}
+                            value={playbookParamsDraft[field.key] ?? ""}
+                            onChange={(event) =>
+                              setPlaybookParamsDraft((prev: any) => ({ ...prev, [field.key]: event.target.value }))
+                            }
+                            placeholder={String(field.default ?? "")}
+                          />
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                {(selectedPlaybook.requires_confirmation
+                  || selectedPlaybook.risk_level === "high"
+                  || selectedPlaybook.risk_level === "critical") && (
+                  <label className="control-field" style={{ marginTop: "0.75rem" }}>
+                    <span>{t("cmdb.playbooks.form.confirmationToken")}</span>
+                    <input
+                      value={playbookConfirmationToken}
+                      onChange={(event) => setPlaybookConfirmationToken(event.target.value)}
+                      placeholder="PBK-XXXXXXX"
+                    />
+                  </label>
+                )}
+
+                <div className="toolbar-row" style={{ marginTop: "0.75rem" }}>
+                  <button onClick={() => void runPlaybookDryRun()} disabled={runningPlaybookDryRun || !canWriteCmdb}>
+                    {runningPlaybookDryRun ? t("cmdb.actions.loading") : t("cmdb.playbooks.actions.dryRun")}
+                  </button>
+                  <button onClick={() => void runPlaybookExecute()} disabled={runningPlaybookExecute || !canWriteCmdb}>
+                    {runningPlaybookExecute ? t("cmdb.actions.loading") : t("cmdb.playbooks.actions.execute")}
+                  </button>
+                </div>
+              </div>
+
+              <div className="detail-panel">
+                <h3 style={subSectionTitleStyle}>{t("cmdb.playbooks.results.title")}</h3>
+                {!playbookDryRunResponse ? (
+                  <p>{t("cmdb.playbooks.results.noDryRun")}</p>
+                ) : (
+                  <>
+                    <p className="section-note">
+                      {t("cmdb.playbooks.results.dryRunSummary", {
+                        id: playbookDryRunResponse.execution.id,
+                        risk: playbookDryRunResponse.risk_summary.risk_level
+                      })}
+                    </p>
+                    <p className="section-note">{playbookDryRunResponse.risk_summary.summary}</p>
+                    {playbookDryRunResponse.confirmation && (
+                      <p className="inline-note">
+                        {t("cmdb.playbooks.results.confirmationHint", {
+                          token: playbookDryRunResponse.confirmation.token,
+                          expiresAt: new Date(playbookDryRunResponse.confirmation.expires_at).toLocaleString()
+                        })}
+                      </p>
+                    )}
+                    <ol style={{ marginTop: "0.35rem" }}>
+                      {(playbookDryRunResponse.execution.planned_steps ?? []).map((step: string, idx: number) => (
+                        <li key={`playbook-dry-step-${idx}`}>{step}</li>
+                      ))}
+                    </ol>
+                  </>
+                )}
+                {!playbookExecutionResult ? (
+                  <p>{t("cmdb.playbooks.results.noExecution")}</p>
+                ) : (
+                  <>
+                    <p className="section-note">
+                      {t("cmdb.playbooks.results.executionSummary", {
+                        id: playbookExecutionResult.id,
+                        status: playbookExecutionResult.status
+                      })}
+                    </p>
+                    <p className="section-note">
+                      {t("cmdb.playbooks.results.executionActor", {
+                        actor: playbookExecutionResult.actor,
+                        finishedAt: playbookExecutionResult.finished_at
+                          ? new Date(playbookExecutionResult.finished_at).toLocaleString()
+                          : "-"
+                      })}
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          <h3 style={subSectionTitleStyle}>{t("cmdb.playbooks.history.title")}</h3>
+          {loadingPlaybookExecutions && playbookExecutions.length === 0 ? (
+            <p>{t("cmdb.playbooks.messages.loadingExecutions")}</p>
+          ) : playbookExecutions.length === 0 ? (
+            <p>{t("cmdb.playbooks.messages.noExecutions")}</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.history.id")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.history.playbook")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.history.mode")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.history.status")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.history.actor")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.history.asset")}</th>
+                    <th style={cellStyle}>{t("cmdb.playbooks.table.history.createdAt")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {playbookExecutions.map((item: any) => (
+                    <tr key={`playbook-execution-${item.id}`}>
+                      <td style={cellStyle}>#{item.id}</td>
+                      <td style={cellStyle}>{item.playbook_key}</td>
+                      <td style={cellStyle}>{item.mode}</td>
+                      <td style={cellStyle}>
+                        <span className={statusChipClass(item.status)}>{item.status}</span>
+                      </td>
+                      <td style={cellStyle}>{item.actor}</td>
+                      <td style={cellStyle}>{item.asset_ref ?? "-"}</td>
+                      <td style={cellStyle}>{new Date(item.created_at).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>

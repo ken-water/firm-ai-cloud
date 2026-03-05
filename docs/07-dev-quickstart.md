@@ -892,3 +892,32 @@ bash scripts/dr-drill.sh --env-file deploy/.env --output-dir .run/dr-drill/<run-
 Baseline report and KPI comparison:
 
 - `docs/18-performance-reliability-baseline-v0.0.8.md`
+
+## 13. v0.1.1 Operator Simplicity APIs
+
+Playbook catalog:
+
+```bash
+curl -H 'x-auth-user: admin' "http://127.0.0.1:8080/api/v1/workflow/playbooks?limit=20"
+```
+
+Playbook dry-run (high-risk confirmation token returned in response):
+
+```bash
+curl -X POST -H 'x-auth-user: admin' -H 'Content-Type: application/json' \
+  -d '{"asset_ref":"asset-101","params":{"asset_ref":"asset-101","service_name":"nginx","grace_seconds":30}}' \
+  "http://127.0.0.1:8080/api/v1/workflow/playbooks/restart-service-safe/dry-run"
+```
+
+Daily operations cockpit queue:
+
+```bash
+curl -H 'x-auth-user: admin' "http://127.0.0.1:8080/api/v1/ops/cockpit/queue?limit=20"
+```
+
+Topology edge diagnostics context:
+
+```bash
+curl -H 'x-auth-user: admin' \
+  "http://127.0.0.1:8080/api/v1/topology/diagnostics/edges/1?window_minutes=120"
+```

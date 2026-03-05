@@ -15,7 +15,7 @@ export const defaultConsolePage: ConsolePage = "overview";
 
 export const consolePageSections: Record<ConsolePage, string[]> = {
   setup: ["section-setup-wizard"],
-  overview: ["section-cockpit", "section-monitoring-metrics", "section-topology", "section-asset-stats"],
+  overview: ["section-daily-cockpit", "section-cockpit", "section-monitoring-metrics", "section-topology", "section-asset-stats"],
   cmdb: [
     "section-scan",
     "section-fields",
@@ -25,10 +25,11 @@ export const consolePageSections: Record<ConsolePage, string[]> = {
     "section-asset-stats",
     "section-assets"
   ],
-  monitoring: ["section-cockpit", "section-monitoring-sources", "section-monitoring-metrics", "section-topology"],
+  monitoring: ["section-daily-cockpit", "section-cockpit", "section-monitoring-sources", "section-monitoring-metrics", "section-topology"],
   alerts: ["section-alert-center"],
   topology: ["section-topology-workspace"],
   workflow: [
+    "section-playbook-library",
     "section-workflow-cockpit",
     "section-workflow-reports",
     "section-workflow",
@@ -43,6 +44,8 @@ const legacySectionToPage: Record<string, ConsolePage> = {
   "section-setup-wizard": "setup",
   "section-alert-center": "alerts",
   "section-admin": "admin",
+  "section-daily-cockpit": "overview",
+  "section-playbook-library": "workflow",
   "section-workflow-cockpit": "workflow",
   "section-workflow-reports": "workflow",
   "section-workflow": "workflow",

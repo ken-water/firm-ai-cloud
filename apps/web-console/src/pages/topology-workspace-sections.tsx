@@ -11,9 +11,13 @@ export function TopologyWorkspaceSections(rawProps: Record<string, unknown>) {
   const {
     buildTopologyEdgePath,
     canWriteCmdb,
+    loadTopologyEdgeDiagnostics,
     loadTopologyMap,
+    loadingTopologyDiagnostics,
     loadingTopologyMap,
     relationTypeColor,
+    runTopologyDiagnosticsAction,
+    runningTopologyDiagnosticsActionKey,
     selectedTopologyMapEdge,
     selectedTopologyMapEdgeKey,
     selectedTopologyMapNode,
@@ -21,12 +25,16 @@ export function TopologyWorkspaceSections(rawProps: Record<string, unknown>) {
     setSelectedTopologyMapEdgeKey,
     setSelectedTopologyMapNodeId,
     setTopologyDepartmentFilter,
+    setTopologyDiagnosticsWindowMinutes,
     setTopologyScopeInput,
     setTopologySiteFilter,
     setTopologyWindowLimit,
     setTopologyWindowOffset,
     t,
     topologyDepartmentFilter,
+    topologyDiagnostics,
+    topologyDiagnosticsNotice,
+    topologyDiagnosticsWindowMinutes,
     topologyEdgeKey,
     topologyMap,
     topologyMapEdgeRenderMeta,
@@ -273,6 +281,102 @@ export function TopologyWorkspaceSections(rawProps: Record<string, unknown>) {
                       {t("topology.workspace.actions.focusTarget")}
                     </button>
                   </div>
+
+                  <div className="filter-grid" style={{ marginTop: "0.6rem" }}>
+                    <label className="control-field">
+                      <span>{t("topology.workspace.diagnostics.windowLabel")}</span>
+                      <input
+                        value={topologyDiagnosticsWindowMinutes}
+                        onChange={(event) => setTopologyDiagnosticsWindowMinutes(event.target.value)}
+                      />
+                    </label>
+                    <div className="toolbar-row" style={{ alignSelf: "end" }}>
+                      <button
+                        onClick={() => void loadTopologyEdgeDiagnostics(selectedTopologyMapEdge.id)}
+                        disabled={loadingTopologyDiagnostics}
+                      >
+                        {loadingTopologyDiagnostics
+                          ? t("cmdb.actions.loading")
+                          : t("topology.workspace.diagnostics.refresh")}
+                      </button>
+                    </div>
+                  </div>
+
+                  {topologyDiagnosticsNotice && <p className="inline-note">{topologyDiagnosticsNotice}</p>}
+
+                  {!topologyDiagnostics ? (
+                    <p className="inline-note">
+                      {loadingTopologyDiagnostics
+                        ? t("topology.workspace.diagnostics.loading")
+                        : t("topology.workspace.diagnostics.empty")}
+                    </p>
+                  ) : (
+                    <>
+                      <p className="section-note">
+                        {t("topology.workspace.diagnostics.summary", {
+                          trend: topologyDiagnostics.trend.length,
+                          alerts: topologyDiagnostics.alerts.length,
+                          changes: topologyDiagnostics.recent_changes.length
+                        })}
+                      </p>
+
+                      <h4 style={{ marginBottom: "0.35rem" }}>{t("topology.workspace.diagnostics.trendTitle")}</h4>
+                      {topologyDiagnostics.trend.length === 0 ? (
+                        <p className="inline-note">{t("topology.workspace.diagnostics.noTrend")}</p>
+                      ) : (
+                        <div style={{ maxHeight: "140px", overflowY: "auto" }}>
+                          {topologyDiagnostics.trend.slice(0, 8).map((point: any) => (
+                            <div key={`diag-trend-${point.bucket_at}`} className="section-note">
+                              {new Date(point.bucket_at).toLocaleString()} | total={point.total_jobs} | failed={point.failed_jobs}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <h4 style={{ marginBottom: "0.35rem", marginTop: "0.6rem" }}>{t("topology.workspace.diagnostics.alertTitle")}</h4>
+                      {topologyDiagnostics.alerts.length === 0 ? (
+                        <p className="inline-note">{t("topology.workspace.diagnostics.noAlerts")}</p>
+                      ) : (
+                        <div style={{ maxHeight: "140px", overflowY: "auto" }}>
+                          {topologyDiagnostics.alerts.slice(0, 8).map((alert: any) => (
+                            <div key={`diag-alert-${alert.id}`} className="section-note">
+                              #{alert.id} [{alert.severity}] {truncateTopologyLabel(alert.title, 44)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <h4 style={{ marginBottom: "0.35rem", marginTop: "0.6rem" }}>{t("topology.workspace.diagnostics.checklistTitle")}</h4>
+                      {topologyDiagnostics.checklist.length === 0 ? (
+                        <p className="inline-note">{t("topology.workspace.diagnostics.noChecklist")}</p>
+                      ) : (
+                        <ul style={{ margin: 0, paddingLeft: "1.2rem" }}>
+                          {topologyDiagnostics.checklist.map((step: any) => (
+                            <li key={`diag-step-${step.key}`} style={{ marginBottom: "0.25rem" }}>
+                              {step.done ? "[done]" : "[todo]"} {step.title} ({step.hint})
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+
+                      <h4 style={{ marginBottom: "0.35rem", marginTop: "0.6rem" }}>{t("topology.workspace.diagnostics.actionsTitle")}</h4>
+                      <div className="toolbar-row">
+                        {(topologyDiagnostics.quick_actions ?? []).map((action: any) => {
+                          const running = runningTopologyDiagnosticsActionKey === action.key;
+                          const disabled = running || (action.requires_write && !canWriteCmdb);
+                          return (
+                            <button
+                              key={`diag-action-${action.key}`}
+                              onClick={() => void runTopologyDiagnosticsAction(action)}
+                              disabled={disabled}
+                            >
+                              {running ? t("cmdb.actions.loading") : action.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </div>

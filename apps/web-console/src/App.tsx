@@ -278,6 +278,82 @@ type TopologyMapResponse = {
   empty: boolean;
 };
 
+type TopologyDiagnosticsChecklistStep = {
+  key: string;
+  title: string;
+  done: boolean;
+  hint: string;
+};
+
+type TopologyDiagnosticsQuickAction = {
+  key: string;
+  label: string;
+  href: string | null;
+  api_path: string | null;
+  method: string | null;
+  body: Record<string, unknown> | null;
+  requires_write: boolean;
+};
+
+type TopologyDiagnosticsResponse = {
+  generated_at: string;
+  window_minutes: number;
+  relation: {
+    edge_id: number;
+    src_asset_id: number;
+    src_name: string;
+    dst_asset_id: number;
+    dst_name: string;
+    relation_type: string;
+    source: string;
+    site: string | null;
+    department: string | null;
+  };
+  trend: Array<{
+    bucket_at: string;
+    total_jobs: number;
+    failed_jobs: number;
+  }>;
+  alerts: Array<{
+    id: number;
+    alert_source: string;
+    alert_key: string;
+    title: string;
+    severity: string;
+    status: string;
+    asset_id: number | null;
+    last_seen_at: string;
+  }>;
+  recent_changes: Array<{
+    id: number;
+    actor: string;
+    action: string;
+    target_type: string;
+    target_id: string | null;
+    result: string;
+    message: string | null;
+    created_at: string;
+  }>;
+  impacted: {
+    services: Array<{
+      id: number;
+      name: string;
+      asset_class: string;
+      site: string | null;
+      department: string | null;
+    }>;
+    owners: Array<{
+      id: number;
+      name: string;
+      asset_class: string;
+      site: string | null;
+      department: string | null;
+    }>;
+  };
+  checklist: TopologyDiagnosticsChecklistStep[];
+  quick_actions: TopologyDiagnosticsQuickAction[];
+};
+
 type DiscoveryJob = {
   id: number;
   name: string;
@@ -489,6 +565,148 @@ type WorkflowExecutionLog = {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+};
+
+type PlaybookParameterField = {
+  key: string;
+  type: "string" | "integer" | "number" | "boolean" | "enum";
+  required?: boolean;
+  min?: number;
+  max?: number;
+  max_length?: number;
+  options?: string[];
+  default?: unknown;
+};
+
+type PlaybookParameterSchema = {
+  fields: PlaybookParameterField[];
+};
+
+type PlaybookCatalogItem = {
+  id: number;
+  key: string;
+  name: string;
+  category: string;
+  risk_level: "low" | "medium" | "high" | "critical";
+  params: PlaybookParameterSchema;
+  description: string | null;
+  requires_confirmation: boolean;
+  rbac_hint: Record<string, unknown>;
+  is_enabled: boolean;
+  is_system: boolean;
+  updated_at: string;
+};
+
+type PlaybookListResponse = {
+  items: PlaybookCatalogItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+type PlaybookExecutionDetail = {
+  id: number;
+  playbook_id: number;
+  playbook_key: string;
+  playbook_name: string;
+  category: string;
+  risk_level: string;
+  actor: string;
+  asset_ref: string | null;
+  mode: "dry_run" | "execute";
+  status: string;
+  confirmation_required: boolean;
+  confirmation_verified: boolean;
+  confirmed_at: string | null;
+  params: Record<string, unknown>;
+  planned_steps: string[];
+  result: Record<string, unknown>;
+  related_ticket_id: number | null;
+  related_alert_id: number | null;
+  replay_of_execution_id: number | null;
+  expires_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type PlaybookExecutionListItem = {
+  id: number;
+  playbook_key: string;
+  playbook_name: string;
+  category: string;
+  risk_level: string;
+  actor: string;
+  asset_ref: string | null;
+  mode: string;
+  status: string;
+  confirmation_required: boolean;
+  confirmation_verified: boolean;
+  related_ticket_id: number | null;
+  related_alert_id: number | null;
+  replay_of_execution_id: number | null;
+  created_at: string;
+  finished_at: string | null;
+};
+
+type PlaybookExecutionListResponse = {
+  items: PlaybookExecutionListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+type PlaybookDryRunResponse = {
+  execution: PlaybookExecutionDetail;
+  risk_summary: {
+    risk_level: string;
+    requires_confirmation: boolean;
+    ttl_minutes: number;
+    summary: string;
+  };
+  confirmation: {
+    token: string;
+    expires_at: string;
+    instruction: string;
+  } | null;
+};
+
+type DailyCockpitAction = {
+  key: string;
+  label: string;
+  href: string | null;
+  api_path: string | null;
+  method: string | null;
+  body: Record<string, unknown> | null;
+  requires_write: boolean;
+};
+
+type DailyCockpitQueueItem = {
+  queue_key: string;
+  item_type: string;
+  priority_score: number;
+  priority_level: string;
+  rationale: string;
+  rationale_details: string[];
+  observed_at: string;
+  site: string | null;
+  department: string | null;
+  entity: Record<string, unknown>;
+  actions: DailyCockpitAction[];
+};
+
+type DailyCockpitQueueResponse = {
+  generated_at: string;
+  scope: {
+    site: string | null;
+    department: string | null;
+  };
+  window: {
+    limit: number;
+    offset: number;
+    total: number;
+  };
+  items: DailyCockpitQueueItem[];
 };
 
 type TicketListItem = {
@@ -965,6 +1183,11 @@ export function App() {
   const [selectedTopologyMapEdgeKey, setSelectedTopologyMapEdgeKey] = useState<string | null>(
     null
   );
+  const [topologyDiagnostics, setTopologyDiagnostics] = useState<TopologyDiagnosticsResponse | null>(null);
+  const [loadingTopologyDiagnostics, setLoadingTopologyDiagnostics] = useState(false);
+  const [topologyDiagnosticsNotice, setTopologyDiagnosticsNotice] = useState<string | null>(null);
+  const [topologyDiagnosticsWindowMinutes, setTopologyDiagnosticsWindowMinutes] = useState("120");
+  const [runningTopologyDiagnosticsActionKey, setRunningTopologyDiagnosticsActionKey] = useState<string | null>(null);
   const [discoveryJobs, setDiscoveryJobs] = useState<DiscoveryJob[]>([]);
   const [discoveryCandidates, setDiscoveryCandidates] = useState<DiscoveryCandidate[]>([]);
   const [loadingDiscoveryJobs, setLoadingDiscoveryJobs] = useState(false);
@@ -1000,6 +1223,27 @@ export function App() {
   const [workflowReportStatusFilter, setWorkflowReportStatusFilter] = useState("all");
   const [workflowReportTemplateFilter, setWorkflowReportTemplateFilter] = useState("all");
   const [workflowReportRequesterFilter, setWorkflowReportRequesterFilter] = useState("");
+  const [playbookCatalog, setPlaybookCatalog] = useState<PlaybookCatalogItem[]>([]);
+  const [playbookExecutions, setPlaybookExecutions] = useState<PlaybookExecutionListItem[]>([]);
+  const [loadingPlaybookCatalog, setLoadingPlaybookCatalog] = useState(false);
+  const [loadingPlaybookExecutions, setLoadingPlaybookExecutions] = useState(false);
+  const [runningPlaybookDryRun, setRunningPlaybookDryRun] = useState(false);
+  const [runningPlaybookExecute, setRunningPlaybookExecute] = useState(false);
+  const [selectedPlaybookKey, setSelectedPlaybookKey] = useState("");
+  const [playbookCategoryFilter, setPlaybookCategoryFilter] = useState("all");
+  const [playbookQuery, setPlaybookQuery] = useState("");
+  const [playbookAssetRef, setPlaybookAssetRef] = useState("");
+  const [playbookParamsDraft, setPlaybookParamsDraft] = useState<Record<string, string>>({});
+  const [playbookConfirmationToken, setPlaybookConfirmationToken] = useState("");
+  const [playbookDryRunResponse, setPlaybookDryRunResponse] = useState<PlaybookDryRunResponse | null>(null);
+  const [playbookExecutionResult, setPlaybookExecutionResult] = useState<PlaybookExecutionDetail | null>(null);
+  const [playbookNotice, setPlaybookNotice] = useState<string | null>(null);
+  const [dailyCockpitQueue, setDailyCockpitQueue] = useState<DailyCockpitQueueResponse | null>(null);
+  const [loadingDailyCockpit, setLoadingDailyCockpit] = useState(false);
+  const [runningDailyCockpitActionKey, setRunningDailyCockpitActionKey] = useState<string | null>(null);
+  const [dailyCockpitNotice, setDailyCockpitNotice] = useState<string | null>(null);
+  const [dailyCockpitSiteFilter, setDailyCockpitSiteFilter] = useState("");
+  const [dailyCockpitDepartmentFilter, setDailyCockpitDepartmentFilter] = useState("");
   const [tickets, setTickets] = useState<TicketListItem[]>([]);
   const [ticketDetail, setTicketDetail] = useState<TicketDetailResponse | null>(null);
   const [loadingTickets, setLoadingTickets] = useState(false);
@@ -1431,6 +1675,86 @@ export function App() {
     topologyWindowOffset
   ]);
 
+  const loadTopologyEdgeDiagnostics = useCallback(async (edgeId: number) => {
+    if (!Number.isFinite(edgeId) || edgeId <= 0) {
+      setTopologyDiagnostics(null);
+      return null;
+    }
+
+    const parsedWindow = Number.parseInt(topologyDiagnosticsWindowMinutes.trim(), 10);
+    if (!Number.isFinite(parsedWindow) || parsedWindow < 15 || parsedWindow > 1440) {
+      setError(t("topology.workspace.messages.invalidDiagnosticsWindow"));
+      return null;
+    }
+
+    setLoadingTopologyDiagnostics(true);
+    setError(null);
+    setTopologyDiagnosticsNotice(null);
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/topology/diagnostics/edges/${edgeId}?window_minutes=${parsedWindow}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TopologyDiagnosticsResponse = await response.json();
+      setTopologyDiagnostics(payload);
+      setTopologyDiagnosticsNotice(
+        t("topology.workspace.messages.diagnosticsLoaded", {
+          alerts: payload.alerts.length,
+          changes: payload.recent_changes.length
+        })
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setTopologyDiagnostics(null);
+      return null;
+    } finally {
+      setLoadingTopologyDiagnostics(false);
+    }
+  }, [t, topologyDiagnosticsWindowMinutes]);
+
+  const runTopologyDiagnosticsAction = useCallback(async (action: TopologyDiagnosticsQuickAction) => {
+    if (action.requires_write && !canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    if (action.href) {
+      if (typeof window !== "undefined") {
+        window.location.hash = action.href;
+      }
+      return;
+    }
+
+    if (!action.api_path || !action.method) {
+      return;
+    }
+
+    setRunningTopologyDiagnosticsActionKey(action.key);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}${action.api_path}`, {
+        method: action.method,
+        headers: action.body ? { "Content-Type": "application/json" } : undefined,
+        body: action.body ? JSON.stringify(action.body) : undefined
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      setTopologyDiagnosticsNotice(
+        t("topology.workspace.messages.diagnosticsActionDone", {
+          action: action.label
+        })
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setRunningTopologyDiagnosticsActionKey(null);
+    }
+  }, [canWriteCmdb, t]);
+
   const loadDiscoveryJobs = useCallback(async () => {
     setLoadingDiscoveryJobs(true);
     setError(null);
@@ -1580,6 +1904,150 @@ export function App() {
       setLoadingWorkflowLogs(false);
     }
   }, []);
+
+  const loadPlaybookCatalog = useCallback(async () => {
+    setLoadingPlaybookCatalog(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "200",
+        offset: "0",
+        is_enabled: "true"
+      });
+      if (playbookCategoryFilter !== "all") {
+        params.set("category", playbookCategoryFilter);
+      }
+      if (playbookQuery.trim().length > 0) {
+        params.set("query", playbookQuery.trim());
+      }
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/playbooks?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: PlaybookListResponse = await response.json();
+      setPlaybookCatalog(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setPlaybookCatalog([]);
+      return [];
+    } finally {
+      setLoadingPlaybookCatalog(false);
+    }
+  }, [playbookCategoryFilter, playbookQuery]);
+
+  const loadPlaybookExecutions = useCallback(async () => {
+    setLoadingPlaybookExecutions(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "80",
+        offset: "0"
+      });
+      if (selectedPlaybookKey.trim().length > 0) {
+        params.set("playbook_key", selectedPlaybookKey.trim());
+      }
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/playbooks/executions?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: PlaybookExecutionListResponse = await response.json();
+      setPlaybookExecutions(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setPlaybookExecutions([]);
+      return [];
+    } finally {
+      setLoadingPlaybookExecutions(false);
+    }
+  }, [selectedPlaybookKey]);
+
+  const loadDailyCockpitQueue = useCallback(async () => {
+    setLoadingDailyCockpit(true);
+    setError(null);
+    setDailyCockpitNotice(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "40",
+        offset: "0"
+      });
+
+      if (dailyCockpitSiteFilter.trim().length > 0) {
+        params.set("site", dailyCockpitSiteFilter.trim());
+      }
+      if (dailyCockpitDepartmentFilter.trim().length > 0) {
+        params.set("department", dailyCockpitDepartmentFilter.trim());
+      }
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/queue?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: DailyCockpitQueueResponse = await response.json();
+      setDailyCockpitQueue(payload);
+      setDailyCockpitNotice(
+        t("cmdb.dailyCockpit.messages.loaded", {
+          total: payload.window.total,
+          visible: payload.items.length
+        })
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setDailyCockpitQueue(null);
+      return null;
+    } finally {
+      setLoadingDailyCockpit(false);
+    }
+  }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter, t]);
+
+  const runDailyCockpitAction = useCallback(async (
+    item: DailyCockpitQueueItem,
+    action: DailyCockpitAction
+  ) => {
+    if (action.requires_write && !canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    if (action.href) {
+      if (typeof window !== "undefined") {
+        window.location.hash = action.href;
+      }
+      return;
+    }
+
+    if (!action.api_path || !action.method) {
+      return;
+    }
+
+    setRunningDailyCockpitActionKey(`${item.queue_key}:${action.key}`);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}${action.api_path}`, {
+        method: action.method,
+        headers: action.body ? { "Content-Type": "application/json" } : undefined,
+        body: action.body ? JSON.stringify(action.body) : undefined
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await loadDailyCockpitQueue();
+      setDailyCockpitNotice(
+        t("cmdb.dailyCockpit.messages.actionDone", {
+          action: action.label
+        })
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setRunningDailyCockpitActionKey(null);
+    }
+  }, [canWriteCmdb, loadDailyCockpitQueue, t]);
 
   const loadTickets = useCallback(async () => {
     setLoadingTickets(true);
@@ -2913,6 +3381,151 @@ export function App() {
     }
   }, [canWriteCmdb, loadWorkflowLogs, loadWorkflowRequests, t]);
 
+  const runPlaybookDryRun = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const selectedPlaybook = playbookCatalog.find((item) => item.key === selectedPlaybookKey) ?? null;
+    if (!selectedPlaybook) {
+      setError(t("cmdb.playbooks.messages.selectPlaybook"));
+      return;
+    }
+
+    const params = normalizePlaybookParamDraft(
+      extractPlaybookParamFields(selectedPlaybook.params),
+      playbookParamsDraft
+    );
+    if (!params.ok) {
+      setError(params.error);
+      return;
+    }
+
+    setRunningPlaybookDryRun(true);
+    setPlaybookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/workflow/playbooks/${encodeURIComponent(selectedPlaybook.key)}/dry-run`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            params: params.value,
+            asset_ref: trimToNull(playbookAssetRef)
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: PlaybookDryRunResponse = await response.json();
+      setPlaybookDryRunResponse(payload);
+      setPlaybookExecutionResult(null);
+      setPlaybookConfirmationToken(payload.confirmation?.token ?? "");
+      await loadPlaybookExecutions();
+      setPlaybookNotice(
+        t("cmdb.playbooks.messages.dryRunReady", {
+          key: selectedPlaybook.key,
+          id: payload.execution.id
+        })
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setRunningPlaybookDryRun(false);
+    }
+  }, [
+    canWriteCmdb,
+    loadPlaybookExecutions,
+    playbookAssetRef,
+    playbookCatalog,
+    playbookParamsDraft,
+    selectedPlaybookKey,
+    t
+  ]);
+
+  const runPlaybookExecute = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const selectedPlaybook = playbookCatalog.find((item) => item.key === selectedPlaybookKey) ?? null;
+    if (!selectedPlaybook) {
+      setError(t("cmdb.playbooks.messages.selectPlaybook"));
+      return;
+    }
+
+    const params = normalizePlaybookParamDraft(
+      extractPlaybookParamFields(selectedPlaybook.params),
+      playbookParamsDraft
+    );
+    if (!params.ok) {
+      setError(params.error);
+      return;
+    }
+
+    const requiresConfirmation = selectedPlaybook.requires_confirmation
+      || selectedPlaybook.risk_level === "high"
+      || selectedPlaybook.risk_level === "critical";
+    const dryRunId = playbookDryRunResponse?.execution.id ?? null;
+    if (requiresConfirmation && (!dryRunId || !playbookConfirmationToken.trim())) {
+      setError(t("cmdb.playbooks.messages.confirmationRequired"));
+      return;
+    }
+
+    setRunningPlaybookExecute(true);
+    setPlaybookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/workflow/playbooks/${encodeURIComponent(selectedPlaybook.key)}/execute`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            params: params.value,
+            asset_ref: trimToNull(playbookAssetRef),
+            dry_run_id: dryRunId,
+            confirmation_token: trimToNull(playbookConfirmationToken)
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: PlaybookExecutionDetail = await response.json();
+      setPlaybookExecutionResult(payload);
+      await loadPlaybookExecutions();
+      setPlaybookNotice(
+        t("cmdb.playbooks.messages.executionSucceeded", {
+          key: selectedPlaybook.key,
+          id: payload.id
+        })
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setRunningPlaybookExecute(false);
+    }
+  }, [
+    canWriteCmdb,
+    loadPlaybookExecutions,
+    playbookAssetRef,
+    playbookCatalog,
+    playbookConfirmationToken,
+    playbookDryRunResponse?.execution.id,
+    playbookParamsDraft,
+    selectedPlaybookKey,
+    t
+  ]);
+
   const createTicket = useCallback(async () => {
     if (!canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
@@ -3207,6 +3820,53 @@ export function App() {
   }, [selectedWorkflowRequestId, workflowRequests]);
 
   useEffect(() => {
+    if (playbookCatalog.length === 0) {
+      setSelectedPlaybookKey("");
+      setPlaybookParamsDraft({});
+      setPlaybookDryRunResponse(null);
+      setPlaybookExecutionResult(null);
+      setPlaybookConfirmationToken("");
+      return;
+    }
+
+    if (!selectedPlaybookKey || !playbookCatalog.some((item) => item.key === selectedPlaybookKey)) {
+      setSelectedPlaybookKey(playbookCatalog[0].key);
+    }
+  }, [playbookCatalog, selectedPlaybookKey]);
+
+  useEffect(() => {
+    if (!selectedPlaybookKey) {
+      return;
+    }
+
+    const selected = playbookCatalog.find((item) => item.key === selectedPlaybookKey);
+    if (!selected) {
+      return;
+    }
+
+    const fields = extractPlaybookParamFields(selected.params);
+    setPlaybookParamsDraft((prev) => {
+      const next: Record<string, string> = {};
+      for (const field of fields) {
+        const prior = prev[field.key];
+        if (prior !== undefined) {
+          next[field.key] = prior;
+          continue;
+        }
+        if (field.default !== undefined && field.default !== null) {
+          next[field.key] = String(field.default);
+          continue;
+        }
+        next[field.key] = "";
+      }
+      return next;
+    });
+    setPlaybookDryRunResponse(null);
+    setPlaybookExecutionResult(null);
+    setPlaybookConfirmationToken("");
+  }, [playbookCatalog, selectedPlaybookKey]);
+
+  useEffect(() => {
     if (tickets.length === 0) {
       setSelectedTicketId("");
       setTicketDetail(null);
@@ -3326,6 +3986,18 @@ export function App() {
   const selectedTicketSummary = useMemo(
     () => tickets.find((item) => item.id === selectedTicketNumericId) ?? null,
     [selectedTicketNumericId, tickets]
+  );
+  const playbookCategoryOptions = useMemo(
+    () => Array.from(new Set(playbookCatalog.map((item) => item.category))).sort(),
+    [playbookCatalog]
+  );
+  const selectedPlaybook = useMemo(
+    () => playbookCatalog.find((item) => item.key === selectedPlaybookKey) ?? null,
+    [playbookCatalog, selectedPlaybookKey]
+  );
+  const selectedPlaybookParamFields = useMemo(
+    () => extractPlaybookParamFields(selectedPlaybook?.params ?? null),
+    [selectedPlaybook?.params]
   );
   const workflowStatusBuckets = useMemo(() => {
     const counters = new Map<string, number>();
@@ -3971,11 +4643,41 @@ export function App() {
     visibleSections
   ]);
   useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-daily-cockpit")) {
+      return;
+    }
+
+    void loadDailyCockpitQueue();
+
+    const timer = window.setInterval(() => {
+      void apiFetch(`${API_BASE_URL}/api/v1/streams/metrics?window_minutes=10&sample_limit=200&scope_limit=5`)
+        .catch(() => null)
+        .finally(() => {
+          void loadDailyCockpitQueue();
+        });
+    }, 30000);
+
+    return () => window.clearInterval(timer);
+  }, [authIdentity, loadDailyCockpitQueue, visibleSections]);
+  useEffect(() => {
     if (!authIdentity || !visibleSections.has("section-workflow")) {
       return;
     }
     void Promise.all([loadWorkflowTemplates(), loadWorkflowRequests()]);
   }, [authIdentity, loadWorkflowRequests, loadWorkflowTemplates, visibleSections]);
+  useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-playbook-library")) {
+      return;
+    }
+    void Promise.all([loadPlaybookCatalog(), loadPlaybookExecutions()]);
+  }, [
+    authIdentity,
+    loadPlaybookCatalog,
+    loadPlaybookExecutions,
+    playbookCategoryFilter,
+    playbookQuery,
+    visibleSections
+  ]);
   useEffect(() => {
     if (!authIdentity || !visibleSections.has("section-tickets")) {
       return;
@@ -4003,6 +4705,23 @@ export function App() {
     void loadTopologyMap();
   }, [authIdentity, loadTopologyMap, topologyMap, visibleSections]);
   useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-topology-workspace")) {
+      return;
+    }
+    if (!selectedTopologyMapEdge) {
+      setTopologyDiagnostics(null);
+      setTopologyDiagnosticsNotice(null);
+      return;
+    }
+    void loadTopologyEdgeDiagnostics(selectedTopologyMapEdge.id);
+  }, [
+    authIdentity,
+    loadTopologyEdgeDiagnostics,
+    selectedTopologyMapEdge,
+    topologyDiagnosticsWindowMinutes,
+    visibleSections
+  ]);
+  useEffect(() => {
     if (!departmentWorkspaceOptions.includes(departmentWorkspace)) {
       setDepartmentWorkspace("all");
     }
@@ -4012,6 +4731,11 @@ export function App() {
       setBusinessWorkspace("all");
     }
   }, [businessWorkspace, businessWorkspaceOptions]);
+  useEffect(() => {
+    if (menuAxis === "department" && departmentWorkspace !== "all") {
+      setDailyCockpitDepartmentFilter(departmentWorkspace);
+    }
+  }, [departmentWorkspace, menuAxis]);
   const hasMonitoringSourceFilter = useMemo(
     () =>
       monitoringSourceFilters.source_type.trim().length > 0
@@ -4215,6 +4939,8 @@ export function App() {
     formatSignedDelta,
     loadTicketDetail,
     loadTickets,
+    loadPlaybookCatalog,
+    loadPlaybookExecutions,
     loadWorkflowLogs,
     loadWorkflowRequests,
     loadWorkflowTemplates,
@@ -4230,12 +4956,38 @@ export function App() {
     newWorkflowTemplateDescription,
     newWorkflowTemplateName,
     newWorkflowTemplateSteps,
+    loadingPlaybookCatalog,
+    loadingPlaybookExecutions,
+    playbookAssetRef,
+    playbookCatalog,
+    playbookCategoryFilter,
+    playbookCategoryOptions,
+    playbookConfirmationToken,
+    playbookDryRunResponse,
+    playbookExecutionResult,
+    playbookExecutions,
+    playbookNotice,
+    playbookParamsDraft,
+    playbookQuery,
     rejectWorkflowRequest,
     rejectingWorkflowRequestId,
     removeWorkflowStepFromDraft,
+    runPlaybookDryRun,
+    runPlaybookExecute,
+    runningPlaybookDryRun,
+    runningPlaybookExecute,
     selectedTicketId,
+    selectedPlaybook,
+    selectedPlaybookKey,
+    selectedPlaybookParamFields,
     selectedTicketSummary,
     selectedWorkflowRequest,
+    setPlaybookAssetRef,
+    setPlaybookCategoryFilter,
+    setPlaybookConfirmationToken,
+    setPlaybookParamsDraft,
+    setPlaybookQuery,
+    setSelectedPlaybookKey,
     setNewTicket,
     setNewWorkflowRequest,
     setNewWorkflowStep,
@@ -4534,9 +5286,13 @@ export function App() {
   const topologyWorkspaceSectionsProps = {
     buildTopologyEdgePath,
     canWriteCmdb,
+    loadTopologyEdgeDiagnostics,
     loadTopologyMap,
+    loadingTopologyDiagnostics,
     loadingTopologyMap,
     relationTypeColor,
+    runTopologyDiagnosticsAction,
+    runningTopologyDiagnosticsActionKey,
     selectedTopologyMapEdge,
     selectedTopologyMapEdgeKey,
     selectedTopologyMapNode,
@@ -4544,12 +5300,16 @@ export function App() {
     setSelectedTopologyMapEdgeKey,
     setSelectedTopologyMapNodeId,
     setTopologyDepartmentFilter,
+    setTopologyDiagnosticsWindowMinutes,
     setTopologyScopeInput,
     setTopologySiteFilter,
     setTopologyWindowLimit,
     setTopologyWindowOffset,
     t,
     topologyDepartmentFilter,
+    topologyDiagnostics,
+    topologyDiagnosticsNotice,
+    topologyDiagnosticsWindowMinutes,
     topologyEdgeKey,
     topologyMap,
     topologyMapEdgeRenderMeta,
@@ -4584,12 +5344,18 @@ export function App() {
     cockpitOperationalAssets,
     createSampleAsset,
     creatingSample,
+    dailyCockpitDepartmentFilter,
+    dailyCockpitNotice,
+    dailyCockpitQueue,
+    dailyCockpitSiteFilter,
     departmentWorkspace,
     departmentWorkspaceOptions,
     functionWorkspace,
+    loadDailyCockpitQueue,
     loadAssets,
     loadAssetStats,
     loadFieldDefinitions,
+    loadingDailyCockpit,
     loadingAssetStats,
     loadingAssets,
     loadingFields,
@@ -4600,7 +5366,11 @@ export function App() {
     perspectiveScopeLabel,
     selectedBusinessAssetCount,
     selectedDepartmentAssetCount,
+    runDailyCockpitAction,
+    runningDailyCockpitActionKey,
     setBusinessWorkspace,
+    setDailyCockpitDepartmentFilter,
+    setDailyCockpitSiteFilter,
     setDepartmentWorkspace,
     setFunctionWorkspace,
     setMenuAxis,
@@ -4684,6 +5454,126 @@ function formatLocalDateKey(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+type PlaybookParamNormalizeResult =
+  | { ok: true; value: Record<string, unknown> }
+  | { ok: false; error: string };
+
+function extractPlaybookParamFields(schema: PlaybookParameterSchema | null): PlaybookParameterField[] {
+  if (!schema || !Array.isArray(schema.fields)) {
+    return [];
+  }
+  return schema.fields
+    .filter((field) => typeof field?.key === "string" && typeof field?.type === "string")
+    .map((field) => ({
+      ...field,
+      key: field.key.trim()
+    }))
+    .filter((field) => field.key.length > 0);
+}
+
+function normalizePlaybookParamDraft(
+  fields: PlaybookParameterField[],
+  draft: Record<string, string>
+): PlaybookParamNormalizeResult {
+  const payload: Record<string, unknown> = {};
+
+  for (const field of fields) {
+    const rawInput = (draft[field.key] ?? "").trim();
+    const hasInput = rawInput.length > 0;
+    const effectiveInput = hasInput
+      ? rawInput
+      : (field.default !== undefined && field.default !== null ? String(field.default) : "");
+
+    if (!hasInput && field.required && effectiveInput.length === 0) {
+      return {
+        ok: false,
+        error: `Playbook param '${field.key}' is required.`
+      };
+    }
+    if (effectiveInput.length === 0) {
+      continue;
+    }
+
+    if (field.type === "string") {
+      if (typeof field.max_length === "number" && effectiveInput.length > field.max_length) {
+        return {
+          ok: false,
+          error: `Playbook param '${field.key}' length must be <= ${field.max_length}.`
+        };
+      }
+      payload[field.key] = effectiveInput;
+      continue;
+    }
+
+    if (field.type === "integer") {
+      const parsed = Number.parseInt(effectiveInput, 10);
+      if (!Number.isFinite(parsed)) {
+        return { ok: false, error: `Playbook param '${field.key}' must be an integer.` };
+      }
+      if (typeof field.min === "number" && parsed < field.min) {
+        return { ok: false, error: `Playbook param '${field.key}' must be >= ${field.min}.` };
+      }
+      if (typeof field.max === "number" && parsed > field.max) {
+        return { ok: false, error: `Playbook param '${field.key}' must be <= ${field.max}.` };
+      }
+      payload[field.key] = parsed;
+      continue;
+    }
+
+    if (field.type === "number") {
+      const parsed = Number.parseFloat(effectiveInput);
+      if (!Number.isFinite(parsed)) {
+        return { ok: false, error: `Playbook param '${field.key}' must be numeric.` };
+      }
+      if (typeof field.min === "number" && parsed < field.min) {
+        return { ok: false, error: `Playbook param '${field.key}' must be >= ${field.min}.` };
+      }
+      if (typeof field.max === "number" && parsed > field.max) {
+        return { ok: false, error: `Playbook param '${field.key}' must be <= ${field.max}.` };
+      }
+      payload[field.key] = parsed;
+      continue;
+    }
+
+    if (field.type === "boolean") {
+      const parsed = parseBooleanDraft(effectiveInput);
+      if (parsed === null) {
+        return {
+          ok: false,
+          error: `Playbook param '${field.key}' must be true/false.`
+        };
+      }
+      payload[field.key] = parsed;
+      continue;
+    }
+
+    if (field.type === "enum") {
+      const options = Array.isArray(field.options) ? field.options : [];
+      if (!options.includes(effectiveInput)) {
+        return {
+          ok: false,
+          error: `Playbook param '${field.key}' must be one of: ${options.join(", ")}`
+        };
+      }
+      payload[field.key] = effectiveInput;
+      continue;
+    }
+  }
+
+  return { ok: true, value: payload };
+}
+
+function parseBooleanDraft(value: string): boolean | null {
+  const normalized = value.trim().toLowerCase();
+  if (["true", "1", "yes", "y", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "n", "off"].includes(normalized)) {
+    return false;
+  }
+  return null;
 }
 
 const subSectionTitleStyle: CSSProperties = {

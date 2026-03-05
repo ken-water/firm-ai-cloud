@@ -3,11 +3,13 @@ mod audit;
 mod auth;
 mod auth_api;
 mod cmdb;
+mod cockpit;
 mod discovery_scheduler_worker;
 mod error;
 mod iam;
 mod monitoring;
 mod monitoring_sync_worker;
+mod playbooks;
 mod secrets;
 mod setup;
 mod state;
@@ -176,7 +178,7 @@ fn build_router(state: AppState) -> Router {
         ));
     }
 
-    let mut workflow_routes = workflow::routes();
+    let mut workflow_routes = workflow::routes().merge(playbooks::routes());
     if state.rbac_enabled {
         workflow_routes = workflow_routes.route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -187,6 +189,14 @@ fn build_router(state: AppState) -> Router {
     let mut ticket_routes = tickets::routes();
     if state.rbac_enabled {
         ticket_routes = ticket_routes.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::rbac_guard,
+        ));
+    }
+
+    let mut ops_routes = cockpit::routes();
+    if state.rbac_enabled {
+        ops_routes = ops_routes.route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::rbac_guard,
         ));
@@ -204,6 +214,7 @@ fn build_router(state: AppState) -> Router {
         .nest("/api/v1/setup", setup_routes)
         .nest("/api/v1/alerts", alert_routes)
         .nest("/api/v1/topology", topology_routes)
+        .nest("/api/v1/ops", ops_routes)
         .nest("/api/v1/iam", iam_routes)
         .nest("/api/v1/audit", audit_routes)
         .with_state(state)

@@ -22,10 +22,16 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     createSampleAsset,
     departmentWorkspace,
     departmentWorkspaceOptions,
+    dailyCockpitDepartmentFilter,
+    dailyCockpitNotice,
+    dailyCockpitQueue,
+    dailyCockpitSiteFilter,
     functionWorkspace,
+    loadDailyCockpitQueue,
     loadAssets,
     loadAssetStats,
     loadFieldDefinitions,
+    loadingDailyCockpit,
     loadingAssetStats,
     loadingAssets,
     loadingFields,
@@ -36,7 +42,11 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     perspectiveScopeLabel,
     selectedBusinessAssetCount,
     selectedDepartmentAssetCount,
+    runDailyCockpitAction,
+    runningDailyCockpitActionKey,
     setBusinessWorkspace,
+    setDailyCockpitDepartmentFilter,
+    setDailyCockpitSiteFilter,
     setDepartmentWorkspace,
     setFunctionWorkspace,
     setMenuAxis,
@@ -133,6 +143,115 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
               scope: perspectiveScopeLabel
             })}
           </p>
+        </SectionCard>
+      )}
+
+      {visibleSections.has("section-daily-cockpit") && (
+        <SectionCard
+          id="section-daily-cockpit"
+          title={t("cmdb.dailyCockpit.title")}
+          actions={(
+            <button onClick={() => void loadDailyCockpitQueue()} disabled={loadingDailyCockpit}>
+              {loadingDailyCockpit ? t("cmdb.actions.loading") : t("cmdb.dailyCockpit.actions.refresh")}
+            </button>
+          )}
+        >
+          {dailyCockpitNotice && <p className="banner banner-success">{dailyCockpitNotice}</p>}
+          {!canWriteCmdb && <p className="inline-note">{t("cmdb.dailyCockpit.messages.readOnlyHint")}</p>}
+
+          <div className="filter-grid" style={{ marginBottom: "0.75rem" }}>
+            <label className="control-field">
+              <span>{t("cmdb.dailyCockpit.filters.site")}</span>
+              <input
+                value={dailyCockpitSiteFilter}
+                onChange={(event) => setDailyCockpitSiteFilter(event.target.value)}
+                placeholder="dc-a"
+              />
+            </label>
+            <label className="control-field">
+              <span>{t("cmdb.dailyCockpit.filters.department")}</span>
+              <input
+                value={dailyCockpitDepartmentFilter}
+                onChange={(event) => setDailyCockpitDepartmentFilter(event.target.value)}
+                placeholder="platform"
+              />
+            </label>
+          </div>
+
+          {!dailyCockpitQueue ? (
+            <p>{loadingDailyCockpit ? t("cmdb.dailyCockpit.messages.loading") : t("cmdb.dailyCockpit.messages.noData")}</p>
+          ) : dailyCockpitQueue.items.length === 0 ? (
+            <p>{t("cmdb.dailyCockpit.messages.empty")}</p>
+          ) : (
+            <>
+              <p className="section-note">
+                {t("cmdb.dailyCockpit.summary", {
+                  total: dailyCockpitQueue.window.total,
+                  visible: dailyCockpitQueue.items.length
+                })}
+              </p>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "1200px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{t("cmdb.dailyCockpit.table.type")}</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{t("cmdb.dailyCockpit.table.priority")}</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{t("cmdb.dailyCockpit.table.rationale")}</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{t("cmdb.dailyCockpit.table.scope")}</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{t("cmdb.dailyCockpit.table.time")}</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{t("cmdb.dailyCockpit.table.actions")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dailyCockpitQueue.items.map((item: any) => (
+                      <tr key={item.queue_key}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          <span className="status-chip">{item.item_type}</span>
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          <span className={`status-chip ${item.priority_level === "critical" ? "status-chip-danger" : ""}`}>
+                            {item.priority_level} ({item.priority_score})
+                          </span>
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          <p style={{ margin: 0 }}>{item.rationale}</p>
+                          {Array.isArray(item.rationale_details) && item.rationale_details.length > 0 && (
+                            <p className="section-note" style={{ marginTop: "0.25rem" }}>
+                              {item.rationale_details.join(" | ")}
+                            </p>
+                          )}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.site ?? "-"} / {item.department ?? "-"}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {new Date(item.observed_at).toLocaleString()}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          <div className="toolbar-row">
+                            {(item.actions ?? []).map((action: any) => {
+                              const actionKey = `${item.queue_key}:${action.key}`;
+                              const running = runningDailyCockpitActionKey === actionKey;
+                              const disabled = running || (action.requires_write && !canWriteCmdb);
+                              return (
+                                <button
+                                  key={actionKey}
+                                  onClick={() => void runDailyCockpitAction(item, action)}
+                                  disabled={disabled}
+                                >
+                                  {running ? t("cmdb.actions.loading") : action.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </SectionCard>
       )}
 

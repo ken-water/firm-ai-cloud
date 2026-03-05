@@ -111,6 +111,7 @@ VIEWER_USER="rbac-viewer-${STAMP}"
 log "Validate operator permission matrix"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/preflight"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/checklist"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-op-asset-${STAMP}\",\"status\":\"active\"}"
@@ -129,6 +130,9 @@ fi
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/monitoring/sources/${OPERATOR_MONITOR_SOURCE_ID}/probe"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/alerts"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/alerts/policies"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/workflow/playbooks/restart-service-safe/dry-run" \
+  "{\"asset_ref\":\"rbac-op-asset-${STAMP}\",\"params\":{\"asset_ref\":\"rbac-op-asset-${STAMP}\",\"service_name\":\"nginx\",\"grace_seconds\":30}}"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/alerts/policies" \
   "{\"policy_key\":\"rbac-op-policy-${STAMP}\",\"name\":\"RBAC OP ${STAMP}\",\"is_enabled\":true,\"match_source\":\"monitoring_sync\",\"match_severity\":\"warning\",\"dedup_window_seconds\":1800,\"ticket_priority\":\"high\",\"ticket_category\":\"incident\"}"
 assert_code 403 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/iam/users"
@@ -142,6 +146,7 @@ assert_code 403 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/audit/logs"
 log "Validate viewer permission matrix"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/preflight"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/checklist"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-viewer-asset-${STAMP}\",\"status\":\"active\"}"
@@ -160,6 +165,9 @@ assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/discovery/notif
   "{\"name\":\"rbac-viewer-channel\",\"channel_type\":\"webhook\",\"target\":\"http://127.0.0.1:65535/h\"}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/alerts"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/alerts/policies"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/workflow/playbooks/restart-service-safe/dry-run" \
+  "{\"asset_ref\":\"rbac-viewer-asset-${STAMP}\",\"params\":{\"asset_ref\":\"rbac-viewer-asset-${STAMP}\",\"service_name\":\"nginx\",\"grace_seconds\":30}}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/alerts/policies" \
   "{\"policy_key\":\"rbac-viewer-policy-${STAMP}\",\"name\":\"RBAC VIEWER ${STAMP}\",\"is_enabled\":true,\"match_source\":\"monitoring_sync\",\"match_severity\":\"warning\",\"dedup_window_seconds\":1800,\"ticket_priority\":\"high\",\"ticket_category\":\"incident\"}"
 

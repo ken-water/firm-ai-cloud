@@ -126,6 +126,33 @@
         "loadingOverview": "Loading monitoring overview..."
       }
     },
+    "dailyCockpit": {
+      "title": "Daily Operations Cockpit",
+      "summary": "Total queue={{total}} | Visible={{visible}}",
+      "actions": {
+        "refresh": "Refresh Queue"
+      },
+      "filters": {
+        "site": "Site Filter",
+        "department": "Department Filter"
+      },
+      "messages": {
+        "loading": "Loading daily cockpit queue...",
+        "noData": "Daily cockpit queue is not loaded yet.",
+        "empty": "No pending operations for current scope.",
+        "loaded": "Daily queue loaded: total={{total}}, visible={{visible}}.",
+        "actionDone": "Action '{{action}}' completed.",
+        "readOnlyHint": "Read-only mode: write actions are visible but disabled."
+      },
+      "table": {
+        "type": "Type",
+        "priority": "Priority",
+        "rationale": "Rationale",
+        "scope": "Scope",
+        "time": "Observed At",
+        "actions": "Next Actions"
+      }
+    },
     "workflow": {
       "title": "Workflow and Ticket Automation",
       "summary": "Templates: {{templates}} | Requests: {{requests}}",
@@ -319,6 +346,74 @@
           "duration": "Duration (ms)",
           "output": "Output",
           "time": "Finished At"
+        }
+      }
+    },
+    "playbooks": {
+      "title": "Playbook Library",
+      "summary": "Catalog={{catalog}} | Recent executions={{executions}} | Selected={{selected}}",
+      "actions": {
+        "refreshCatalog": "Refresh Catalog",
+        "refreshExecutions": "Refresh Executions",
+        "select": "Select",
+        "selected": "Selected",
+        "dryRun": "Dry-Run",
+        "execute": "Execute"
+      },
+      "filters": {
+        "category": "Category",
+        "allCategories": "All categories",
+        "query": "Search",
+        "queryPlaceholder": "Search by key/name/description"
+      },
+      "form": {
+        "title": "Execution Form",
+        "assetRef": "Asset Reference",
+        "playbookHint": "Playbook={{key}} | risk={{risk}}",
+        "selectOption": "Select an option",
+        "confirmationToken": "Confirmation Token"
+      },
+      "messages": {
+        "readOnlyHint": "Read-only mode: viewers can inspect catalog and history but cannot run playbooks.",
+        "loadingCatalog": "Loading playbook catalog...",
+        "noCatalog": "No playbooks found for current filters.",
+        "selectPlaybook": "Select one playbook first.",
+        "noParams": "This playbook has no input parameters.",
+        "confirmationRequired": "This playbook requires dry-run and confirmation token before execute.",
+        "dryRunReady": "Dry-run prepared for '{{key}}' (execution #{{id}}).",
+        "executionSucceeded": "Playbook '{{key}}' executed successfully (execution #{{id}}).",
+        "loadingExecutions": "Loading playbook executions...",
+        "noExecutions": "No playbook executions yet."
+      },
+      "results": {
+        "title": "Dry-Run and Execution Result",
+        "noDryRun": "Run dry-run to preview steps and risk summary.",
+        "dryRunSummary": "Dry-run #{{id}} ready (risk={{risk}}).",
+        "confirmationHint": "Use token {{token}} before {{expiresAt}} to execute high-risk playbook.",
+        "noExecution": "No execution result yet.",
+        "executionSummary": "Execution #{{id}} status={{status}}.",
+        "executionActor": "Actor={{actor}} | finishedAt={{finishedAt}}"
+      },
+      "history": {
+        "title": "Execution History"
+      },
+      "table": {
+        "catalog": {
+          "key": "Key",
+          "name": "Name",
+          "category": "Category",
+          "risk": "Risk",
+          "confirmation": "Need Confirmation",
+          "actions": "Actions"
+        },
+        "history": {
+          "id": "Execution ID",
+          "playbook": "Playbook",
+          "mode": "Mode",
+          "status": "Status",
+          "actor": "Actor",
+          "asset": "Asset",
+          "createdAt": "Created At"
         }
       }
     },
@@ -863,6 +958,9 @@
         "loaded": "Topology workspace loaded: {{nodes}} nodes, {{edges}} edges.",
         "invalidLimit": "Topology node limit must be an integer between 10 and 500.",
         "invalidOffset": "Topology node offset must be an integer >= 0.",
+        "invalidDiagnosticsWindow": "Diagnostics window must be an integer between 15 and 1440 minutes.",
+        "diagnosticsLoaded": "Diagnostics loaded: alerts={{alerts}}, changes={{changes}}.",
+        "diagnosticsActionDone": "Diagnostics action '{{action}}' completed.",
         "selectNode": "Select one node to view scope and relation details.",
         "selectEdge": "Select one edge to view relation drill details.",
         "readOnlyHint": "Read-only mode: topology drill actions are available, but no write operation is exposed."
@@ -874,6 +972,20 @@
         "nodeEdges": "Related edges: outbound={{outbound}}, inbound={{inbound}}, total={{total}}",
         "edgeTitle": "Edge Detail",
         "edgeSummary": "Edge #{{id}}: {{src}} -> {{dst}} | type={{relationType}} | source={{source}}"
+      },
+      "diagnostics": {
+        "windowLabel": "Diagnostics Window (minutes)",
+        "refresh": "Refresh Diagnostics",
+        "loading": "Loading edge diagnostics...",
+        "empty": "Select an edge to load diagnostics context.",
+        "summary": "Trend points={{trend}} | Active alerts={{alerts}} | Recent changes={{changes}}",
+        "trendTitle": "Recent Trend",
+        "noTrend": "No trend points in selected window.",
+        "alertTitle": "Active Alerts",
+        "noAlerts": "No active alerts tied to this edge.",
+        "checklistTitle": "Troubleshooting Checklist",
+        "noChecklist": "No checklist items available.",
+        "actionsTitle": "Quick Actions"
       }
     }
   },

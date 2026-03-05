@@ -1,4 +1,4 @@
-# RBAC Permission Coverage (v0.1.0)
+# RBAC Permission Coverage (v0.1.1)
 
 Date: 2026-03-05
 
@@ -22,12 +22,15 @@ This document records the current permission matrix, route-to-permission mapping
 | `monitoring.sources.read` | Allow | Allow | Allow |
 | `monitoring.sources.write` | Allow | Allow | Deny |
 | `ops.setup.read` | Allow | Allow | Allow |
+| `ops.cockpit.read` | Allow | Allow | Allow |
 | `alerts.read` | Allow | Allow | Allow |
 | `alerts.write` | Allow | Allow | Deny |
 | `workflow.requests.read` | Allow | Allow | Allow |
 | `workflow.requests.write` | Allow | Allow | Deny |
 | `workflow.approvals.read` | Allow | Allow | Allow |
 | `workflow.approvals.write` | Allow | Allow | Deny |
+| `workflow.playbooks.read` | Allow | Allow | Allow |
+| `workflow.playbooks.write` | Allow | Allow | Deny |
 | `tickets.read` | Allow | Allow | Allow |
 | `tickets.write` | Allow | Allow | Deny |
 
@@ -36,6 +39,8 @@ Source of truth:
 - Base RBAC seed: `services/api/migrations/202603020008_create_rbac_tables.sql`
 - Ticket permissions: `services/api/migrations/202603040004_add_ticket_permissions.sql`
 - Setup/alert permissions: `services/api/migrations/202603050003_create_alerting_and_setup_permissions.sql`
+- Playbook permissions: `services/api/migrations/202603050004_create_playbook_catalog_and_execution_logs.sql`
+- Daily cockpit permission: `services/api/migrations/202603050005_add_ops_cockpit_permission.sql`
 
 ## 2. Endpoint Group Mapping
 
@@ -71,6 +76,7 @@ RBAC route mapping source:
 | --- | --- |
 | `/api/v1/setup/preflight` | `ops.setup.read` |
 | `/api/v1/setup/checklist` | `ops.setup.read` |
+| `/api/v1/ops/cockpit/queue` | `ops.cockpit.read` |
 | `/api/v1/alerts*` | `alerts.read` / `alerts.write` |
 
 ### 2.4 Workflow and Tickets
@@ -79,6 +85,7 @@ RBAC route mapping source:
 | --- | --- |
 | `/api/v1/workflow/requests*` | `workflow.requests.read` / `workflow.requests.write` |
 | `/api/v1/workflow/approvals*` | `workflow.approvals.read` / `workflow.approvals.write` |
+| `/api/v1/workflow/playbooks*` | `workflow.playbooks.read` / `workflow.playbooks.write` |
 | `/api/v1/tickets*` | `tickets.read` / `tickets.write` |
 
 ### 2.5 Administration
