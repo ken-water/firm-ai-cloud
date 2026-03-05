@@ -163,3 +163,28 @@ bash scripts/benchmark-trend-delta.sh \
   --current-sse-summary .run/benchmarks/profile-scale-1k-<current-run-id>/sse/summary.json \
   --baseline-sse-summary .run/benchmarks/profile-scale-1k-<baseline-run-id>/sse/summary.json
 ```
+
+## 11. v0.1.2 Profile SLO Policy (Tuned Thresholds)
+
+Source of truth: `scripts/benchmark-threshold-policy.json`.
+
+API default thresholds by profile:
+
+| Profile | Success Rate Min | P95 Max (ms) | P99 Max (ms) |
+| --- | --- | --- | --- |
+| `smoke` | 99.0% | 1200 | 2000 |
+| `scale-1k` | 98.5% | 1600 | 2600 |
+| `scale-5k` | 97.0% | 2200 | 3400 |
+
+SSE lag thresholds by profile:
+
+| Profile | Lag P95 Max (ms) | Lag P99 Max (ms) | Lag Max (ms) |
+| --- | --- | --- | --- |
+| `smoke` | 12000 | 18000 | 30000 |
+| `scale-1k` | 15000 | 22000 | 35000 |
+| `scale-5k` | 22000 | 30000 | 45000 |
+
+Release closure evidence snapshot (v0.1.2):
+
+- Profile gate summary: `.run/benchmarks/gate-test-scale5k/gate-summary.md` (PASS, 25/25 checks).
+- Trend delta summary: `.run/benchmarks/delta-test/summary.md` (API P95/P99 improved across core endpoints).

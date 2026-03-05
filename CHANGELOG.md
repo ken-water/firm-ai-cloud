@@ -8,6 +8,20 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
+- None yet.
+
+### Changed
+
+- None yet.
+
+### Fixed
+
+- None yet.
+
+## [0.1.2] - 2026-03-05
+
+### Added
+
 - Scale benchmark profile orchestration script: `scripts/benchmark-scale-profiles.sh`.
 - Benchmark trend delta reporting script: `scripts/benchmark-trend-delta.sh`.
 - LDAP dev connector login baseline API: `POST /api/v1/auth/ldap/login`.
