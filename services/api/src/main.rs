@@ -1,3 +1,4 @@
+mod alerts;
 mod audit;
 mod auth;
 mod auth_api;
@@ -8,6 +9,7 @@ mod iam;
 mod monitoring;
 mod monitoring_sync_worker;
 mod secrets;
+mod setup;
 mod state;
 mod streams;
 mod tickets;
@@ -150,6 +152,22 @@ fn build_router(state: AppState) -> Router {
         ));
     }
 
+    let mut setup_routes = setup::routes();
+    if state.rbac_enabled {
+        setup_routes = setup_routes.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::rbac_guard,
+        ));
+    }
+
+    let mut alert_routes = alerts::routes();
+    if state.rbac_enabled {
+        alert_routes = alert_routes.route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::rbac_guard,
+        ));
+    }
+
     let mut topology_routes = topology::routes();
     if state.rbac_enabled {
         topology_routes = topology_routes.route_layer(axum::middleware::from_fn_with_state(
@@ -183,6 +201,8 @@ fn build_router(state: AppState) -> Router {
         .nest("/api/v1/workflow", workflow_routes)
         .nest("/api/v1", ticket_routes)
         .nest("/api/v1/streams", stream_routes)
+        .nest("/api/v1/setup", setup_routes)
+        .nest("/api/v1/alerts", alert_routes)
         .nest("/api/v1/topology", topology_routes)
         .nest("/api/v1/iam", iam_routes)
         .nest("/api/v1/audit", audit_routes)

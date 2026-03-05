@@ -57,6 +57,7 @@ import {
 import { CmdbSections } from "./pages/cmdb-sections";
 import { IntegrationMonitoringSections } from "./pages/integration-monitoring-sections";
 import { OverviewAdminSections } from "./pages/overview-admin-sections";
+import { SetupAlertSections } from "./pages/setup-alert-sections";
 import { TopologyWorkspaceSections } from "./pages/topology-workspace-sections";
 import { WorkflowTicketSections } from "./pages/workflow-ticket-sections";
 
@@ -554,6 +555,99 @@ type TicketListResponse = {
   offset: number;
 };
 
+type SetupCheckStatus = "pass" | "warn" | "fail";
+
+type SetupCheckItem = {
+  key: string;
+  title: string;
+  status: SetupCheckStatus;
+  critical: boolean;
+  message: string;
+  remediation: string;
+};
+
+type SetupChecklistSummary = {
+  total: number;
+  passed: number;
+  warned: number;
+  failed: number;
+  critical_failed: number;
+  ready: boolean;
+};
+
+type SetupChecklistResponse = {
+  generated_at: string;
+  category: string;
+  summary: SetupChecklistSummary;
+  checks: SetupCheckItem[];
+};
+
+type AlertSeverity = "critical" | "warning" | "info";
+type AlertStatus = "open" | "acknowledged" | "closed";
+
+type AlertRecord = {
+  id: number;
+  alert_source: string;
+  alert_key: string;
+  dedup_key: string;
+  title: string;
+  severity: AlertSeverity;
+  status: AlertStatus;
+  site: string | null;
+  department: string | null;
+  asset_id: number | null;
+  payload: Record<string, unknown>;
+  first_seen_at: string;
+  last_seen_at: string;
+  acknowledged_by: string | null;
+  acknowledged_at: string | null;
+  closed_by: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type AlertTimelineRecord = {
+  id: number;
+  alert_id: number;
+  event_type: string;
+  actor: string;
+  message: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+type AlertLinkedTicketRecord = {
+  id: number;
+  ticket_no: string;
+  title: string;
+  status: string;
+  priority: string;
+  created_at: string;
+};
+
+type AlertListResponse = {
+  items: AlertRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+type AlertDetailResponse = {
+  alert: AlertRecord;
+  timeline: AlertTimelineRecord[];
+  linked_tickets: AlertLinkedTicketRecord[];
+};
+
+type AlertBulkActionResponse = {
+  action: string;
+  requested: number;
+  updated: number;
+  skipped: number;
+  updated_ids: number[];
+  skipped_ids: number[];
+};
+
 type NewFieldForm = {
   field_key: string;
   name: string;
@@ -608,6 +702,13 @@ type MonitoringSourceFilterForm = {
   site: string;
   department: string;
   is_enabled: "all" | "true" | "false";
+};
+
+type AlertFilterForm = {
+  status: "all" | AlertStatus;
+  severity: "all" | AlertSeverity;
+  site: string;
+  query: string;
 };
 
 type NewWorkflowTemplateStepForm = {
@@ -740,6 +841,13 @@ const defaultMonitoringSourceFilters: MonitoringSourceFilterForm = {
   site: "",
   department: "",
   is_enabled: "all"
+};
+
+const defaultAlertFilters: AlertFilterForm = {
+  status: "open",
+  severity: "all",
+  site: "",
+  query: ""
 };
 
 const defaultWorkflowStepForm: NewWorkflowTemplateStepForm = {
@@ -916,6 +1024,24 @@ export function App() {
   const [monitoringMetricsError, setMonitoringMetricsError] = useState<string | null>(null);
   const [monitoringOverview, setMonitoringOverview] = useState<MonitoringOverviewResponse | null>(null);
   const [loadingMonitoringOverview, setLoadingMonitoringOverview] = useState(false);
+  const [setupPreflight, setSetupPreflight] = useState<SetupChecklistResponse | null>(null);
+  const [setupChecklist, setSetupChecklist] = useState<SetupChecklistResponse | null>(null);
+  const [loadingSetupPreflight, setLoadingSetupPreflight] = useState(false);
+  const [loadingSetupChecklist, setLoadingSetupChecklist] = useState(false);
+  const [setupStep, setSetupStep] = useState(0);
+  const [setupCompleted, setSetupCompleted] = useState(false);
+  const [setupNotice, setSetupNotice] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<AlertRecord[]>([]);
+  const [alertsTotal, setAlertsTotal] = useState(0);
+  const [loadingAlerts, setLoadingAlerts] = useState(false);
+  const [selectedAlertIds, setSelectedAlertIds] = useState<number[]>([]);
+  const [selectedAlertId, setSelectedAlertId] = useState("");
+  const [alertDetail, setAlertDetail] = useState<AlertDetailResponse | null>(null);
+  const [loadingAlertDetail, setLoadingAlertDetail] = useState(false);
+  const [alertActionRunningId, setAlertActionRunningId] = useState<number | null>(null);
+  const [alertBulkActionRunning, setAlertBulkActionRunning] = useState<"ack" | "close" | null>(null);
+  const [alertNotice, setAlertNotice] = useState<string | null>(null);
+  const [alertFilters, setAlertFilters] = useState<AlertFilterForm>(defaultAlertFilters);
   const [activePage, setActivePage] = useState<ConsolePage>(() =>
     resolveConsolePageFromHash(typeof window !== "undefined" ? window.location.hash : "", true)
   );
@@ -1571,6 +1697,291 @@ export function App() {
       setLoadingMonitoringOverview(false);
     }
   }, []);
+
+  const loadSetupPreflight = useCallback(async () => {
+    setLoadingSetupPreflight(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/setup/preflight`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: SetupChecklistResponse = await response.json();
+      setSetupPreflight(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setSetupPreflight(null);
+      return null;
+    } finally {
+      setLoadingSetupPreflight(false);
+    }
+  }, []);
+
+  const loadSetupChecklist = useCallback(async () => {
+    setLoadingSetupChecklist(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/setup/checklist`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: SetupChecklistResponse = await response.json();
+      setSetupChecklist(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setSetupChecklist(null);
+      return null;
+    } finally {
+      setLoadingSetupChecklist(false);
+    }
+  }, []);
+
+  const refreshSetupWizard = useCallback(async () => {
+    setSetupNotice(null);
+    await Promise.all([loadSetupPreflight(), loadSetupChecklist()]);
+  }, [loadSetupChecklist, loadSetupPreflight]);
+
+  const completeSetupWizard = useCallback(async () => {
+    const blockingChecks = [...(setupPreflight?.checks ?? []), ...(setupChecklist?.checks ?? [])]
+      .filter((item) => item.critical && item.status === "fail");
+
+    if (blockingChecks.length > 0) {
+      setError(t("setupWizard.messages.completeBlocked", { count: blockingChecks.length }));
+      return;
+    }
+
+    setSetupCompleted(true);
+    setSetupNotice(t("setupWizard.messages.completed"));
+  }, [setupChecklist?.checks, setupPreflight?.checks, t]);
+
+  const loadAlerts = useCallback(async () => {
+    setLoadingAlerts(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({ limit: "120" });
+      if (alertFilters.status !== "all") {
+        params.set("status", alertFilters.status);
+      }
+      if (alertFilters.severity !== "all") {
+        params.set("severity", alertFilters.severity);
+      }
+      if (alertFilters.site.trim().length > 0) {
+        params.set("site", alertFilters.site.trim());
+      }
+      if (alertFilters.query.trim().length > 0) {
+        params.set("query", alertFilters.query.trim());
+      }
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/alerts?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AlertListResponse = await response.json();
+      setAlerts(payload.items);
+      setAlertsTotal(payload.total);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setAlerts([]);
+      setAlertsTotal(0);
+      return [];
+    } finally {
+      setLoadingAlerts(false);
+    }
+  }, [alertFilters]);
+
+  const loadAlertDetail = useCallback(async (alertId: number) => {
+    if (!Number.isFinite(alertId) || alertId <= 0) {
+      setAlertDetail(null);
+      return null;
+    }
+
+    setLoadingAlertDetail(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/alerts/${alertId}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AlertDetailResponse = await response.json();
+      setAlertDetail(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setAlertDetail(null);
+      return null;
+    } finally {
+      setLoadingAlertDetail(false);
+    }
+  }, []);
+
+  const toggleAlertSelection = useCallback((alertId: number, focus?: boolean) => {
+    if (!Number.isFinite(alertId) || alertId <= 0) {
+      return;
+    }
+    setSelectedAlertIds((prev) => {
+      if (prev.includes(alertId)) {
+        return prev.filter((item) => item !== alertId);
+      }
+      return [...prev, alertId];
+    });
+    if (focus) {
+      setSelectedAlertId(String(alertId));
+    }
+  }, []);
+
+  const toggleSelectAllAlerts = useCallback(() => {
+    setSelectedAlertIds((prev) => {
+      const ids = alerts.map((item) => item.id);
+      if (ids.length === 0) {
+        return [];
+      }
+      const allSelected = ids.every((id) => prev.includes(id));
+      return allSelected ? [] : ids;
+    });
+
+    if (!selectedAlertId && alerts.length > 0) {
+      setSelectedAlertId(String(alerts[0].id));
+    }
+  }, [alerts, selectedAlertId]);
+
+  const triggerSingleAcknowledge = useCallback(async (alertId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+    if (!Number.isFinite(alertId) || alertId <= 0) {
+      return;
+    }
+
+    setAlertActionRunningId(alertId);
+    setAlertNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/alerts/${alertId}/ack`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          note: "acknowledged from web console"
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      setSelectedAlertId(String(alertId));
+      await Promise.all([loadAlerts(), loadAlertDetail(alertId)]);
+      setAlertNotice(t("alertsCenter.messages.ackSuccess", { id: alertId }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setAlertActionRunningId(null);
+    }
+  }, [canWriteCmdb, loadAlertDetail, loadAlerts, t]);
+
+  const closeAlert = useCallback(async (alertId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+    if (!Number.isFinite(alertId) || alertId <= 0) {
+      return;
+    }
+
+    setAlertActionRunningId(alertId);
+    setAlertNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/alerts/${alertId}/close`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          note: "closed from web console"
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      setSelectedAlertId(String(alertId));
+      await Promise.all([loadAlerts(), loadAlertDetail(alertId)]);
+      setAlertNotice(t("alertsCenter.messages.closeSuccess", { id: alertId }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setAlertActionRunningId(null);
+    }
+  }, [canWriteCmdb, loadAlertDetail, loadAlerts, t]);
+
+  const runBulkAlertAction = useCallback(
+    async (action: "ack" | "close") => {
+      if (!canWriteCmdb) {
+        setError(t("auth.messages.forbiddenAction"));
+        return;
+      }
+
+      const ids = selectedAlertIds.filter((id) => Number.isFinite(id) && id > 0);
+      if (ids.length === 0) {
+        return;
+      }
+
+      setAlertBulkActionRunning(action);
+      setAlertNotice(null);
+      setError(null);
+
+      try {
+        const endpoint = action === "ack" ? "bulk/ack" : "bulk/close";
+        const response = await apiFetch(`${API_BASE_URL}/api/v1/alerts/${endpoint}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            ids,
+            note: action === "ack" ? "bulk acknowledge from web console" : "bulk close from web console"
+          })
+        });
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response));
+        }
+
+        const payload: AlertBulkActionResponse = await response.json();
+        const selectedIdNumber = Number.parseInt(selectedAlertId, 10);
+        await Promise.all([
+          loadAlerts(),
+          Number.isFinite(selectedIdNumber) && selectedIdNumber > 0
+            ? loadAlertDetail(selectedIdNumber)
+            : Promise.resolve(null)
+        ]);
+        setSelectedAlertIds([]);
+        setAlertNotice(
+          t(
+            action === "ack"
+              ? "alertsCenter.messages.bulkAckSuccess"
+              : "alertsCenter.messages.bulkCloseSuccess",
+            { updated: payload.updated, skipped: payload.skipped }
+          )
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "unknown error");
+      } finally {
+        setAlertBulkActionRunning(null);
+      }
+    },
+    [canWriteCmdb, loadAlertDetail, loadAlerts, selectedAlertId, selectedAlertIds, t]
+  );
+
+  const triggerBulkAcknowledge = useCallback(async () => {
+    await runBulkAlertAction("ack");
+  }, [runBulkAlertAction]);
+
+  const triggerBulkClose = useCallback(async () => {
+    await runBulkAlertAction("close");
+  }, [runBulkAlertAction]);
 
   const loadMonitoringMetrics = useCallback(async (assetId: number, windowMinutes: number) => {
     if (!Number.isFinite(assetId) || assetId <= 0) {
@@ -3497,6 +3908,47 @@ export function App() {
     return new Set<string>(consolePageSections[activePage]);
   }, [activePage, canAccessAdmin]);
   useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-setup-wizard")) {
+      return;
+    }
+    void refreshSetupWizard();
+  }, [authIdentity, refreshSetupWizard, visibleSections]);
+  useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-alert-center")) {
+      return;
+    }
+    void loadAlerts();
+  }, [authIdentity, loadAlerts, visibleSections]);
+  useEffect(() => {
+    if (alerts.length === 0) {
+      setSelectedAlertId("");
+      setAlertDetail(null);
+      setSelectedAlertIds([]);
+      return;
+    }
+
+    setSelectedAlertIds((prev) => prev.filter((id) => alerts.some((item) => item.id === id)));
+
+    if (selectedAlertId) {
+      const id = Number.parseInt(selectedAlertId, 10);
+      if (Number.isFinite(id) && alerts.some((item) => item.id === id)) {
+        return;
+      }
+    }
+    setSelectedAlertId(String(alerts[0].id));
+  }, [alerts, selectedAlertId]);
+  useEffect(() => {
+    if (!authIdentity || !visibleSections.has("section-alert-center")) {
+      return;
+    }
+    const alertId = Number.parseInt(selectedAlertId, 10);
+    if (!Number.isFinite(alertId) || alertId <= 0) {
+      setAlertDetail(null);
+      return;
+    }
+    void loadAlertDetail(alertId);
+  }, [authIdentity, loadAlertDetail, selectedAlertId, visibleSections]);
+  useEffect(() => {
     if (!authIdentity || !visibleSections.has("section-discovery")) {
       return;
     }
@@ -3648,11 +4100,25 @@ export function App() {
     setAssetSiteFilter("");
     setAssetSortMode("updated_desc");
   }, []);
+  const setAlertStatusFilter = useCallback((status: AlertFilterForm["status"]) => {
+    setAlertFilters((prev) => ({ ...prev, status }));
+  }, []);
+  const setAlertSeverityFilter = useCallback((severity: AlertFilterForm["severity"]) => {
+    setAlertFilters((prev) => ({ ...prev, severity }));
+  }, []);
+  const setAlertSiteFilter = useCallback((site: string) => {
+    setAlertFilters((prev) => ({ ...prev, site }));
+  }, []);
+  const setAlertQueryFilter = useCallback((query: string) => {
+    setAlertFilters((prev) => ({ ...prev, query }));
+  }, []);
   const navigationItems = useMemo(() => {
     const items: Array<{ page: ConsolePage; label: string }> = [
+      { page: "setup", label: t("auth.navigation.setup") },
       { page: "overview", label: t("auth.navigation.overview") },
       { page: "cmdb", label: t("auth.navigation.cmdb") },
       { page: "monitoring", label: t("auth.navigation.monitoring") },
+      { page: "alerts", label: t("auth.navigation.alerts") },
       { page: "topology", label: t("auth.navigation.topology") },
       { page: "workflow", label: t("auth.navigation.workflow") },
       { page: "tickets", label: t("auth.navigation.tickets") }
@@ -4024,6 +4490,47 @@ export function App() {
     visibleSections
   };
 
+  const setupAlertSectionsProps = {
+    alertActionRunningId,
+    alertBulkActionRunning,
+    alertDetail,
+    alertNotice,
+    alertQueryFilter: alertFilters.query,
+    alertSeverityFilter: alertFilters.severity,
+    alertSiteFilter: alertFilters.site,
+    alertStatusFilter: alertFilters.status,
+    alerts,
+    alertsTotal,
+    canWriteCmdb,
+    closeAlert,
+    completeSetupWizard,
+    loadingAlertDetail,
+    loadingAlerts,
+    loadingSetupChecklist,
+    loadingSetupPreflight,
+    refreshAlerts: loadAlerts,
+    refreshSetupWizard,
+    selectedAlertId,
+    selectedAlertIds,
+    setAlertQueryFilter,
+    setAlertSeverityFilter,
+    setAlertSiteFilter,
+    setAlertStatusFilter,
+    setSetupStep,
+    setupChecklist,
+    setupCompleted,
+    setupNotice,
+    setupPreflight,
+    setupStep,
+    t,
+    toggleAlertSelection,
+    toggleSelectAllAlerts,
+    triggerBulkAcknowledge,
+    triggerBulkClose,
+    triggerSingleAcknowledge,
+    visibleSections
+  };
+
   const topologyWorkspaceSectionsProps = {
     buildTopologyEdgePath,
     canWriteCmdb,
@@ -4134,6 +4641,7 @@ export function App() {
       warning={!canWriteCmdb ? t("auth.messages.readOnly") : null}
     >
       <OverviewAdminSections {...overviewAdminSectionsProps} />
+      <SetupAlertSections {...setupAlertSectionsProps} />
       <WorkflowTicketSections {...workflowTicketSectionsProps} />
       <IntegrationMonitoringSections {...integrationMonitoringSectionsProps} />
       <TopologyWorkspaceSections {...topologyWorkspaceSectionsProps} />

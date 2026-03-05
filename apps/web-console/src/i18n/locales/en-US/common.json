@@ -28,9 +28,11 @@
       }
     },
     "navigation": {
+      "setup": "Setup Wizard",
       "overview": "Overview",
       "cmdb": "CMDB",
       "monitoring": "Monitoring",
+      "alerts": "Alert Center",
       "cockpit": "Cockpit",
       "workflow": "Workflow",
       "tickets": "Tickets",
@@ -873,6 +875,129 @@
         "edgeTitle": "Edge Detail",
         "edgeSummary": "Edge #{{id}}: {{src}} -> {{dst}} | type={{relationType}} | source={{source}}"
       }
+    }
+  },
+  "setupWizard": {
+    "title": "First-Run Setup Wizard",
+    "summary": {
+      "description": "Run checks in sequence and complete setup without terminal commands.",
+      "ready": "Ready for completion",
+      "blocked": "Blocked by {{count}} critical check(s)",
+      "preflight": "Preflight: pass={{passed}}, warn={{warned}}, fail={{failed}}",
+      "checklist": "Checklist: pass={{passed}}, warn={{warned}}, fail={{failed}}"
+    },
+    "actions": {
+      "refresh": "Refresh Checks",
+      "refreshing": "Refreshing...",
+      "goMonitoring": "Open Monitoring Source Bootstrap",
+      "previous": "Previous Step",
+      "next": "Next Step",
+      "complete": "Complete Setup"
+    },
+    "steps": {
+      "environment": {
+        "title": "Environment Check",
+        "description": "Validate core runtime dependencies and auth baseline."
+      },
+      "account": {
+        "title": "Account and Login Mode",
+        "description": "Confirm authentication mode and security policy readiness."
+      },
+      "monitoring": {
+        "title": "Monitoring Source Bootstrap",
+        "description": "Ensure at least one monitoring source is configured."
+      },
+      "validation": {
+        "title": "Sample Validation",
+        "description": "Validate checklist closure before handoff."
+      }
+    },
+    "status": {
+      "pass": "PASS",
+      "warn": "WARN",
+      "fail": "FAIL"
+    },
+    "labels": {
+      "remediation": "Next action:"
+    },
+    "messages": {
+      "loading": "Loading setup wizard checks...",
+      "noChecks": "No checks available for this step.",
+      "blockingTitle": "Completion is blocked by critical failures:",
+      "completed": "Setup wizard completed. You can continue daily operations from dashboard and alert center.",
+      "completeBlocked": "Cannot complete setup: {{count}} critical check(s) are still failing."
+    }
+  },
+  "alertsCenter": {
+    "title": "Alert Center",
+    "summary": "Total alerts: {{total}} | Selected: {{selected}}",
+    "filters": {
+      "statusLabel": "Status",
+      "statusAll": "All statuses",
+      "severityLabel": "Severity",
+      "severityAll": "All severities",
+      "siteLabel": "Site",
+      "sitePlaceholder": "Filter by site",
+      "queryLabel": "Search",
+      "queryPlaceholder": "Search title/source/key"
+    },
+    "status": {
+      "open": "Open",
+      "acknowledged": "Acknowledged",
+      "closed": "Closed"
+    },
+    "severity": {
+      "critical": "Critical",
+      "warning": "Warning",
+      "info": "Info"
+    },
+    "actions": {
+      "refresh": "Refresh Alerts",
+      "refreshing": "Refreshing...",
+      "bulkAck": "Bulk Acknowledge",
+      "bulkClose": "Bulk Close",
+      "acking": "Acknowledging...",
+      "closing": "Closing...",
+      "processing": "Processing...",
+      "ack": "Acknowledge",
+      "close": "Close",
+      "ackSelected": "Acknowledge Selected Alert",
+      "closeSelected": "Close Selected Alert"
+    },
+    "table": {
+      "id": "Alert ID",
+      "title": "Title",
+      "severity": "Severity",
+      "status": "Status",
+      "scope": "Site/Department",
+      "source": "Source",
+      "lastSeen": "Last Seen",
+      "actions": "Actions"
+    },
+    "detail": {
+      "title": "Alert Detail",
+      "scope": "Scope:",
+      "links": "Quick links:",
+      "openCmdb": "CMDB",
+      "openTickets": "Tickets",
+      "timelineTitle": "Timeline",
+      "timelineEmpty": "No timeline events.",
+      "linkedTicketsTitle": "Linked Tickets",
+      "linkedTicketsEmpty": "No linked tickets.",
+      "quickActionsTitle": "Quick Actions",
+      "quickActionsDescription": "Use selected alert quick actions to complete triage without leaving this page.",
+      "selection": "Current selected alert: {{id}}"
+    },
+    "messages": {
+      "readOnlyHint": "Read-only mode: acknowledge/close actions are disabled for current role.",
+      "loading": "Loading alerts...",
+      "empty": "No alerts match current filters.",
+      "loadingDetail": "Loading alert detail...",
+      "detailEmpty": "Select one alert to inspect timeline and linked context.",
+      "ackSuccess": "Alert #{{id}} acknowledged.",
+      "closeSuccess": "Alert #{{id}} closed.",
+      "bulkAckSuccess": "Bulk acknowledge done: updated={{updated}}, skipped={{skipped}}.",
+      "bulkCloseSuccess": "Bulk close done: updated={{updated}}, skipped={{skipped}}."
     }
   }
 }

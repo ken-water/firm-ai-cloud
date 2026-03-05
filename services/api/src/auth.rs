@@ -269,6 +269,10 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         || matches_scope(&normalized, "/sse")
     {
         "monitoring.sources"
+    } else if matches_scope(&normalized, "/setup") {
+        "ops.setup"
+    } else if matches_scope(&normalized, "/alerts") {
+        "alerts"
     } else if matches_scope(&normalized, "/cmdb/discovery")
         || matches_scope(&normalized, "/discovery")
     {
@@ -469,6 +473,25 @@ mod tests {
         assert_permission(Method::GET, "/metrics", "monitoring.sources.read");
         assert_permission(Method::GET, "/sse", "monitoring.sources.read");
         assert_permission(Method::GET, "/streams/metrics", "monitoring.sources.read");
+    }
+
+    #[test]
+    fn maps_setup_permissions() {
+        assert_permission(Method::GET, "/api/v1/setup/preflight", "ops.setup.read");
+        assert_permission(Method::GET, "/api/v1/setup/checklist", "ops.setup.read");
+        assert_permission(Method::GET, "/setup/preflight", "ops.setup.read");
+    }
+
+    #[test]
+    fn maps_alert_permissions() {
+        assert_permission(Method::GET, "/api/v1/alerts", "alerts.read");
+        assert_permission(Method::GET, "/api/v1/alerts/1", "alerts.read");
+        assert_permission(Method::GET, "/api/v1/alerts/policies", "alerts.read");
+        assert_permission(Method::POST, "/api/v1/alerts/1/ack", "alerts.write");
+        assert_permission(Method::POST, "/api/v1/alerts/1/close", "alerts.write");
+        assert_permission(Method::POST, "/api/v1/alerts/bulk/ack", "alerts.write");
+        assert_permission(Method::PATCH, "/api/v1/alerts/policies/1", "alerts.write");
+        assert_permission(Method::GET, "/alerts", "alerts.read");
     }
 
     #[test]
@@ -741,6 +764,15 @@ mod tests {
                 "/api/v1/streams/metrics",
                 "monitoring.sources.read",
             ),
+            (Method::GET, "/api/v1/setup/preflight", "ops.setup.read"),
+            (Method::GET, "/api/v1/setup/checklist", "ops.setup.read"),
+            (Method::GET, "/api/v1/alerts", "alerts.read"),
+            (Method::GET, "/api/v1/alerts/1", "alerts.read"),
+            (Method::GET, "/api/v1/alerts/policies", "alerts.read"),
+            (Method::POST, "/api/v1/alerts/1/ack", "alerts.write"),
+            (Method::POST, "/api/v1/alerts/1/close", "alerts.write"),
+            (Method::POST, "/api/v1/alerts/bulk/ack", "alerts.write"),
+            (Method::PATCH, "/api/v1/alerts/policies/1", "alerts.write"),
             (
                 Method::POST,
                 "/api/v1/monitoring/sources",

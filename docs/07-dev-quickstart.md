@@ -115,6 +115,80 @@ curl http://127.0.0.1:8080/health
 curl http://127.0.0.1:8080/api/v1/ping
 ```
 
+Setup wizard backend APIs:
+
+```bash
+# preflight checks: db/rbac/oidc/secrets/workflow policy
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/setup/preflight
+
+# integration checklist: api/web/db/redis/opensearch/minio/zabbix + bootstrap seeds
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/setup/checklist
+```
+
+Notes:
+
+- Response schema is stable: `generated_at`, `category`, `summary`, `checks[]`.
+- Every failed check includes `remediation` text for UI next-action guidance.
+- Permission required: `ops.setup.read` (viewer/operator/admin default roles have read access).
+
+Unified alert center APIs:
+
+```bash
+# list alerts with filters and pagination
+curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/alerts?status=open&severity=critical&site=dc-a&limit=50&offset=0"
+
+# alert detail with timeline and linked tickets
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/alerts/1
+
+# acknowledge/close one alert
+curl -X POST http://127.0.0.1:8080/api/v1/alerts/1/ack \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{ "note": "accepted by oncall" }'
+
+curl -X POST http://127.0.0.1:8080/api/v1/alerts/1/close \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{ "note": "issue mitigated" }'
+
+# bulk acknowledge/close
+curl -X POST http://127.0.0.1:8080/api/v1/alerts/bulk/ack \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{ "ids": [1, 2, 3], "note": "batch ack from shift lead" }'
+
+curl -X POST http://127.0.0.1:8080/api/v1/alerts/bulk/close \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{ "ids": [1, 2], "note": "batch close after recovery" }'
+
+# alert-to-ticket policy templates and custom policy CRUD
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/alerts/policies
+
+curl -X POST http://127.0.0.1:8080/api/v1/alerts/policies \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "policy_key": "critical-dc-a",
+    "name": "Critical incidents in dc-a",
+    "is_enabled": true,
+    "match_source": "monitoring_sync",
+    "match_severity": "critical",
+    "match_site": "dc-a",
+    "dedup_window_seconds": 1800,
+    "ticket_priority": "critical",
+    "ticket_category": "incident"
+  }'
+```
+
+Notes:
+
+- Read permission: `alerts.read`; write permission: `alerts.write`.
+- Default built-in policy templates are seeded by migration:
+  - `critical-infrastructure`
+  - `service-degradation`
+  - `repeated-failure` (disabled by default)
+
 CMDB field definition APIs:
 
 ```bash

@@ -10,6 +10,7 @@ use tokio::{task::JoinSet, time::sleep};
 use tracing::{error, info, warn};
 
 use crate::{
+    alerts::{close_monitoring_sync_alert, upsert_monitoring_sync_alert},
     audit::{AuditLogWriteInput, write_audit_log_best_effort},
     cmdb::monitoring_sync::is_eligible_asset_class,
     error::{AppError, AppResult},
@@ -370,6 +371,17 @@ async fn mark_job_success(
     )
     .await;
 
+    if let Err(err) =
+        close_monitoring_sync_alert(state, job.id, job.asset_id, result.message.as_str()).await
+    {
+        warn!(
+            error = %err,
+            job_id = job.id,
+            asset_id = job.asset_id,
+            "failed to close monitoring sync alert after successful provisioning"
+        );
+    }
+
     Ok(())
 }
 
@@ -462,6 +474,29 @@ async fn mark_job_failure(
         },
     )
     .await;
+
+    let severity = if should_dead_letter {
+        "critical"
+    } else {
+        "warning"
+    };
+    if let Err(err) = upsert_monitoring_sync_alert(
+        state,
+        job.id,
+        job.asset_id,
+        job.trigger_source.as_str(),
+        severity,
+        truncated_error.as_str(),
+    )
+    .await
+    {
+        warn!(
+            error = %err,
+            job_id = job.id,
+            asset_id = job.asset_id,
+            "failed to upsert monitoring sync alert after provisioning error"
+        );
+    }
 
     Ok(())
 }

@@ -28,9 +28,11 @@
       }
     },
     "navigation": {
+      "setup": "安装向导",
       "overview": "总览",
       "cmdb": "CMDB",
       "monitoring": "监控",
+      "alerts": "告警中心",
       "cockpit": "驾驶舱",
       "workflow": "流程",
       "tickets": "工单",
@@ -873,6 +875,129 @@
         "edgeTitle": "边详情",
         "edgeSummary": "边 #{{id}}: {{src}} -> {{dst}} | 类型={{relationType}} | 来源={{source}}"
       }
+    }
+  },
+  "setupWizard": {
+    "title": "首次安装向导",
+    "summary": {
+      "description": "按步骤完成检查，在不使用终端命令的情况下完成初始化。",
+      "ready": "可完成安装",
+      "blocked": "存在 {{count}} 项关键失败，暂不可完成",
+      "preflight": "预检：通过={{passed}}，告警={{warned}}，失败={{failed}}",
+      "checklist": "清单：通过={{passed}}，告警={{warned}}，失败={{failed}}"
+    },
+    "actions": {
+      "refresh": "刷新检查",
+      "refreshing": "刷新中...",
+      "goMonitoring": "打开监控源引导",
+      "previous": "上一步",
+      "next": "下一步",
+      "complete": "完成安装"
+    },
+    "steps": {
+      "environment": {
+        "title": "环境检查",
+        "description": "校验核心依赖与认证基线。"
+      },
+      "account": {
+        "title": "账号与登录模式",
+        "description": "确认认证模式与安全策略就绪。"
+      },
+      "monitoring": {
+        "title": "监控源引导",
+        "description": "确保至少配置一个监控源。"
+      },
+      "validation": {
+        "title": "样例验证",
+        "description": "完成清单校验后再交付使用。"
+      }
+    },
+    "status": {
+      "pass": "通过",
+      "warn": "告警",
+      "fail": "失败"
+    },
+    "labels": {
+      "remediation": "下一步动作："
+    },
+    "messages": {
+      "loading": "正在加载安装向导检查项...",
+      "noChecks": "该步骤暂无检查项。",
+      "blockingTitle": "以下关键失败会阻止完成安装：",
+      "completed": "安装向导已完成。你可以继续在总览与告警中心进行日常运维。",
+      "completeBlocked": "当前无法完成安装：仍有 {{count}} 项关键检查失败。"
+    }
+  },
+  "alertsCenter": {
+    "title": "告警中心",
+    "summary": "告警总数：{{total}} | 已选中：{{selected}}",
+    "filters": {
+      "statusLabel": "状态",
+      "statusAll": "全部状态",
+      "severityLabel": "级别",
+      "severityAll": "全部级别",
+      "siteLabel": "站点",
+      "sitePlaceholder": "按站点过滤",
+      "queryLabel": "搜索",
+      "queryPlaceholder": "按标题/来源/键搜索"
+    },
+    "status": {
+      "open": "未处理",
+      "acknowledged": "已确认",
+      "closed": "已关闭"
+    },
+    "severity": {
+      "critical": "严重",
+      "warning": "警告",
+      "info": "提示"
+    },
+    "actions": {
+      "refresh": "刷新告警",
+      "refreshing": "刷新中...",
+      "bulkAck": "批量确认",
+      "bulkClose": "批量关闭",
+      "acking": "确认中...",
+      "closing": "关闭中...",
+      "processing": "处理中...",
+      "ack": "确认",
+      "close": "关闭",
+      "ackSelected": "确认当前选中告警",
+      "closeSelected": "关闭当前选中告警"
+    },
+    "table": {
+      "id": "告警 ID",
+      "title": "标题",
+      "severity": "级别",
+      "status": "状态",
+      "scope": "站点/部门",
+      "source": "来源",
+      "lastSeen": "最近出现",
+      "actions": "操作"
+    },
+    "detail": {
+      "title": "告警详情",
+      "scope": "范围：",
+      "links": "快速入口：",
+      "openCmdb": "CMDB",
+      "openTickets": "工单",
+      "timelineTitle": "时间线",
+      "timelineEmpty": "暂无时间线事件。",
+      "linkedTicketsTitle": "关联工单",
+      "linkedTicketsEmpty": "暂无关联工单。",
+      "quickActionsTitle": "快捷操作",
+      "quickActionsDescription": "可直接在本页完成告警确认/关闭，无需切换页面。",
+      "selection": "当前选中告警：{{id}}"
+    },
+    "messages": {
+      "readOnlyHint": "当前为只读模式：你没有确认/关闭告警的权限。",
+      "loading": "正在加载告警...",
+      "empty": "当前筛选条件下没有告警。",
+      "loadingDetail": "正在加载告警详情...",
+      "detailEmpty": "请选择一条告警查看时间线与关联上下文。",
+      "ackSuccess": "告警 #{{id}} 已确认。",
+      "closeSuccess": "告警 #{{id}} 已关闭。",
+      "bulkAckSuccess": "批量确认完成：成功={{updated}}，跳过={{skipped}}。",
+      "bulkCloseSuccess": "批量关闭完成：成功={{updated}}，跳过={{skipped}}。"
     }
   }
 }

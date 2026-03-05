@@ -1,10 +1,20 @@
 export type MenuAxis = "function" | "department" | "business" | "screen";
 export type FunctionWorkspace = "full" | "cmdb" | "monitoring" | "workflow";
-export type ConsolePage = "overview" | "cmdb" | "monitoring" | "topology" | "workflow" | "tickets" | "admin";
+export type ConsolePage =
+  | "setup"
+  | "overview"
+  | "cmdb"
+  | "monitoring"
+  | "alerts"
+  | "topology"
+  | "workflow"
+  | "tickets"
+  | "admin";
 
 export const defaultConsolePage: ConsolePage = "overview";
 
 export const consolePageSections: Record<ConsolePage, string[]> = {
+  setup: ["section-setup-wizard"],
   overview: ["section-cockpit", "section-monitoring-metrics", "section-topology", "section-asset-stats"],
   cmdb: [
     "section-scan",
@@ -16,6 +26,7 @@ export const consolePageSections: Record<ConsolePage, string[]> = {
     "section-assets"
   ],
   monitoring: ["section-cockpit", "section-monitoring-sources", "section-monitoring-metrics", "section-topology"],
+  alerts: ["section-alert-center"],
   topology: ["section-topology-workspace"],
   workflow: [
     "section-workflow-cockpit",
@@ -29,6 +40,8 @@ export const consolePageSections: Record<ConsolePage, string[]> = {
 };
 
 const legacySectionToPage: Record<string, ConsolePage> = {
+  "section-setup-wizard": "setup",
+  "section-alert-center": "alerts",
   "section-admin": "admin",
   "section-workflow-cockpit": "workflow",
   "section-workflow-reports": "workflow",
@@ -81,6 +94,8 @@ function parseConsolePage(value: string): ConsolePage | null {
     case "overview":
     case "cmdb":
     case "monitoring":
+    case "setup":
+    case "alerts":
     case "topology":
     case "workflow":
     case "tickets":

@@ -8,11 +8,58 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- v0.0.9 planning document: `docs/19-v0.0.9-topology-reliability-plan.md`.
-- v0.0.9 issue baseline: GitHub issues `#64` to `#71` (topology, stream metrics, perf, CI gate, DR, release closure).
+- None yet.
+
+### Changed
+
+- None yet.
+
+### Fixed
+
+- None yet.
+
+## [0.1.0] - 2026-03-05
+
+### Added
+
 - v0.1.x planning document: `docs/20-v0.1x-operator-simplicity-plan.md`.
 - v0.1.x issue baseline: GitHub issues `#72` to `#86` (onboarding, alert loop, one-click operations, enterprise hardening, scale gate, staged releases).
-- Release governance policy updated to v1.1 with a mandatory sequential-release gate before starting a new development cycle.
+- Setup readiness APIs for first-run operators:
+  - `GET /api/v1/setup/preflight`
+  - `GET /api/v1/setup/checklist`
+  - stable response schema with `summary` and per-check `remediation`
+- Unified alert center backend baseline:
+  - migration: `202603050003_create_alerting_and_setup_permissions.sql`
+  - APIs: list/detail, single and bulk acknowledge/close, policy CRUD
+  - timeline persistence and linked-ticket query path
+- Alert-to-ticket automation baseline:
+  - policy table + action history table
+  - built-in templates: `critical-infrastructure`, `service-degradation`, `repeated-failure`
+  - worker-integrated policy evaluation and ticket linkage
+- New web-console routes:
+  - `#/setup` first-run onboarding wizard
+  - `#/alerts` alert center with filters, bulk actions, and detail drill panel
+- New RBAC permission keys:
+  - `ops.setup.read`
+  - `alerts.read`
+  - `alerts.write`
+
+### Changed
+
+- Monitoring sync worker now opens/updates unified alerts on failures and auto-closes them on recovery.
+- Route-level RBAC mapping now includes setup and alert-center endpoints with role tests.
+- Developer quickstart and RBAC coverage docs now include setup and alert-center API usage examples.
+
+### Fixed
+
+- Removed dead-code status branch in alert lifecycle handler to keep API test build warning-free.
+
+## [0.0.9] - 2026-03-05
+
+### Added
+
+- v0.0.9 planning document: `docs/19-v0.0.9-topology-reliability-plan.md`.
+- v0.0.9 issue baseline: GitHub issues `#64` to `#71` (topology, stream metrics, perf, CI gate, DR, release closure).
 - Topology map API baseline:
   - `GET /api/v1/topology/maps/{scope}` with `site`/`department` scope filters
   - windowing via `limit`/`offset`
