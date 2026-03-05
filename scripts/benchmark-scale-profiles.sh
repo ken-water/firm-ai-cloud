@@ -7,6 +7,8 @@ AUTH_USER="${AUTH_USER:-admin}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUTPUT_DIR="${OUTPUT_DIR:-.run/benchmarks/profile-${PROFILE_LABEL}-${RUN_ID}}"
 SKIP_GATE=0
+BASELINE_API_SUMMARY=""
+BASELINE_SSE_SUMMARY=""
 SUMMARY_MD="${OUTPUT_DIR}/summary.md"
 SUMMARY_JSON="${OUTPUT_DIR}/summary.json"
 
@@ -32,6 +34,8 @@ Options:
   --auth-user <username>   Auth user header value
   --output-dir <path>      Output directory root
   --run-id <id>            Run id used by child scripts
+  --baseline-api-summary <path>   Baseline API summary csv (enables trend delta report)
+  --baseline-sse-summary <path>   Baseline SSE summary json (optional; use with baseline API)
   --skip-gate              Skip threshold gate step
   -h, --help               Show this help
 USAGE
@@ -81,6 +85,16 @@ main() {
         RUN_ID="$2"
         shift 2
         ;;
+      --baseline-api-summary)
+        [[ $# -ge 2 ]] || fatal "--baseline-api-summary requires a file path"
+        BASELINE_API_SUMMARY="$2"
+        shift 2
+        ;;
+      --baseline-sse-summary)
+        [[ $# -ge 2 ]] || fatal "--baseline-sse-summary requires a file path"
+        BASELINE_SSE_SUMMARY="$2"
+        shift 2
+        ;;
       --skip-gate)
         SKIP_GATE=1
         shift
@@ -96,10 +110,15 @@ main() {
   done
 
   validate_profile
+  if [[ -n "${BASELINE_SSE_SUMMARY}" && -z "${BASELINE_API_SUMMARY}" ]]; then
+    fatal "--baseline-sse-summary requires --baseline-api-summary"
+  fi
 
   local api_dir="${OUTPUT_DIR}/api"
   local sse_dir="${OUTPUT_DIR}/sse"
   local gate_dir="${OUTPUT_DIR}/gate"
+  local trend_dir="${OUTPUT_DIR}/trend-delta"
+  local trend_enabled=0
 
   mkdir -p "${OUTPUT_DIR}"
 
@@ -131,6 +150,28 @@ main() {
     log "Skipping threshold gate by request (--skip-gate)"
   fi
 
+  if [[ -n "${BASELINE_API_SUMMARY}" ]]; then
+    log "Running trend delta report profile=${PROFILE_LABEL}"
+    if [[ -n "${BASELINE_SSE_SUMMARY}" ]]; then
+      RUN_ID="${RUN_ID}" \
+        bash scripts/benchmark-trend-delta.sh \
+          --profile "${PROFILE_LABEL}" \
+          --current-api-summary "${api_dir}/summary.csv" \
+          --baseline-api-summary "${BASELINE_API_SUMMARY}" \
+          --current-sse-summary "${sse_dir}/summary.json" \
+          --baseline-sse-summary "${BASELINE_SSE_SUMMARY}" \
+          --output-dir "${trend_dir}"
+    else
+      RUN_ID="${RUN_ID}" \
+        bash scripts/benchmark-trend-delta.sh \
+          --profile "${PROFILE_LABEL}" \
+          --current-api-summary "${api_dir}/summary.csv" \
+          --baseline-api-summary "${BASELINE_API_SUMMARY}" \
+          --output-dir "${trend_dir}"
+    fi
+    trend_enabled=1
+  fi
+
   jq -n \
     --arg run_id "${RUN_ID}" \
     --arg profile "${PROFILE_LABEL}" \
@@ -143,7 +184,10 @@ main() {
     --arg sse_markdown "${sse_dir}/summary.md" \
     --arg gate_summary_json "${gate_dir}/gate-summary.json" \
     --arg gate_summary_md "${gate_dir}/gate-summary.md" \
+    --arg trend_summary_json "${trend_dir}/summary.json" \
+    --arg trend_summary_md "${trend_dir}/summary.md" \
     --argjson gate_skipped "$SKIP_GATE" \
+    --argjson trend_enabled "$trend_enabled" \
     '{
       run_id: $run_id,
       profile: $profile,
@@ -156,9 +200,12 @@ main() {
         sse_summary_json: $sse_summary,
         sse_summary_md: $sse_markdown,
         gate_summary_json: (if $gate_skipped == 1 then null else $gate_summary_json end),
-        gate_summary_md: (if $gate_skipped == 1 then null else $gate_summary_md end)
+        gate_summary_md: (if $gate_skipped == 1 then null else $gate_summary_md end),
+        trend_summary_json: (if $trend_enabled == 1 then $trend_summary_json else null end),
+        trend_summary_md: (if $trend_enabled == 1 then $trend_summary_md else null end)
       },
-      gate_skipped: ($gate_skipped == 1)
+      gate_skipped: ($gate_skipped == 1),
+      trend_enabled: ($trend_enabled == 1)
     }' >"${SUMMARY_JSON}"
 
   {
@@ -177,6 +224,9 @@ main() {
       echo "- Gate summary: \`${gate_dir}/gate-summary.md\`"
     else
       echo "- Gate summary: skipped"
+    fi
+    if (( trend_enabled == 1 )); then
+      echo "- Trend delta summary: \`${trend_dir}/summary.md\`"
     fi
     echo "- Combined summary json: \`${SUMMARY_JSON}\`"
   } >"${SUMMARY_MD}"

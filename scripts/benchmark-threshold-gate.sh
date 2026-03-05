@@ -6,11 +6,13 @@ POLICY_FILE="${POLICY_FILE:-scripts/benchmark-threshold-policy.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-.run/benchmarks/gate-${RUN_ID}}"
 SUMMARY_JSON="${OUTPUT_DIR}/gate-summary.json"
 SUMMARY_MD="${OUTPUT_DIR}/gate-summary.md"
-PROFILE_LABEL="${PROFILE_LABEL:-mixed}"
+PROFILE_LABEL="${PROFILE_LABEL:-smoke}"
 
 declare -a API_SUMMARIES=()
 SSE_SUMMARY=""
 TMP_RESULTS_FILE=""
+RESOLVED_POLICY_FILE=""
+POLICY_SOURCE_PATH="root"
 
 log() {
   printf '[benchmark-gate] %s\n' "$*"
@@ -33,7 +35,7 @@ Options:
   --sse-summary <path>     SSE benchmark summary json
   --policy <path>          Threshold policy json (default: scripts/benchmark-threshold-policy.json)
   --output-dir <path>      Output directory for gate summary artifacts
-  --profile <label>        Profile label (for example: sequential, concurrency, mixed)
+  --profile <label>        Profile label (for example: smoke, scale-1k, scale-5k)
   -h, --help               Show this help
 USAGE
 }
@@ -56,6 +58,25 @@ num_le() {
   local actual="$1"
   local threshold="$2"
   awk -v a="${actual}" -v b="${threshold}" 'BEGIN { if ((a + 0) <= (b + 0)) print 1; else print 0 }'
+}
+
+resolve_profile_policy() {
+  RESOLVED_POLICY_FILE="$(mktemp)"
+
+  if jq -e '.profiles? | type == "object"' "${POLICY_FILE}" >/dev/null; then
+    local available_profiles
+    available_profiles="$(jq -r '.profiles | keys | join(", ")' "${POLICY_FILE}")"
+
+    if ! jq -e --arg profile "${PROFILE_LABEL}" '.profiles[$profile] != null' "${POLICY_FILE}" >/dev/null; then
+      fatal "profile '${PROFILE_LABEL}' not found in policy '${POLICY_FILE}'. available profiles: ${available_profiles}"
+    fi
+
+    jq --arg profile "${PROFILE_LABEL}" '.profiles[$profile]' "${POLICY_FILE}" >"${RESOLVED_POLICY_FILE}"
+    POLICY_SOURCE_PATH="profiles.${PROFILE_LABEL}"
+  else
+    cp "${POLICY_FILE}" "${RESOLVED_POLICY_FILE}"
+    POLICY_SOURCE_PATH="root"
+  fi
 }
 
 append_check() {
@@ -114,12 +135,12 @@ check_api_summary() {
     endpoint_p99["${endpoint}"]="${p99}"
   done <"${summary_file}"
 
-  mapfile -t policy_endpoints < <(jq -r '.api.endpoints | keys[]' "${POLICY_FILE}")
+  mapfile -t policy_endpoints < <(jq -r '.api.endpoints | keys[]' "${RESOLVED_POLICY_FILE}")
   for endpoint in "${policy_endpoints[@]}"; do
     local success_rate_min p95_max p99_max
-    success_rate_min="$(jq -r --arg endpoint "${endpoint}" '.api.endpoints[$endpoint].success_rate_min // .api.default.success_rate_min' "${POLICY_FILE}")"
-    p95_max="$(jq -r --arg endpoint "${endpoint}" '.api.endpoints[$endpoint].p95_ms_max // .api.default.p95_ms_max' "${POLICY_FILE}")"
-    p99_max="$(jq -r --arg endpoint "${endpoint}" '.api.endpoints[$endpoint].p99_ms_max // .api.default.p99_ms_max' "${POLICY_FILE}")"
+    success_rate_min="$(jq -r --arg endpoint "${endpoint}" '.api.endpoints[$endpoint].success_rate_min // .api.default.success_rate_min' "${RESOLVED_POLICY_FILE}")"
+    p95_max="$(jq -r --arg endpoint "${endpoint}" '.api.endpoints[$endpoint].p95_ms_max // .api.default.p95_ms_max' "${RESOLVED_POLICY_FILE}")"
+    p99_max="$(jq -r --arg endpoint "${endpoint}" '.api.endpoints[$endpoint].p99_ms_max // .api.default.p99_ms_max' "${RESOLVED_POLICY_FILE}")"
 
     local actual_success actual_p95 actual_p99
     actual_success="${endpoint_success[${endpoint}]:-}"
@@ -162,13 +183,13 @@ check_sse_summary() {
   connected="$(jq -r '.stream_events.stream_connected // "0"' "${summary_file}")"
 
   local lag_p95_max lag_p99_max lag_max_max stream_error_max alert_sync_min heartbeat_min connected_min
-  lag_p95_max="$(jq -r '.sse.lag_ms.p95_ms_max' "${POLICY_FILE}")"
-  lag_p99_max="$(jq -r '.sse.lag_ms.p99_ms_max' "${POLICY_FILE}")"
-  lag_max_max="$(jq -r '.sse.lag_ms.max_ms_max' "${POLICY_FILE}")"
-  stream_error_max="$(jq -r '.sse.stream_error_max' "${POLICY_FILE}")"
-  alert_sync_min="$(jq -r '.sse.alert_sync_min' "${POLICY_FILE}")"
-  heartbeat_min="$(jq -r '.sse.heartbeat_min' "${POLICY_FILE}")"
-  connected_min="$(jq -r '.sse.connected_min' "${POLICY_FILE}")"
+  lag_p95_max="$(jq -r '.sse.lag_ms.p95_ms_max' "${RESOLVED_POLICY_FILE}")"
+  lag_p99_max="$(jq -r '.sse.lag_ms.p99_ms_max' "${RESOLVED_POLICY_FILE}")"
+  lag_max_max="$(jq -r '.sse.lag_ms.max_ms_max' "${RESOLVED_POLICY_FILE}")"
+  stream_error_max="$(jq -r '.sse.stream_error_max' "${RESOLVED_POLICY_FILE}")"
+  alert_sync_min="$(jq -r '.sse.alert_sync_min' "${RESOLVED_POLICY_FILE}")"
+  heartbeat_min="$(jq -r '.sse.heartbeat_min' "${RESOLVED_POLICY_FILE}")"
+  connected_min="$(jq -r '.sse.connected_min' "${RESOLVED_POLICY_FILE}")"
 
   append_check "sse" "${summary_file}" "alert.monitoring_sync" "lag_p95_ms" "${lag_p95}" "${lag_p95_max}" "<=" "$(num_le "${lag_p95}" "${lag_p95_max}")" "milliseconds"
   append_check "sse" "${summary_file}" "alert.monitoring_sync" "lag_p99_ms" "${lag_p99}" "${lag_p99_max}" "<=" "$(num_le "${lag_p99}" "${lag_p99_max}")" "milliseconds"
@@ -194,6 +215,7 @@ write_summaries() {
     --arg run_id "${RUN_ID}" \
     --arg generated_at "${generated_at}" \
     --arg policy_file "${POLICY_FILE}" \
+    --arg policy_source "${POLICY_SOURCE_PATH}" \
     --arg profile "${PROFILE_LABEL}" \
     --arg sse_summary "${SSE_SUMMARY}" \
     --argjson api_summaries "${api_summaries_json}" \
@@ -204,6 +226,7 @@ write_summaries() {
       generated_at: $generated_at,
       profile: $profile,
       policy_file: $policy_file,
+      policy_source: $policy_source,
       api_summaries: $api_summaries,
       sse_summary: ($sse_summary | if . == "" then null else . end),
       checks: $checks,
@@ -226,6 +249,7 @@ write_summaries() {
     echo "- Generated at: ${generated_at}"
     echo "- Profile: ${PROFILE_LABEL}"
     echo "- Policy: \`${POLICY_FILE}\`"
+    echo "- Policy source: \`${POLICY_SOURCE_PATH}\`"
     echo "- Result: **${result_text}**"
     echo
     echo "| Category | Source | Target | Metric | Actual | Threshold | Operator | Result | Note |"
@@ -292,7 +316,8 @@ main() {
 
   mkdir -p "${OUTPUT_DIR}"
   TMP_RESULTS_FILE="$(mktemp)"
-  trap 'rm -f "${TMP_RESULTS_FILE}"' EXIT
+  resolve_profile_policy
+  trap 'rm -f "${TMP_RESULTS_FILE}" "${RESOLVED_POLICY_FILE}"' EXIT
   : >"${TMP_RESULTS_FILE}"
 
   local api_summary

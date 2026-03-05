@@ -14,6 +14,9 @@ Establish a repeatable benchmark baseline for:
 
 - `scripts/benchmark-api-load.sh`
 - `scripts/benchmark-sse-burst-smoke.sh`
+- `scripts/benchmark-scale-profiles.sh`
+- `scripts/benchmark-threshold-gate.sh`
+- `scripts/benchmark-trend-delta.sh`
 
 ## 3. Test Environment Snapshot
 
@@ -125,6 +128,10 @@ Stress profile capability (new script output):
 # API latency/throughput baseline
 bash scripts/benchmark-api-load.sh
 
+# Profile-based API run
+bash scripts/benchmark-api-load.sh --profile scale-1k
+bash scripts/benchmark-api-load.sh --profile scale-5k
+
 # API parallel profile with utilization snapshots
 bash scripts/benchmark-api-load.sh --concurrency 10
 bash scripts/benchmark-api-load.sh --concurrency 20
@@ -132,6 +139,27 @@ bash scripts/benchmark-api-load.sh --concurrency 20
 # SSE burst stability smoke
 bash scripts/benchmark-sse-burst-smoke.sh
 
+# Profile-based SSE run
+bash scripts/benchmark-sse-burst-smoke.sh --profile scale-1k
+bash scripts/benchmark-sse-burst-smoke.sh --profile scale-5k
+
 # SSE stress profile (auto-adjusts stream duration for burst coverage)
 bash scripts/benchmark-sse-burst-smoke.sh --burst-count 300
+
+# One-command profile run (API + SSE + gate)
+bash scripts/benchmark-scale-profiles.sh --profile scale-1k
+
+# Profile-aware threshold gate
+bash scripts/benchmark-threshold-gate.sh \
+  --profile scale-1k \
+  --api-summary .run/benchmarks/profile-scale-1k-<run-id>/api/summary.csv \
+  --sse-summary .run/benchmarks/profile-scale-1k-<run-id>/sse/summary.json
+
+# Trend delta against baseline profile run
+bash scripts/benchmark-trend-delta.sh \
+  --profile scale-1k \
+  --current-api-summary .run/benchmarks/profile-scale-1k-<current-run-id>/api/summary.csv \
+  --baseline-api-summary .run/benchmarks/profile-scale-1k-<baseline-run-id>/api/summary.csv \
+  --current-sse-summary .run/benchmarks/profile-scale-1k-<current-run-id>/sse/summary.json \
+  --baseline-sse-summary .run/benchmarks/profile-scale-1k-<baseline-run-id>/sse/summary.json
 ```

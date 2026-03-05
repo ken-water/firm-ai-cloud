@@ -9,12 +9,15 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 ### Added
 
 - Scale benchmark profile orchestration script: `scripts/benchmark-scale-profiles.sh`.
+- Benchmark trend delta reporting script: `scripts/benchmark-trend-delta.sh`.
 
 ### Changed
 
 - Benchmark scripts now support profile presets (`smoke`, `scale-1k`, `scale-5k`) with profile metadata artifacts:
   - `scripts/benchmark-api-load.sh`
   - `scripts/benchmark-sse-burst-smoke.sh`
+- Benchmark threshold policy and gate are now profile-aware (`smoke`, `scale-1k`, `scale-5k`) with strict profile existence validation.
+- Profile orchestration script can optionally generate trend delta artifacts when baseline summaries are provided.
 - Developer quickstart benchmark section now includes profile-aware commands and one-command profile run flow.
 
 ### Fixed

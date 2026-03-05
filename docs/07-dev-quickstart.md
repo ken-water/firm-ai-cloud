@@ -902,6 +902,17 @@ bash scripts/benchmark-threshold-gate.sh \
   --sse-summary .run/benchmarks/profile-scale-1k-<run-id>/sse/summary.json
 ```
 
+Generate trend delta against a previous baseline run:
+
+```bash
+bash scripts/benchmark-trend-delta.sh \
+  --profile scale-1k \
+  --current-api-summary .run/benchmarks/profile-scale-1k-<current-run-id>/api/summary.csv \
+  --baseline-api-summary .run/benchmarks/profile-scale-1k-<baseline-run-id>/api/summary.csv \
+  --current-sse-summary .run/benchmarks/profile-scale-1k-<current-run-id>/sse/summary.json \
+  --baseline-sse-summary .run/benchmarks/profile-scale-1k-<baseline-run-id>/sse/summary.json
+```
+
 Run quarterly DR drill automation:
 
 ```bash
