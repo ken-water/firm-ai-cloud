@@ -5,35 +5,48 @@ import path from "node:path";
 import process from "node:process";
 
 const appPath = path.resolve(process.cwd(), "src/App.tsx");
+const cmdbSectionsPath = path.resolve(process.cwd(), "src/pages/cmdb-sections.tsx");
+const overviewAdminSectionsPath = path.resolve(process.cwd(), "src/pages/overview-admin-sections.tsx");
+const routingPath = path.resolve(process.cwd(), "src/pages/console-page-routing.ts");
 const localePath = path.resolve(process.cwd(), "src/i18n/locales/en-US/common.json");
 
-const source = fs.readFileSync(appPath, "utf8");
+const appSource = fs.readFileSync(appPath, "utf8");
+const cmdbSectionsSource = fs.readFileSync(cmdbSectionsPath, "utf8");
+const overviewAdminSectionsSource = fs.readFileSync(overviewAdminSectionsPath, "utf8");
+const routingSource = fs.readFileSync(routingPath, "utf8");
+const source = [appSource, cmdbSectionsSource, overviewAdminSectionsSource, routingSource].join("\n");
 const locale = JSON.parse(fs.readFileSync(localePath, "utf8"));
 
 const sourceChecks = [
   {
     name: "Role write policy (admin/operator) is present",
+    source: appSource,
     pattern: /const canWriteCmdb = roleSet\.has\("admin"\) \|\| roleSet\.has\("operator"\);/
   },
   {
     name: "Role admin policy is present",
+    source: appSource,
     pattern: /const canAccessAdmin = roleSet\.has\("admin"\);/
   },
   {
     name: "App shell read-only warning wiring is present",
+    source: appSource,
     pattern: /warning={!canWriteCmdb \? t\("auth\.messages\.readOnly"\) : null}/
   },
   {
     name: "Admin section visibility gate is present",
+    source: overviewAdminSectionsSource,
     pattern: /\{canAccessAdmin && \(/,
   },
   {
-    name: "Asset section still exists",
-    pattern: /id="section-assets"/
+    name: "Asset section routing and card anchor exist",
+    source: `${routingSource}\n${cmdbSectionsSource}`,
+    pattern: /"section-assets"/
   },
   {
-    name: "Relation section still exists",
-    pattern: /id="section-relations"/
+    name: "Relation section routing and card anchor exist",
+    source: `${routingSource}\n${cmdbSectionsSource}`,
+    pattern: /"section-relations"/
   }
 ];
 
@@ -52,7 +65,7 @@ const requiredLocaleKeys = [
 let hasFailure = false;
 
 for (const check of sourceChecks) {
-  if (check.pattern.test(source)) {
+  if (check.pattern.test(check.source)) {
     console.log(`PASS: ${check.name}`);
   } else {
     hasFailure = true;

@@ -247,7 +247,6 @@ pub async fn enqueue_monitoring_sync_job(
     requested_by: Option<&str>,
     payload: Value,
 ) -> AppResult<Option<i64>> {
-    ensure_asset_exists(db, asset_id).await?;
     let asset_class = get_asset_class(db, asset_id).await?;
     if !is_eligible_asset_class(asset_class.asset_class.as_str()) {
         return Ok(None);
@@ -336,11 +335,11 @@ async fn get_asset_class(db: &sqlx::PgPool, asset_id: i64) -> AppResult<AssetCla
 }
 
 async fn ensure_asset_exists(db: &sqlx::PgPool, asset_id: i64) -> AppResult<()> {
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM assets WHERE id = $1)")
+    let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM assets WHERE id = $1")
         .bind(asset_id)
-        .fetch_one(db)
+        .fetch_optional(db)
         .await?;
-    if !exists {
+    if exists.is_none() {
         return Err(AppError::NotFound(format!("asset {asset_id} not found")));
     }
     Ok(())

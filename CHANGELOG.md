@@ -8,6 +8,20 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
+- None yet.
+
+### Changed
+
+- None yet.
+
+### Fixed
+
+- None yet.
+
+## [0.0.8] - 2026-03-05
+
+### Added
+
 - Discovery scheduler baseline:
   - migration: `202603040002_add_discovery_job_next_run_at.sql`
   - worker: `services/api/src/discovery_scheduler_worker.rs`
@@ -23,6 +37,9 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Runtime language switch baseline:
   - supported locales: `en-US`, `zh-CN`
   - new locale key coverage checker: `apps/web-console/scripts/check-i18n-coverage.mjs`
+- Read-path performance index baseline:
+  - migrations: `202603050001_optimize_assets_and_monitoring_indexes.sql`, `202603050002_add_cmdb_asset_filter_indexes.sql`
+  - index for monitoring latest-job lookup and layer filter scans
 
 ### Changed
 
@@ -30,6 +47,13 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - `disabled` (default), `allowlist`, `sandboxed`
   - allowlist and sandbox options are configurable by env
 - Web console now supports runtime language switching with persisted preference storage.
+- CMDB assets list/filter hot paths now include descending composite indexes for `class` and `status`.
+- Monitoring layer endpoint now computes summary counters in SQL aggregation and reuses summary `asset_total` as response total.
+- Monitoring layer filter now uses explicit normalized class sets instead of CASE classification SQL for better index usage.
+- Audit best-effort writes now run in detached async tasks and emit slow-write warnings when single inserts exceed 500ms.
+- Monitoring sync enqueue path now resolves asset existence/class in a single query to cut one write-path round trip.
+- API benchmark script now supports parallel execution via `--concurrency` and emits stage-level utilization snapshots.
+- SSE benchmark script now supports `--burst-count` stress profile and reports `alert.monitoring_sync` lag distribution (`min/avg/p50/p95/p99/max`).
 
 ### Fixed
 

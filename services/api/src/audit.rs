@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -16,6 +18,7 @@ use crate::{
 };
 
 const AUTH_USER_HEADER: &str = "x-auth-user";
+const AUDIT_WRITE_SLOW_THRESHOLD: Duration = Duration::from_millis(500);
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/logs", get(list_audit_logs))
@@ -67,10 +70,12 @@ pub struct AuditLogWriteInput {
 }
 
 pub async fn write_audit_log(db: &sqlx::PgPool, mut input: AuditLogWriteInput) -> AppResult<()> {
+    let started_at = Instant::now();
     input.actor = normalize_field("actor", input.actor, 128)?;
     input.action = normalize_field("action", input.action, 128)?;
     input.target_type = normalize_field("target_type", input.target_type, 64)?;
     input.result = normalize_field("result", input.result, 32)?;
+    let action_for_log = input.action.clone();
 
     let target_id = input
         .target_id
@@ -114,13 +119,25 @@ pub async fn write_audit_log(db: &sqlx::PgPool, mut input: AuditLogWriteInput) -
     .execute(db)
     .await?;
 
+    let elapsed = started_at.elapsed();
+    if elapsed > AUDIT_WRITE_SLOW_THRESHOLD {
+        warn!(
+            action = %action_for_log,
+            elapsed_ms = elapsed.as_millis(),
+            "slow audit log write detected"
+        );
+    }
+
     Ok(())
 }
 
 pub async fn write_audit_log_best_effort(db: &sqlx::PgPool, input: AuditLogWriteInput) {
-    if let Err(err) = write_audit_log(db, input).await {
-        warn!(error = ?err, "failed to write audit log");
-    }
+    let db = db.clone();
+    tokio::spawn(async move {
+        if let Err(err) = write_audit_log(&db, input).await {
+            warn!(error = ?err, "failed to write audit log");
+        }
+    });
 }
 
 pub async fn write_from_headers_best_effort(

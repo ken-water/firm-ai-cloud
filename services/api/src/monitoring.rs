@@ -278,9 +278,20 @@ struct MonitoringOverviewAssetRow {
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct MonitoringLayerSummaryRow {
-    monitoring_status: Option<String>,
-    latest_job_status: Option<String>,
+struct MonitoringLayerStatsRow {
+    asset_total: i64,
+    monitored_asset_total: i64,
+    health_healthy: i64,
+    health_warning: i64,
+    health_critical: i64,
+    health_unknown: i64,
+    jobs_pending: i64,
+    jobs_running: i64,
+    jobs_success: i64,
+    jobs_failed: i64,
+    jobs_dead_letter: i64,
+    jobs_skipped: i64,
+    jobs_unknown: i64,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -361,12 +372,42 @@ struct MonitoringLayerStats {
     latest_job_statuses: MonitoringJobStatusSummary,
 }
 
-const MONITORING_LAYER_CASE_SQL: &str = "CASE
-    WHEN LOWER(a.asset_class) IN ('server', 'physical_host', 'virtual_machine', 'vm', 'baremetal') THEN 'hardware'
-    WHEN LOWER(a.asset_class) IN ('network_device', 'switch', 'router', 'firewall', 'load_balancer') THEN 'network'
-    WHEN LOWER(a.asset_class) IN ('business_service', 'team', 'business_process', 'application_service') THEN 'business'
-    ELSE 'service'
-END";
+const HARDWARE_LAYER_CLASSES: &[&str] = &[
+    "server",
+    "physical_host",
+    "virtual_machine",
+    "vm",
+    "baremetal",
+];
+const NETWORK_LAYER_CLASSES: &[&str] = &[
+    "network_device",
+    "switch",
+    "router",
+    "firewall",
+    "load_balancer",
+];
+const BUSINESS_LAYER_CLASSES: &[&str] = &[
+    "business_service",
+    "team",
+    "business_process",
+    "application_service",
+];
+const NON_SERVICE_LAYER_CLASSES: &[&str] = &[
+    "server",
+    "physical_host",
+    "virtual_machine",
+    "vm",
+    "baremetal",
+    "network_device",
+    "switch",
+    "router",
+    "firewall",
+    "load_balancer",
+    "business_service",
+    "team",
+    "business_process",
+    "application_service",
+];
 
 const MONITORING_METRIC_SPECS: [MetricSpec; 5] = [
     MetricSpec {
@@ -486,10 +527,9 @@ async fn get_monitoring_layer(
     let limit = query.limit.unwrap_or(50).min(200) as i64;
     let offset = query.offset.unwrap_or(0) as i64;
 
-    let total =
-        count_layer_assets(&state.db, layer, site.as_deref(), department.as_deref()).await?;
     let summary_stats =
         summarize_layer_assets(&state.db, layer, site.as_deref(), department.as_deref()).await?;
+    let total = summary_stats.asset_total;
     let rows = fetch_layer_items(
         &state.db,
         layer,
@@ -704,26 +744,6 @@ async fn load_overview_asset_rows(
         .map_err(AppError::from)
 }
 
-async fn count_layer_assets(
-    db: &sqlx::PgPool,
-    layer: MonitoringLayer,
-    site: Option<&str>,
-    department: Option<&str>,
-) -> AppResult<i64> {
-    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
-        "SELECT COUNT(*)
-         FROM assets a
-         WHERE 1=1",
-    );
-    append_asset_scope_filters(&mut qb, site, department);
-    append_layer_filter(&mut qb, layer);
-
-    qb.build_query_scalar()
-        .fetch_one(db)
-        .await
-        .map_err(AppError::from)
-}
-
 async fn summarize_layer_assets(
     db: &sqlx::PgPool,
     layer: MonitoringLayer,
@@ -732,8 +752,19 @@ async fn summarize_layer_assets(
 ) -> AppResult<MonitoringLayerStats> {
     let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT
-            b.last_sync_status AS monitoring_status,
-            j.status AS latest_job_status
+            COUNT(*) AS asset_total,
+            COALESCE(SUM(CASE WHEN b.last_sync_status IS NOT NULL THEN 1 ELSE 0 END), 0) AS monitored_asset_total,
+            COALESCE(SUM(CASE WHEN b.last_sync_status = 'success' THEN 1 ELSE 0 END), 0) AS health_healthy,
+            COALESCE(SUM(CASE WHEN b.last_sync_status IN ('pending', 'running') THEN 1 ELSE 0 END), 0) AS health_warning,
+            COALESCE(SUM(CASE WHEN b.last_sync_status IN ('failed', 'dead_letter') THEN 1 ELSE 0 END), 0) AS health_critical,
+            COALESCE(SUM(CASE WHEN b.last_sync_status IS NULL OR b.last_sync_status = 'skipped' THEN 1 ELSE 0 END), 0) AS health_unknown,
+            COALESCE(SUM(CASE WHEN j.status = 'pending' THEN 1 ELSE 0 END), 0) AS jobs_pending,
+            COALESCE(SUM(CASE WHEN j.status = 'running' THEN 1 ELSE 0 END), 0) AS jobs_running,
+            COALESCE(SUM(CASE WHEN j.status = 'success' THEN 1 ELSE 0 END), 0) AS jobs_success,
+            COALESCE(SUM(CASE WHEN j.status = 'failed' THEN 1 ELSE 0 END), 0) AS jobs_failed,
+            COALESCE(SUM(CASE WHEN j.status = 'dead_letter' THEN 1 ELSE 0 END), 0) AS jobs_dead_letter,
+            COALESCE(SUM(CASE WHEN j.status = 'skipped' THEN 1 ELSE 0 END), 0) AS jobs_skipped,
+            COALESCE(SUM(CASE WHEN j.status IS NULL THEN 1 ELSE 0 END), 0) AS jobs_unknown
          FROM assets a
          LEFT JOIN cmdb_monitoring_bindings b ON b.asset_id = a.id
          LEFT JOIN LATERAL (
@@ -748,26 +779,31 @@ async fn summarize_layer_assets(
     append_asset_scope_filters(&mut qb, site, department);
     append_layer_filter(&mut qb, layer);
 
-    let rows: Vec<MonitoringLayerSummaryRow> = qb
+    let row: MonitoringLayerStatsRow = qb
         .build_query_as()
-        .fetch_all(db)
+        .fetch_one(db)
         .await
         .map_err(AppError::from)?;
 
-    let mut stats = MonitoringLayerStats::default();
-    for row in rows {
-        stats.asset_total += 1;
-        if row.monitoring_status.is_some() {
-            stats.monitored_asset_total += 1;
-        }
-        increment_health_summary(&mut stats.health, row.monitoring_status.as_deref());
-        increment_job_summary(
-            &mut stats.latest_job_statuses,
-            row.latest_job_status.as_deref(),
-        );
-    }
-
-    Ok(stats)
+    Ok(MonitoringLayerStats {
+        asset_total: row.asset_total,
+        monitored_asset_total: row.monitored_asset_total,
+        health: MonitoringHealthSummary {
+            healthy: row.health_healthy,
+            warning: row.health_warning,
+            critical: row.health_critical,
+            unknown: row.health_unknown,
+        },
+        latest_job_statuses: MonitoringJobStatusSummary {
+            pending: row.jobs_pending,
+            running: row.jobs_running,
+            success: row.jobs_success,
+            failed: row.jobs_failed,
+            dead_letter: row.jobs_dead_letter,
+            skipped: row.jobs_skipped,
+            unknown: row.jobs_unknown,
+        },
+    })
 }
 
 async fn fetch_layer_items(
@@ -951,11 +987,18 @@ fn append_asset_scope_filters<'a>(
 }
 
 fn append_layer_filter(builder: &mut QueryBuilder<Postgres>, layer: MonitoringLayer) {
-    builder
-        .push(" AND ")
-        .push(MONITORING_LAYER_CASE_SQL)
-        .push(" = ");
-    builder.push_bind(layer.as_str());
+    let classes = layer.filter_asset_classes();
+    if layer == MonitoringLayer::Service {
+        builder.push(" AND LOWER(a.asset_class) NOT IN (");
+    } else {
+        builder.push(" AND LOWER(a.asset_class) IN (");
+    }
+
+    let mut separated = builder.separated(", ");
+    for class in classes {
+        separated.push_bind(*class);
+    }
+    separated.push_unseparated(")");
 }
 
 fn normalize_monitoring_layer(value: String) -> AppResult<MonitoringLayer> {
@@ -1734,6 +1777,15 @@ impl MonitoringLayer {
             MonitoringLayer::Network => "network",
             MonitoringLayer::Service => "service",
             MonitoringLayer::Business => "business",
+        }
+    }
+
+    fn filter_asset_classes(self) -> &'static [&'static str] {
+        match self {
+            MonitoringLayer::Hardware => HARDWARE_LAYER_CLASSES,
+            MonitoringLayer::Network => NETWORK_LAYER_CLASSES,
+            MonitoringLayer::Business => BUSINESS_LAYER_CLASSES,
+            MonitoringLayer::Service => NON_SERVICE_LAYER_CLASSES,
         }
     }
 }

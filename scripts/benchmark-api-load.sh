@@ -6,11 +6,13 @@ AUTH_USER="${AUTH_USER:-admin}"
 REQUESTS_PER_ENDPOINT="${REQUESTS_PER_ENDPOINT:-80}"
 WARMUP_REQUESTS="${WARMUP_REQUESTS:-10}"
 REQUEST_TIMEOUT_SECONDS="${REQUEST_TIMEOUT_SECONDS:-8}"
+CONCURRENCY="${CONCURRENCY:-1}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUTPUT_DIR="${OUTPUT_DIR:-.run/benchmarks/api-${RUN_ID}}"
 RAW_DIR="${OUTPUT_DIR}/raw"
 SUMMARY_CSV="${OUTPUT_DIR}/summary.csv"
 SUMMARY_MD="${OUTPUT_DIR}/summary.md"
+UTILIZATION_CSV="${OUTPUT_DIR}/utilization.csv"
 
 ENDPOINT_SPECS=(
   "health|GET|/health|none"
@@ -96,10 +98,12 @@ benchmark_endpoint() {
   local path="$3"
   local auth_mode="$4"
 
+  local result_file="${RAW_DIR}/${name}.result"
   local times_file="${RAW_DIR}/${name}.times_ms"
   local status_file="${RAW_DIR}/${name}.status"
   local sorted_file="${RAW_DIR}/${name}.times_ms.sorted"
 
+  : >"${result_file}"
   : >"${times_file}"
   : >"${status_file}"
 
@@ -108,19 +112,31 @@ benchmark_endpoint() {
     run_request "${method}" "${path}" "${auth_mode}" >/dev/null
   done
 
-  log "Benchmark ${name}: ${REQUESTS_PER_ENDPOINT} requests"
+  log "Benchmark ${name}: ${REQUESTS_PER_ENDPOINT} requests (concurrency=${CONCURRENCY})"
   local start_ns end_ns
   start_ns="$(date +%s%N)"
-  for ((i = 1; i <= REQUESTS_PER_ENDPOINT; i++)); do
-    local result status latency_ms
-    result="$(run_request "${method}" "${path}" "${auth_mode}")"
-    status="${result%% *}"
-    latency_ms="${result##* }"
-    echo "${status}" >>"${status_file}"
-    echo "${latency_ms}" >>"${times_file}"
-  done
+  if (( CONCURRENCY <= 1 )); then
+    for ((i = 1; i <= REQUESTS_PER_ENDPOINT; i++)); do
+      run_request "${method}" "${path}" "${auth_mode}" >>"${result_file}"
+    done
+  else
+    local in_flight=0
+    for ((i = 1; i <= REQUESTS_PER_ENDPOINT; i++)); do
+      (
+        run_request "${method}" "${path}" "${auth_mode}" >>"${result_file}"
+      ) &
+      in_flight=$((in_flight + 1))
+      if (( in_flight >= CONCURRENCY )); then
+        wait -n
+        in_flight=$((in_flight - 1))
+      fi
+    done
+    wait
+  fi
   end_ns="$(date +%s%N)"
 
+  awk '{print $1}' "${result_file}" >"${status_file}"
+  awk '{print $2}' "${result_file}" >"${times_file}"
   sort -n "${times_file}" >"${sorted_file}"
 
   local total success failed
@@ -158,6 +174,8 @@ benchmark_endpoint() {
   printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "${name}" "${method}" "${path}" "${total}" "${success}" "${failed}" "${success_rate}" \
     "${avg}" "${p50}" "${p90}" "${p95}" "${p99}" "${rps_success}" >>"${SUMMARY_CSV}"
+
+  capture_utilization_snapshot "after_${name}"
 }
 
 write_markdown_report() {
@@ -169,6 +187,7 @@ write_markdown_report() {
 - Auth User: ${AUTH_USER}
 - Requests per endpoint: ${REQUESTS_PER_ENDPOINT}
 - Warmup requests per endpoint: ${WARMUP_REQUESTS}
+- Concurrency: ${CONCURRENCY}
 
 | Endpoint | Method | Total | Success | Failed | Success % | Avg ms | P50 ms | P90 ms | P95 ms | P99 ms | Success RPS |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -185,7 +204,50 @@ MARKDOWN
     echo "Raw artifacts:"
     echo "- summary csv: \`${SUMMARY_CSV}\`"
     echo "- per-endpoint raw files: \`${RAW_DIR}\`"
+    echo "- utilization snapshot csv: \`${UTILIZATION_CSV}\`"
+    echo
+    echo "## Utilization Snapshots"
+    echo
+    echo "| Stage | Timestamp (UTC) | Load 1m | Load 5m | Load 15m | Mem Used MB | Mem Total MB | DB CPU | DB Mem |"
+    echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
   } >>"${SUMMARY_MD}"
+
+  tail -n +2 "${UTILIZATION_CSV}" | while IFS=',' read -r stage timestamp load1 load5 load15 mem_used mem_total db_cpu db_mem; do
+    printf '| `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s |\n' \
+      "${stage}" "${timestamp}" "${load1}" "${load5}" "${load15}" "${mem_used}" "${mem_total}" "${db_cpu}" "${db_mem}" \
+      >>"${SUMMARY_MD}"
+  done
+}
+
+capture_utilization_snapshot() {
+  local stage="$1"
+  local timestamp
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  local load1="n/a" load5="n/a" load15="n/a"
+  if [[ -r /proc/loadavg ]]; then
+    read -r load1 load5 load15 _ < /proc/loadavg || true
+  fi
+
+  local mem_total="n/a" mem_used="n/a"
+  if command -v free >/dev/null 2>&1; then
+    mem_total="$(free -m | awk '/^Mem:/ {print $2}')"
+    mem_used="$(free -m | awk '/^Mem:/ {print $3}')"
+  fi
+
+  local db_cpu="n/a" db_mem="n/a"
+  if command -v docker >/dev/null 2>&1; then
+    local db_line
+    db_line="$(docker stats --no-stream --format '{{.Name}},{{.CPUPerc}},{{.MemUsage}}' 2>/dev/null | awk -F, '/postgres/ {print $0; exit}')"
+    if [[ -n "${db_line}" ]]; then
+      db_cpu="$(echo "${db_line}" | awk -F, '{print $2}')"
+      db_mem="$(echo "${db_line}" | awk -F, '{print $3}')"
+    fi
+  fi
+
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    "${stage}" "${timestamp}" "${load1}" "${load5}" "${load15}" "${mem_used}" "${mem_total}" "${db_cpu}" "${db_mem}" \
+    >>"${UTILIZATION_CSV}"
 }
 
 main() {
@@ -194,18 +256,38 @@ main() {
   require_cmd sort
   require_cmd sed
 
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --concurrency)
+        [[ $# -ge 2 ]] || fatal "--concurrency requires a numeric value"
+        CONCURRENCY="$2"
+        shift 2
+        ;;
+      *)
+        fatal "unknown argument: $1"
+        ;;
+    esac
+  done
+
+  [[ "${CONCURRENCY}" =~ ^[0-9]+$ ]] || fatal "CONCURRENCY must be a positive integer"
+  (( CONCURRENCY > 0 )) || fatal "CONCURRENCY must be >= 1"
+
   mkdir -p "${RAW_DIR}"
 
   log "Health check: ${API_BASE_URL}/health"
   curl -fsS "${API_BASE_URL}/health" >/dev/null || fatal "api health check failed"
 
   printf 'endpoint,method,path,total,success,failed,success_rate,avg_ms,p50_ms,p90_ms,p95_ms,p99_ms,success_rps\n' >"${SUMMARY_CSV}"
+  printf 'stage,timestamp_utc,load_1m,load_5m,load_15m,mem_used_mb,mem_total_mb,db_cpu,db_mem\n' >"${UTILIZATION_CSV}"
+  capture_utilization_snapshot "before_all"
 
   local spec name method path auth_mode
   for spec in "${ENDPOINT_SPECS[@]}"; do
     IFS='|' read -r name method path auth_mode <<<"${spec}"
     benchmark_endpoint "${name}" "${method}" "${path}" "${auth_mode}"
   done
+
+  capture_utilization_snapshot "after_all"
 
   write_markdown_report
 

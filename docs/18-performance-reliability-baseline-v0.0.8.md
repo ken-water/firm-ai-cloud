@@ -31,10 +31,20 @@ API benchmark run:
 - Run ID: `20260304T124211Z`
 - Requests per endpoint: `80`
 - Warmup per endpoint: `10`
+- Concurrency: `1` (sequential baseline)
 - Base URL: `http://127.0.0.1:8080`
 - Output:
   - `.run/benchmarks/api-20260304T124211Z/summary.csv`
   - `.run/benchmarks/api-20260304T124211Z/summary.md`
+  - `.run/benchmarks/api-20260304T124211Z/utilization.csv`
+
+Concurrent profile (new script capability):
+
+- Example concurrency: `10` or `20` workers (`--concurrency <N>`)
+- Output includes the same latency summary plus utilization snapshots:
+  - host load average
+  - host memory usage
+  - PostgreSQL container CPU/memory snapshot (`docker stats --no-stream`)
 
 SSE smoke run:
 
@@ -69,6 +79,18 @@ SSE smoke run:
   - `stream.error`: `0`
 - Smoke result: `PASS`
 
+Stress profile capability (new script output):
+
+- Script supports `--burst-count` for high-volume runs (for example `300+`).
+- Summary artifacts now include lag distribution for `alert.monitoring_sync`:
+  - `samples`
+  - `min`
+  - `avg`
+  - `p50`
+  - `p95`
+  - `p99`
+  - `max`
+
 ## 7. MVP KPI Comparison
 
 | KPI | Target | Baseline | Status |
@@ -87,14 +109,14 @@ SSE smoke run:
 1. High tail latency on CMDB/monitoring list endpoints (`p95`/`p99` spikes).
 2. SSE burst events are observable but not 1:1 with trigger count; stream emits aggregated job-state events because backend polling interval is 5s.
 3. Under sustained benchmark traffic, API logs reported slow SQL statements on audit and monitoring binding writes (for example `INSERT INTO audit_logs` and monitoring sync upsert paths >1s).
-4. Current benchmark is single-client sequential load; no multi-client concurrency baseline yet.
+4. Multi-client profile is now supported by script flags, but historical release-level trend data is still limited.
 
 ## 9. Next Actions
 
 1. Add SQL explain/trace for `cmdb/assets` and `monitoring/layers` and create missing indexes for common filter/sort paths.
 2. Optimize audit log write path (batching and/or async queue) and review monitoring sync write hot paths.
-3. Add a second benchmark profile with parallel clients (for example 10/20 workers) and capture CPU/DB utilization.
-4. Add SSE stress profile for 300+ burst jobs and measure event lag distribution.
+3. Standardize parallel benchmark thresholds (10/20 workers) and publish trend comparison in release notes.
+4. Define SLO thresholds for SSE lag distribution under 300+ burst profile and track trend per release.
 5. Publish baseline delta tracking in release notes from v0.0.8 onward.
 
 ## 10. Re-run Commands
@@ -103,6 +125,13 @@ SSE smoke run:
 # API latency/throughput baseline
 bash scripts/benchmark-api-load.sh
 
+# API parallel profile with utilization snapshots
+bash scripts/benchmark-api-load.sh --concurrency 10
+bash scripts/benchmark-api-load.sh --concurrency 20
+
 # SSE burst stability smoke
 bash scripts/benchmark-sse-burst-smoke.sh
+
+# SSE stress profile (auto-adjusts stream duration for burst coverage)
+bash scripts/benchmark-sse-burst-smoke.sh --burst-count 300
 ```
