@@ -361,7 +361,10 @@ fn is_alert_subroute_path(path: &str) -> bool {
     }
 
     let first_segment = path.trim_start_matches('/').split('/').next().unwrap_or("");
-    first_segment.parse::<i64>().ok().is_some_and(|value| value > 0)
+    first_segment
+        .parse::<i64>()
+        .ok()
+        .is_some_and(|value| value > 0)
 }
 
 async fn check_permission(
