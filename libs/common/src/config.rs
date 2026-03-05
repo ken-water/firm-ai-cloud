@@ -27,6 +27,8 @@ pub struct AppConfig {
     pub ldap_auto_provision: bool,
     pub ldap_dev_users_json: Option<String>,
     pub ldap_group_role_mapping_json: Option<String>,
+    pub local_fallback_mode: String,
+    pub local_break_glass_users: Vec<String>,
     pub monitoring_secret_encryption_key: Option<String>,
     pub monitoring_secret_inline_policy: String,
     pub workflow_execution_policy_mode: String,
@@ -61,6 +63,12 @@ impl AppConfig {
         let ldap_auto_provision = parse_bool_env("AUTH_LDAP_AUTO_PROVISION", false)?;
         let ldap_dev_users_json = parse_optional_env("AUTH_LDAP_DEV_USERS_JSON");
         let ldap_group_role_mapping_json = parse_optional_env("AUTH_LDAP_GROUP_ROLE_MAPPING_JSON");
+        let local_fallback_mode = parse_enum_env(
+            "AUTH_LOCAL_FALLBACK_MODE",
+            "allow_all",
+            &["allow_all", "break_glass_only", "disabled"],
+        )?;
+        let local_break_glass_users = parse_csv_env("AUTH_LOCAL_BREAK_GLASS_USERS");
         let monitoring_secret_encryption_key =
             parse_optional_env("MONITORING_SECRET_ENCRYPTION_KEY");
         let monitoring_secret_inline_policy = parse_enum_env(
@@ -100,6 +108,8 @@ impl AppConfig {
             ldap_auto_provision,
             ldap_dev_users_json,
             ldap_group_role_mapping_json,
+            local_fallback_mode,
+            local_break_glass_users,
             monitoring_secret_encryption_key,
             monitoring_secret_inline_policy,
             workflow_execution_policy_mode,
@@ -244,6 +254,8 @@ mod tests {
         assert!(!cfg.ldap_auto_provision);
         assert!(cfg.ldap_dev_users_json.is_none());
         assert!(cfg.ldap_group_role_mapping_json.is_none());
+        assert_eq!(cfg.local_fallback_mode, "allow_all");
+        assert!(cfg.local_break_glass_users.is_empty());
         assert!(cfg.monitoring_secret_encryption_key.is_none());
         assert_eq!(cfg.monitoring_secret_inline_policy, "allow");
         assert_eq!(cfg.workflow_execution_policy_mode, "disabled");

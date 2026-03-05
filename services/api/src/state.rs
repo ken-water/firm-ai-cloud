@@ -23,6 +23,12 @@ pub struct LdapSettings {
 }
 
 #[derive(Clone)]
+pub struct LocalAuthSettings {
+    pub fallback_mode: String,
+    pub break_glass_users: Vec<String>,
+}
+
+#[derive(Clone)]
 pub struct WorkflowExecutionSettings {
     pub policy_mode: String,
     pub allowlist: Vec<String>,
@@ -41,6 +47,7 @@ pub struct AppState {
     pub rbac_enabled: bool,
     pub oidc: OidcSettings,
     pub ldap: LdapSettings,
+    pub local_auth: LocalAuthSettings,
     pub monitoring_secret: MonitoringSecretSettings,
     pub workflow_execution: WorkflowExecutionSettings,
 }

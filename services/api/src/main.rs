@@ -27,7 +27,8 @@ use common::models::{HealthResponse, PingResponse};
 use error::AppResult;
 use sqlx::postgres::PgPoolOptions;
 use state::{
-    AppState, LdapSettings, MonitoringSecretSettings, OidcSettings, WorkflowExecutionSettings,
+    AppState, LdapSettings, LocalAuthSettings, MonitoringSecretSettings, OidcSettings,
+    WorkflowExecutionSettings,
 };
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
@@ -72,6 +73,10 @@ async fn main() -> anyhow::Result<()> {
             auto_provision: config.ldap_auto_provision,
             dev_users_json: config.ldap_dev_users_json,
             group_role_mapping_json: config.ldap_group_role_mapping_json,
+        },
+        local_auth: LocalAuthSettings {
+            fallback_mode: config.local_fallback_mode,
+            break_glass_users: config.local_break_glass_users,
         },
         monitoring_secret: MonitoringSecretSettings {
             encryption_key: config.monitoring_secret_encryption_key,

@@ -100,6 +100,13 @@ export AUTH_LDAP_GROUP_ROLE_MAPPING_JSON='{
 }'
 ```
 
+Optional local fallback governance (break-glass):
+
+```bash
+export AUTH_LOCAL_FALLBACK_MODE=break_glass_only
+export AUTH_LOCAL_BREAK_GLASS_USERS=admin,ops.emergency
+```
+
 Discovery scheduler worker env settings (enabled by default):
 
 ```bash
@@ -743,6 +750,20 @@ Notes:
 - LDAP login denies when no group-role mapping matches the user groups.
 - Mapping source is `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON`.
 
+Break-glass fallback smoke checks:
+
+```bash
+# allow only break-glass users for header fallback
+export AUTH_LOCAL_FALLBACK_MODE=break_glass_only
+export AUTH_LOCAL_BREAK_GLASS_USERS=admin
+
+# allowed
+curl -H 'x-auth-user: admin' http://127.0.0.1:8080/api/v1/auth/me
+
+# denied by fallback policy
+curl -H 'x-auth-user: viewer' http://127.0.0.1:8080/api/v1/auth/me
+```
+
 ## 4. Run Frontend
 
 ```bash
@@ -775,6 +796,7 @@ Notes:
 - Authenticated shell supports runtime language switch (`English` / `简体中文`) from top-right toolbar.
 - Language preference is persisted in browser local storage and restored on next visit.
 - Header mode (`x-auth-user`) is for local/dev usage.
+- Header mode can be constrained by local fallback policy (`allow_all` / `break_glass_only` / `disabled`).
 - Bearer mode is preferred for OIDC session testing.
 
 ## 5. One-Command Dev Entry

@@ -21,6 +21,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Profile orchestration script can optionally generate trend delta artifacts when baseline summaries are provided.
 - Developer quickstart benchmark section now includes profile-aware commands and one-command profile run flow.
 - LDAP login now supports startup-validated group-to-role mapping policy via `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON` with audit metadata.
+- Local fallback header auth now supports governance modes (`allow_all`, `break_glass_only`, `disabled`) with break-glass allowlist and audit events.
 
 ### Fixed
 

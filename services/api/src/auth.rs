@@ -148,6 +148,7 @@ pub async fn rbac_guard(
 
 pub async fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> AppResult<String> {
     if let Some(user) = read_auth_user_header(headers)? {
+        enforce_local_fallback_policy(state, &user).await?;
         return Ok(user);
     }
 
@@ -158,6 +159,79 @@ pub async fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> AppResu
     Err(AppError::Forbidden(format!(
         "{AUTH_USER_HEADER} header or bearer token is required"
     )))
+}
+
+async fn enforce_local_fallback_policy(state: &AppState, user: &str) -> AppResult<()> {
+    let (allowed, reason) = evaluate_local_fallback_policy(
+        state.local_auth.fallback_mode.as_str(),
+        &state.local_auth.break_glass_users,
+        user,
+    );
+    let result = if allowed { "allowed" } else { "denied" };
+    let mode = state.local_auth.fallback_mode.clone();
+    let break_glass_users = state.local_auth.break_glass_users.clone();
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: user.to_string(),
+            action: "auth.local_fallback".to_string(),
+            target_type: "local_fallback_policy".to_string(),
+            target_id: Some(user.to_string()),
+            result: result.to_string(),
+            message: Some(reason.clone()),
+            metadata: json!({
+                "mode": mode,
+                "break_glass_users": break_glass_users,
+            }),
+        },
+    )
+    .await;
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(reason))
+    }
+}
+
+fn evaluate_local_fallback_policy(
+    mode: &str,
+    break_glass_users: &[String],
+    user: &str,
+) -> (bool, String) {
+    let normalized_user = user.trim().to_ascii_lowercase();
+
+    match mode {
+        "allow_all" => (
+            true,
+            "local fallback allowed by policy mode allow_all".to_string(),
+        ),
+        "break_glass_only" => {
+            let allowed = break_glass_users
+                .iter()
+                .any(|item| item.trim().eq_ignore_ascii_case(&normalized_user));
+            if allowed {
+                (
+                    true,
+                    "local fallback allowed by break_glass_only policy".to_string(),
+                )
+            } else {
+                (
+                    false,
+                    format!("local fallback denied by break_glass_only policy for user '{user}'"),
+                )
+            }
+        }
+        "disabled" => (
+            false,
+            "local fallback is disabled by AUTH_LOCAL_FALLBACK_MODE=disabled".to_string(),
+        ),
+        _ => (
+            false,
+            format!("unsupported AUTH_LOCAL_FALLBACK_MODE '{mode}'"),
+        ),
+    }
 }
 
 fn read_auth_user_header(headers: &HeaderMap) -> AppResult<Option<String>> {
@@ -410,13 +484,45 @@ async fn check_permission(
 mod tests {
     use axum::http::{HeaderMap, HeaderValue, Method, header::AUTHORIZATION};
 
-    use super::{read_bearer_token, required_permission};
+    use super::{evaluate_local_fallback_policy, read_bearer_token, required_permission};
 
     fn assert_permission(method: Method, path: &str, expected: &str) {
         assert_eq!(
             required_permission(&method, path).as_deref(),
             Some(expected)
         );
+    }
+
+    #[test]
+    fn local_fallback_allow_all_allows_any_user() {
+        let (allowed, reason) = evaluate_local_fallback_policy("allow_all", &[], "alice");
+        assert!(allowed);
+        assert!(reason.contains("allow_all"));
+    }
+
+    #[test]
+    fn local_fallback_break_glass_only_allows_allowlisted_user() {
+        let allowlist = vec!["Admin".to_string(), "ops.emergency".to_string()];
+        let (allowed, reason) =
+            evaluate_local_fallback_policy("break_glass_only", &allowlist, "admin");
+        assert!(allowed);
+        assert!(reason.contains("break_glass_only"));
+    }
+
+    #[test]
+    fn local_fallback_break_glass_only_denies_non_allowlisted_user() {
+        let allowlist = vec!["admin".to_string()];
+        let (allowed, reason) =
+            evaluate_local_fallback_policy("break_glass_only", &allowlist, "viewer");
+        assert!(!allowed);
+        assert!(reason.contains("denied"));
+    }
+
+    #[test]
+    fn local_fallback_disabled_denies_all_users() {
+        let (allowed, reason) = evaluate_local_fallback_policy("disabled", &[], "admin");
+        assert!(!allowed);
+        assert!(reason.contains("disabled"));
     }
 
     #[test]
