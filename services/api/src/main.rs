@@ -71,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
             mode: config.ldap_mode,
             auto_provision: config.ldap_auto_provision,
             dev_users_json: config.ldap_dev_users_json,
+            group_role_mapping_json: config.ldap_group_role_mapping_json,
         },
         monitoring_secret: MonitoringSecretSettings {
             encryption_key: config.monitoring_secret_encryption_key,
@@ -82,6 +83,10 @@ async fn main() -> anyhow::Result<()> {
             sandbox_dir: config.workflow_execution_sandbox_dir,
         },
     };
+    auth_api::validate_ldap_group_role_mapping_config(
+        state.ldap.group_role_mapping_json.as_deref(),
+    )
+    .context("invalid AUTH_LDAP_GROUP_ROLE_MAPPING_JSON")?;
     monitoring_sync_worker::start(state.clone());
     discovery_scheduler_worker::start(state.clone());
     let app = build_router(state);

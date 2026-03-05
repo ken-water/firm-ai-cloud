@@ -9,6 +9,7 @@ use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::FromRow;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 use crate::{
@@ -147,6 +148,12 @@ struct LocalUser {
 
 #[derive(Debug, FromRow)]
 struct RoleKeyRow {
+    role_key: String,
+}
+
+#[derive(Debug, FromRow)]
+struct RoleLookupRow {
+    id: i64,
     role_key: String,
 }
 
@@ -336,7 +343,8 @@ async fn login_ldap_user(
                     message: Some(err.to_string()),
                     metadata: json!({
                         "email": profile.email,
-                        "groups": profile.groups
+                        "groups": profile.groups,
+                        "mapping_source": "AUTH_LDAP_GROUP_ROLE_MAPPING_JSON"
                     }),
                 },
             )
@@ -352,12 +360,7 @@ async fn login_ldap_user(
         )));
     }
 
-    let roles = load_user_roles(&state, mapped_user.id).await?;
-    if roles.is_empty() {
-        return Err(AppError::Forbidden(
-            "LDAP user is mapped but has no role binding; ask admin to bind a role in /api/v1/iam/users/{id}/roles/{role_id}".to_string(),
-        ));
-    }
+    let roles = sync_ldap_group_mapped_roles(&state, mapped_user.id, &profile.groups).await?;
 
     let session_id = Uuid::new_v4().to_string();
     let expires_at = Utc::now() + Duration::minutes(state.oidc.session_ttl_minutes as i64);
@@ -391,7 +394,8 @@ async fn login_ldap_user(
                 "user_id": mapped_user.id,
                 "subject": profile.sub,
                 "groups": profile.groups,
-                "roles": roles
+                "roles": roles,
+                "mapping_source": "AUTH_LDAP_GROUP_ROLE_MAPPING_JSON"
             }),
         },
     )
@@ -492,6 +496,11 @@ fn ensure_ldap_enabled(state: &AppState) -> AppResult<&LdapSettings> {
     Ok(&state.ldap)
 }
 
+pub fn validate_ldap_group_role_mapping_config(raw: Option<&str>) -> AppResult<()> {
+    let _ = parse_ldap_group_role_mapping(raw)?;
+    Ok(())
+}
+
 async fn authenticate_ldap_user(
     state: &AppState,
     username: &str,
@@ -552,6 +561,146 @@ fn authenticate_ldap_dev_user(
             .filter(|item| !item.is_empty())
             .collect(),
     })
+}
+
+fn parse_ldap_group_role_mapping(raw: Option<&str>) -> AppResult<BTreeMap<String, Vec<String>>> {
+    let Some(raw) = raw else {
+        return Ok(BTreeMap::new());
+    };
+
+    let value: serde_json::Value = serde_json::from_str(raw).map_err(|_| {
+        AppError::Validation(
+            "AUTH_LDAP_GROUP_ROLE_MAPPING_JSON must be a JSON object of group -> role array"
+                .to_string(),
+        )
+    })?;
+
+    let object = value.as_object().ok_or_else(|| {
+        AppError::Validation("AUTH_LDAP_GROUP_ROLE_MAPPING_JSON must be a JSON object".to_string())
+    })?;
+
+    let mut mapping = BTreeMap::new();
+    for (group_key, roles_value) in object {
+        let group = group_key.trim().to_ascii_lowercase();
+        if group.is_empty() {
+            return Err(AppError::Validation(
+                "ldap group key cannot be empty".to_string(),
+            ));
+        }
+
+        let role_array = roles_value.as_array().ok_or_else(|| {
+            AppError::Validation(format!(
+                "ldap group '{group}' mapping value must be a JSON string array"
+            ))
+        })?;
+        if role_array.is_empty() {
+            return Err(AppError::Validation(format!(
+                "ldap group '{group}' must map to at least one role"
+            )));
+        }
+
+        let mut role_set = BTreeSet::new();
+        for item in role_array {
+            let role_key = item.as_str().ok_or_else(|| {
+                AppError::Validation(format!(
+                    "ldap group '{group}' role list must contain only strings"
+                ))
+            })?;
+            let normalized_role = role_key.trim().to_ascii_lowercase();
+            if normalized_role.is_empty() {
+                return Err(AppError::Validation(format!(
+                    "ldap group '{group}' contains empty role key"
+                )));
+            }
+            role_set.insert(normalized_role);
+        }
+
+        mapping.insert(group, role_set.into_iter().collect());
+    }
+
+    Ok(mapping)
+}
+
+fn resolve_ldap_role_keys(
+    mapping: &BTreeMap<String, Vec<String>>,
+    groups: &[String],
+) -> Vec<String> {
+    let mut resolved = BTreeSet::new();
+    for group in groups {
+        let normalized_group = group.trim().to_ascii_lowercase();
+        if let Some(role_keys) = mapping.get(normalized_group.as_str()) {
+            for role_key in role_keys {
+                resolved.insert(role_key.clone());
+            }
+        }
+    }
+    resolved.into_iter().collect()
+}
+
+async fn sync_ldap_group_mapped_roles(
+    state: &AppState,
+    user_id: i64,
+    groups: &[String],
+) -> AppResult<Vec<String>> {
+    let mapping = parse_ldap_group_role_mapping(state.ldap.group_role_mapping_json.as_deref())?;
+    if mapping.is_empty() {
+        return Err(AppError::Forbidden(
+            "ldap group-role mapping is empty; set AUTH_LDAP_GROUP_ROLE_MAPPING_JSON".to_string(),
+        ));
+    }
+
+    let resolved_role_keys = resolve_ldap_role_keys(&mapping, groups);
+    if resolved_role_keys.is_empty() {
+        return Err(AppError::Forbidden(format!(
+            "no ldap role mapping matched for groups {:?}",
+            groups
+        )));
+    }
+
+    let rows: Vec<RoleLookupRow> = sqlx::query_as(
+        "SELECT id, role_key
+         FROM iam_roles
+         WHERE role_key = ANY($1)
+         ORDER BY role_key",
+    )
+    .bind(&resolved_role_keys)
+    .fetch_all(&state.db)
+    .await?;
+
+    let found_role_keys: BTreeSet<String> = rows.iter().map(|item| item.role_key.clone()).collect();
+    let expected_role_keys: BTreeSet<String> = resolved_role_keys.iter().cloned().collect();
+    if found_role_keys != expected_role_keys {
+        let missing: Vec<String> = expected_role_keys
+            .difference(&found_role_keys)
+            .cloned()
+            .collect();
+        return Err(AppError::Validation(format!(
+            "ldap group-role mapping references unknown iam_roles: {:?}",
+            missing
+        )));
+    }
+
+    let role_ids: Vec<i64> = rows.iter().map(|item| item.id).collect();
+    let mut tx = state.db.begin().await?;
+    sqlx::query("DELETE FROM iam_user_roles WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    for role_id in role_ids {
+        sqlx::query(
+            "INSERT INTO iam_user_roles (user_id, role_id)
+             VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    load_user_roles(state, user_id).await
 }
 
 fn build_authorization_url(
@@ -1015,8 +1164,12 @@ fn normalize_email(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{authenticate_ldap_dev_user, choose_base_username};
+    use super::{
+        authenticate_ldap_dev_user, choose_base_username, parse_ldap_group_role_mapping,
+        resolve_ldap_role_keys,
+    };
     use crate::error::AppError;
+    use std::collections::BTreeMap;
 
     #[test]
     fn authenticates_ldap_dev_user_successfully() {
@@ -1087,5 +1240,46 @@ mod tests {
         let picked = choose_base_username(None, Some("User.Name@example.local"), "fallback")
             .expect("secondary should be used");
         assert_eq!(picked, "user.nameexample.local");
+    }
+
+    #[test]
+    fn parses_ldap_group_role_mapping_and_resolves_groups() {
+        let mapping_json = r#"{
+  "ops-admins": ["admin"],
+  "oncall": ["operator", "viewer"]
+}"#;
+        let mapping = parse_ldap_group_role_mapping(Some(mapping_json)).expect("must parse");
+        assert_eq!(mapping.get("ops-admins"), Some(&vec!["admin".to_string()]));
+
+        let resolved =
+            resolve_ldap_role_keys(&mapping, &["ops-admins".to_string(), "oncall".to_string()]);
+        assert_eq!(
+            resolved,
+            vec![
+                "admin".to_string(),
+                "operator".to_string(),
+                "viewer".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_ldap_group_role_mapping_shape() {
+        let err =
+            parse_ldap_group_role_mapping(Some("[]")).expect_err("non-object mapping must fail");
+        match err {
+            AppError::Validation(message) => {
+                assert!(message.contains("JSON object"));
+            }
+            _ => panic!("unexpected error type"),
+        }
+    }
+
+    #[test]
+    fn resolves_empty_roles_when_no_group_matches() {
+        let mut mapping = BTreeMap::new();
+        mapping.insert("ops-admins".to_string(), vec!["admin".to_string()]);
+        let resolved = resolve_ldap_role_keys(&mapping, &["unknown".to_string()]);
+        assert!(resolved.is_empty());
     }
 }

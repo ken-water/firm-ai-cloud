@@ -20,6 +20,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Benchmark threshold policy and gate are now profile-aware (`smoke`, `scale-1k`, `scale-5k`) with strict profile existence validation.
 - Profile orchestration script can optionally generate trend delta artifacts when baseline summaries are provided.
 - Developer quickstart benchmark section now includes profile-aware commands and one-command profile run flow.
+- LDAP login now supports startup-validated group-to-role mapping policy via `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON` with audit metadata.
 
 ### Fixed
 

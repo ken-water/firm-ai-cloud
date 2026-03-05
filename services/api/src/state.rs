@@ -19,6 +19,7 @@ pub struct LdapSettings {
     pub mode: String,
     pub auto_provision: bool,
     pub dev_users_json: Option<String>,
+    pub group_role_mapping_json: Option<String>,
 }
 
 #[derive(Clone)]

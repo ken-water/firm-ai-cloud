@@ -94,6 +94,10 @@ export AUTH_LDAP_DEV_USERS_JSON='[
     "groups": ["ops-admins", "oncall"]
   }
 ]'
+export AUTH_LDAP_GROUP_ROLE_MAPPING_JSON='{
+  "ops-admins": ["admin"],
+  "oncall": ["operator"]
+}'
 ```
 
 Discovery scheduler worker env settings (enabled by default):
@@ -733,6 +737,11 @@ curl -X POST -H 'Content-Type: application/json' \
   -d '{"username":"ldap.ops","password":"dev-pass-1"}' \
   http://127.0.0.1:8080/api/v1/auth/ldap/login
 ```
+
+Notes:
+
+- LDAP login denies when no group-role mapping matches the user groups.
+- Mapping source is `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON`.
 
 ## 4. Run Frontend
 
