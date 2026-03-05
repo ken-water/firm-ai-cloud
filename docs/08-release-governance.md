@@ -1,7 +1,7 @@
 # CloudOps One Release Governance
 
-Version: v1.0  
-Date: 2026-03-02
+Version: v1.1  
+Date: 2026-03-05
 
 ## 1. Scope
 
@@ -128,3 +128,23 @@ Manual trigger options:
 1. GitHub UI: `Actions` -> `CI` -> `Run workflow`.
 2. GitHub CLI:
    - `gh workflow run ci.yml`
+
+## 11. Sequential Release Gate (Mandatory)
+
+Before starting a new development cycle, the immediate previous version must be fully released.
+
+Mandatory gate:
+
+- Previous version tag exists (`vX.Y.Z`).
+- Previous version GitHub Release is published (not draft/prerelease).
+- Previous version release notes and changelog are finalized.
+- Previous milestone/issue set is closed or explicitly deferred with documented reason.
+
+Definition:
+
+- “Start a new cycle” includes creating or executing the next version backlog/milestone implementation work.
+
+Enforcement:
+
+- If this gate is not satisfied, new-cycle feature development should be blocked.
+- Allowed exception: emergency fix required to complete or stabilize the pending previous release.
