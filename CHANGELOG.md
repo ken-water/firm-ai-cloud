@@ -10,6 +10,8 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - v0.0.9 planning document: `docs/19-v0.0.9-topology-reliability-plan.md`.
 - v0.0.9 issue baseline: GitHub issues `#64` to `#71` (topology, stream metrics, perf, CI gate, DR, release closure).
+- v0.1.x planning document: `docs/20-v0.1x-operator-simplicity-plan.md`.
+- v0.1.x issue baseline: GitHub issues `#72` to `#86` (onboarding, alert loop, one-click operations, enterprise hardening, scale gate, staged releases).
 - Topology map API baseline:
   - `GET /api/v1/topology/maps/{scope}` with `site`/`department` scope filters
   - windowing via `limit`/`offset`

@@ -120,6 +120,7 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [Disaster recovery runbook](docs/17-disaster-recovery-runbook.md)
 - [Performance and reliability baseline (v0.0.8)](docs/18-performance-reliability-baseline-v0.0.8.md)
 - [v0.0.9 topology + reliability plan](docs/19-v0.0.9-topology-reliability-plan.md)
+- [v0.1.x operator simplicity + efficiency plan](docs/20-v0.1x-operator-simplicity-plan.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
