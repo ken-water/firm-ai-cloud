@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use sqlx::FromRow;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -26,6 +27,9 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/oidc/start", get(start_oidc_login))
         .route("/oidc/callback", get(handle_oidc_callback))
+        .route("/local/login", post(login_local_user))
+        .route("/local/password", post(set_local_password))
+        .route("/local/mfa/enroll", post(enroll_local_mfa))
         .route("/ldap/login", post(login_ldap_user))
         .route("/me", get(get_current_identity))
         .route("/logout", post(logout_current_session))
@@ -98,6 +102,44 @@ struct LdapLoginResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct LocalLoginRequest {
+    username: String,
+    password: String,
+    totp_code: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalLoginResponse {
+    access_token: String,
+    token_type: &'static str,
+    expires_at: DateTime<Utc>,
+    user: AuthUserSummary,
+    roles: Vec<String>,
+    auth_source: &'static str,
+    mfa_enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct LocalPasswordSetRequest {
+    new_password: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalPasswordSetResponse {
+    username: String,
+    password_updated: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalMfaEnrollResponse {
+    username: String,
+    mfa_enabled: bool,
+    totp_secret: String,
+    period_seconds: u32,
+    digits: u32,
+}
+
+#[derive(Debug, Deserialize)]
 struct OidcTokenResponse {
     access_token: Option<String>,
 }
@@ -155,6 +197,18 @@ struct RoleKeyRow {
 struct RoleLookupRow {
     id: i64,
     role_key: String,
+}
+
+#[derive(Debug, FromRow)]
+struct LocalCredentialRow {
+    user_id: i64,
+    password_salt: String,
+    password_hash: String,
+    mfa_enabled: bool,
+    totp_secret: Option<String>,
+    failed_attempts: i32,
+    last_failed_at: Option<DateTime<Utc>>,
+    locked_until: Option<DateTime<Utc>>,
 }
 
 async fn start_oidc_login(
@@ -415,6 +469,347 @@ async fn login_ldap_user(
         auth_source: LDAP_AUTH_SOURCE,
         subject: profile.sub,
         groups: profile.groups,
+    }))
+}
+
+async fn set_local_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LocalPasswordSetRequest>,
+) -> AppResult<Json<LocalPasswordSetResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let password = required_trimmed("new_password", payload.new_password)?;
+    validate_local_password_strength(password.as_str())?;
+
+    let user = load_user_by_username(&state, &actor).await?;
+    let password_salt = build_local_password_salt();
+    let password_hash = hash_local_password(password_salt.as_str(), password.as_str());
+
+    sqlx::query(
+        "INSERT INTO auth_local_credentials
+            (user_id, password_salt, password_hash, mfa_enabled, totp_secret, failed_attempts, last_failed_at, locked_until, updated_at)
+         VALUES ($1, $2, $3, FALSE, NULL, 0, NULL, NULL, NOW())
+         ON CONFLICT (user_id)
+         DO UPDATE SET
+            password_salt = EXCLUDED.password_salt,
+            password_hash = EXCLUDED.password_hash,
+            failed_attempts = 0,
+            last_failed_at = NULL,
+            locked_until = NULL,
+            updated_at = NOW()",
+    )
+    .bind(user.id)
+    .bind(password_salt)
+    .bind(password_hash)
+    .execute(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "auth.local.password_set".to_string(),
+            target_type: "auth_local_credentials".to_string(),
+            target_id: Some(user.id.to_string()),
+            result: "success".to_string(),
+            message: None,
+            metadata: json!({
+                "username": user.username
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(LocalPasswordSetResponse {
+        username: actor,
+        password_updated: true,
+    }))
+}
+
+async fn enroll_local_mfa(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<LocalMfaEnrollResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let user = load_user_by_username(&state, &actor).await?;
+    ensure_local_credential_exists(&state, user.id).await?;
+
+    let totp_secret = build_local_totp_secret();
+    sqlx::query(
+        "UPDATE auth_local_credentials
+         SET mfa_enabled = TRUE,
+             totp_secret = $2,
+             totp_enrolled_at = NOW(),
+             updated_at = NOW()
+         WHERE user_id = $1",
+    )
+    .bind(user.id)
+    .bind(&totp_secret)
+    .execute(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "auth.local.mfa_enroll".to_string(),
+            target_type: "auth_local_credentials".to_string(),
+            target_id: Some(user.id.to_string()),
+            result: "success".to_string(),
+            message: None,
+            metadata: json!({
+                "username": user.username,
+                "period_seconds": 30,
+                "digits": 6
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(LocalMfaEnrollResponse {
+        username: actor,
+        mfa_enabled: true,
+        totp_secret,
+        period_seconds: 30,
+        digits: 6,
+    }))
+}
+
+async fn login_local_user(
+    State(state): State<AppState>,
+    Json(payload): Json<LocalLoginRequest>,
+) -> AppResult<Json<LocalLoginResponse>> {
+    let username = required_trimmed("username", payload.username)?.to_ascii_lowercase();
+    let password = required_trimmed("password", payload.password)?;
+    let totp_code = payload.totp_code.map(|item| item.trim().to_string());
+
+    let (fallback_allowed, fallback_reason) = evaluate_local_fallback_policy(
+        state.local_auth.fallback_mode.as_str(),
+        &state.local_auth.break_glass_users,
+        username.as_str(),
+    );
+    if !fallback_allowed {
+        let mode = state.local_auth.fallback_mode.clone();
+        let break_glass_users = state.local_auth.break_glass_users.clone();
+        write_audit_log_best_effort(
+            &state.db,
+            AuditLogWriteInput {
+                actor: username.clone(),
+                action: "auth.local.login".to_string(),
+                target_type: "auth_local_policy".to_string(),
+                target_id: Some(username.clone()),
+                result: "denied".to_string(),
+                message: Some(fallback_reason.clone()),
+                metadata: json!({
+                    "mode": mode,
+                    "break_glass_users": break_glass_users
+                }),
+            },
+        )
+        .await;
+        return Err(AppError::Forbidden(fallback_reason));
+    }
+
+    let user = load_user_by_username(&state, &username).await?;
+    if !user.is_enabled {
+        return Err(AppError::Forbidden(format!(
+            "user '{}' is disabled",
+            user.username
+        )));
+    }
+
+    let credential = load_local_credential(&state, user.id)
+        .await?
+        .ok_or_else(|| {
+            AppError::Forbidden("local credential is not configured for this user".to_string())
+        })?;
+
+    if let Some(locked_until) = credential.locked_until {
+        if locked_until > Utc::now() {
+            write_audit_log_best_effort(
+                &state.db,
+                AuditLogWriteInput {
+                    actor: username.clone(),
+                    action: "auth.local.lockout.blocked".to_string(),
+                    target_type: "auth_local_credentials".to_string(),
+                    target_id: Some(user.id.to_string()),
+                    result: "denied".to_string(),
+                    message: Some(format!(
+                        "local account locked until {}",
+                        locked_until.to_rfc3339()
+                    )),
+                    metadata: json!({}),
+                },
+            )
+            .await;
+            return Err(AppError::Forbidden(format!(
+                "local account is locked until {}",
+                locked_until.to_rfc3339()
+            )));
+        }
+    }
+
+    let expected_hash = hash_local_password(credential.password_salt.as_str(), password.as_str());
+    if expected_hash != credential.password_hash {
+        let lockout_started_at = register_local_login_failure(&state, &credential).await?;
+        write_audit_log_best_effort(
+            &state.db,
+            AuditLogWriteInput {
+                actor: username.clone(),
+                action: "auth.local.login".to_string(),
+                target_type: "auth_local_credentials".to_string(),
+                target_id: Some(user.id.to_string()),
+                result: "failed".to_string(),
+                message: Some("invalid local password".to_string()),
+                metadata: json!({}),
+            },
+        )
+        .await;
+        if let Some(locked_until) = lockout_started_at {
+            write_audit_log_best_effort(
+                &state.db,
+                AuditLogWriteInput {
+                    actor: username.clone(),
+                    action: "auth.local.lockout.start".to_string(),
+                    target_type: "auth_local_credentials".to_string(),
+                    target_id: Some(user.id.to_string()),
+                    result: "success".to_string(),
+                    message: Some(format!(
+                        "lockout started until {}",
+                        locked_until.to_rfc3339()
+                    )),
+                    metadata: json!({}),
+                },
+            )
+            .await;
+        }
+        return Err(AppError::Forbidden(
+            "local authentication failed: invalid credentials".to_string(),
+        ));
+    }
+
+    if credential.mfa_enabled {
+        let provided_code = totp_code
+            .as_deref()
+            .filter(|item| !item.is_empty())
+            .ok_or_else(|| {
+                AppError::Forbidden("totp_code is required for MFA-enabled user".to_string())
+            })?;
+        let secret = credential.totp_secret.clone().ok_or_else(|| {
+            AppError::Validation("mfa_enabled=true but totp_secret is missing".to_string())
+        })?;
+        if !verify_totp_code(secret.as_str(), provided_code, Utc::now()) {
+            let lockout_started_at = register_local_login_failure(&state, &credential).await?;
+            write_audit_log_best_effort(
+                &state.db,
+                AuditLogWriteInput {
+                    actor: username.clone(),
+                    action: "auth.local.login".to_string(),
+                    target_type: "auth_local_credentials".to_string(),
+                    target_id: Some(user.id.to_string()),
+                    result: "failed".to_string(),
+                    message: Some("invalid totp_code".to_string()),
+                    metadata: json!({}),
+                },
+            )
+            .await;
+            if let Some(locked_until) = lockout_started_at {
+                write_audit_log_best_effort(
+                    &state.db,
+                    AuditLogWriteInput {
+                        actor: username.clone(),
+                        action: "auth.local.lockout.start".to_string(),
+                        target_type: "auth_local_credentials".to_string(),
+                        target_id: Some(user.id.to_string()),
+                        result: "success".to_string(),
+                        message: Some(format!(
+                            "lockout started until {}",
+                            locked_until.to_rfc3339()
+                        )),
+                        metadata: json!({}),
+                    },
+                )
+                .await;
+            }
+            return Err(AppError::Forbidden(
+                "local authentication failed: invalid totp_code".to_string(),
+            ));
+        }
+    }
+
+    let was_locked = clear_local_login_failures(&state, user.id).await?;
+    if was_locked {
+        write_audit_log_best_effort(
+            &state.db,
+            AuditLogWriteInput {
+                actor: username.clone(),
+                action: "auth.local.lockout.cleared".to_string(),
+                target_type: "auth_local_credentials".to_string(),
+                target_id: Some(user.id.to_string()),
+                result: "success".to_string(),
+                message: Some("lockout cleared after successful login".to_string()),
+                metadata: json!({}),
+            },
+        )
+        .await;
+    }
+    enforce_local_session_concurrency_cap(&state, user.id).await?;
+
+    let roles = load_user_roles(&state, user.id).await?;
+    if roles.is_empty() {
+        return Err(AppError::Forbidden(
+            "local user has no role binding".to_string(),
+        ));
+    }
+
+    let session_id = Uuid::new_v4().to_string();
+    let expires_at =
+        Utc::now() + Duration::minutes(state.local_auth.session_max_age_minutes as i64);
+    sqlx::query(
+        "INSERT INTO auth_sessions (id, user_id, auth_source, expires_at, metadata, last_seen_at)
+         VALUES ($1, $2, 'local', $3, $4, NOW())",
+    )
+    .bind(&session_id)
+    .bind(user.id)
+    .bind(expires_at)
+    .bind(json!({
+        "mfa_enabled": credential.mfa_enabled,
+        "session_idle_timeout_minutes": state.local_auth.session_idle_timeout_minutes
+    }))
+    .execute(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: username.clone(),
+            action: "auth.local.login".to_string(),
+            target_type: "auth_session".to_string(),
+            target_id: Some(session_id.clone()),
+            result: "success".to_string(),
+            message: None,
+            metadata: json!({
+                "user_id": user.id,
+                "roles": roles,
+                "mfa_enabled": credential.mfa_enabled
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(LocalLoginResponse {
+        access_token: session_id,
+        token_type: "Bearer",
+        expires_at,
+        user: AuthUserSummary {
+            id: user.id,
+            username: user.username,
+            display_name: user.display_name,
+            email: user.email,
+        },
+        roles,
+        auth_source: "local",
+        mfa_enabled: credential.mfa_enabled,
     }))
 }
 
@@ -1031,6 +1426,274 @@ async fn load_user_roles(state: &AppState, user_id: i64) -> AppResult<Vec<String
     Ok(rows.into_iter().map(|item| item.role_key).collect())
 }
 
+async fn load_local_credential(
+    state: &AppState,
+    user_id: i64,
+) -> AppResult<Option<LocalCredentialRow>> {
+    let row: Option<LocalCredentialRow> = sqlx::query_as(
+        "SELECT user_id, password_salt, password_hash, mfa_enabled, totp_secret, failed_attempts, last_failed_at, locked_until
+         FROM auth_local_credentials
+         WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    Ok(row)
+}
+
+async fn ensure_local_credential_exists(state: &AppState, user_id: i64) -> AppResult<()> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM auth_local_credentials WHERE user_id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !exists {
+        return Err(AppError::Validation(
+            "local credential is not configured; call /api/v1/auth/local/password first"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn evaluate_local_fallback_policy(
+    mode: &str,
+    break_glass_users: &[String],
+    user: &str,
+) -> (bool, String) {
+    let normalized_user = user.trim().to_ascii_lowercase();
+    match mode {
+        "allow_all" => (
+            true,
+            "local fallback allowed by policy mode allow_all".to_string(),
+        ),
+        "break_glass_only" => {
+            let allowed = break_glass_users
+                .iter()
+                .any(|item| item.trim().eq_ignore_ascii_case(&normalized_user));
+            if allowed {
+                (
+                    true,
+                    "local fallback allowed by break_glass_only policy".to_string(),
+                )
+            } else {
+                (
+                    false,
+                    format!("local fallback denied by break_glass_only policy for user '{user}'"),
+                )
+            }
+        }
+        "disabled" => (
+            false,
+            "local fallback is disabled by AUTH_LOCAL_FALLBACK_MODE=disabled".to_string(),
+        ),
+        _ => (
+            false,
+            format!("unsupported AUTH_LOCAL_FALLBACK_MODE '{mode}'"),
+        ),
+    }
+}
+
+fn validate_local_password_strength(password: &str) -> AppResult<()> {
+    if password.len() < 10 {
+        return Err(AppError::Validation(
+            "new_password must be at least 10 characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn build_local_password_salt() -> String {
+    Uuid::new_v4().simple().to_string()
+}
+
+fn build_local_totp_secret() -> String {
+    Uuid::new_v4().simple().to_string()
+}
+
+fn hash_local_password(salt: &str, password: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(salt.as_bytes());
+    hasher.update(b":");
+    hasher.update(password.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+async fn register_local_login_failure(
+    state: &AppState,
+    credential: &LocalCredentialRow,
+) -> AppResult<Option<DateTime<Utc>>> {
+    let now = Utc::now();
+    let window_seconds = state.local_auth.rate_limit_window_seconds as i64;
+    let mut attempts = credential.failed_attempts.max(0) as u32;
+
+    if let Some(last_failed_at) = credential.last_failed_at {
+        let elapsed = now.signed_duration_since(last_failed_at).num_seconds();
+        if elapsed > window_seconds {
+            attempts = 0;
+        }
+    } else {
+        attempts = 0;
+    }
+    attempts = attempts.saturating_add(1);
+
+    let lockout_threshold = state.local_auth.lockout_threshold.max(1);
+    let rate_limit_max = state.local_auth.rate_limit_max_attempts.max(1);
+    let should_lock = attempts >= lockout_threshold || attempts >= rate_limit_max;
+    let locked_until = if should_lock {
+        Some(now + Duration::minutes(state.local_auth.lockout_minutes.max(1) as i64))
+    } else {
+        None
+    };
+
+    sqlx::query(
+        "UPDATE auth_local_credentials
+         SET failed_attempts = $2,
+             last_failed_at = $3,
+             locked_until = $4,
+             updated_at = NOW()
+         WHERE user_id = $1",
+    )
+    .bind(credential.user_id)
+    .bind(attempts as i32)
+    .bind(now)
+    .bind(locked_until)
+    .execute(&state.db)
+    .await?;
+
+    Ok(locked_until)
+}
+
+async fn clear_local_login_failures(state: &AppState, user_id: i64) -> AppResult<bool> {
+    let previous_locked_until: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT locked_until
+         FROM auth_local_credentials
+         WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .flatten();
+
+    sqlx::query(
+        "UPDATE auth_local_credentials
+         SET failed_attempts = 0,
+             last_failed_at = NULL,
+             locked_until = NULL,
+             updated_at = NOW()
+         WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .execute(&state.db)
+    .await?;
+    Ok(previous_locked_until.is_some())
+}
+
+async fn enforce_local_session_concurrency_cap(state: &AppState, user_id: i64) -> AppResult<()> {
+    let cap = state.local_auth.session_max_concurrent.max(1) as usize;
+    let sessions: Vec<String> = sqlx::query_scalar(
+        "SELECT id
+         FROM auth_sessions
+         WHERE user_id = $1
+           AND auth_source = 'local'
+           AND revoked_at IS NULL
+           AND expires_at > NOW()
+         ORDER BY issued_at ASC",
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let revoke_count = local_session_revoke_count(sessions.len(), cap);
+    if revoke_count == 0 {
+        return Ok(());
+    }
+
+    for session_id in sessions.into_iter().take(revoke_count) {
+        sqlx::query(
+            "UPDATE auth_sessions
+             SET revoked_at = NOW()
+             WHERE id = $1
+               AND revoked_at IS NULL",
+        )
+        .bind(session_id)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok(())
+}
+
+fn local_session_revoke_count(active_sessions: usize, cap: usize) -> usize {
+    let effective_cap = cap.max(1);
+    if active_sessions < effective_cap {
+        0
+    } else {
+        active_sessions - effective_cap + 1
+    }
+}
+
+fn verify_totp_code(secret: &str, code: &str, now: DateTime<Utc>) -> bool {
+    if code.len() != 6 || !code.chars().all(|ch| ch.is_ascii_digit()) {
+        return false;
+    }
+    let current_counter = now.timestamp() / 30;
+    for skew in -1..=1 {
+        let candidate_counter = current_counter + skew;
+        if candidate_counter < 0 {
+            continue;
+        }
+        let expected = compute_totp_code_for_counter(secret.as_bytes(), candidate_counter as u64);
+        if expected == code {
+            return true;
+        }
+    }
+    false
+}
+
+fn compute_totp_code_for_counter(secret: &[u8], counter: u64) -> String {
+    let counter_bytes = counter.to_be_bytes();
+    let hmac = hmac_sha256(secret, &counter_bytes);
+    let offset = (hmac[hmac.len() - 1] & 0x0f) as usize;
+    let binary = ((hmac[offset] as u32 & 0x7f) << 24)
+        | ((hmac[offset + 1] as u32) << 16)
+        | ((hmac[offset + 2] as u32) << 8)
+        | (hmac[offset + 3] as u32);
+    format!("{:06}", binary % 1_000_000)
+}
+
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    let mut normalized_key = [0u8; 64];
+    if key.len() > 64 {
+        let digest = Sha256::digest(key);
+        normalized_key[..32].copy_from_slice(&digest);
+    } else {
+        normalized_key[..key.len()].copy_from_slice(key);
+    }
+
+    let mut ipad = [0u8; 64];
+    let mut opad = [0u8; 64];
+    for idx in 0..64 {
+        ipad[idx] = normalized_key[idx] ^ 0x36;
+        opad[idx] = normalized_key[idx] ^ 0x5c;
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(ipad);
+    inner.update(message);
+    let inner_hash = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(opad);
+    outer.update(inner_hash);
+    let output = outer.finalize();
+
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&output);
+    result
+}
+
 async fn upsert_subject_link(
     state: &AppState,
     auth_source: &str,
@@ -1165,10 +1828,12 @@ fn normalize_email(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        authenticate_ldap_dev_user, choose_base_username, parse_ldap_group_role_mapping,
-        resolve_ldap_role_keys,
+        authenticate_ldap_dev_user, choose_base_username, compute_totp_code_for_counter,
+        local_session_revoke_count, parse_ldap_group_role_mapping, resolve_ldap_role_keys,
+        verify_totp_code,
     };
     use crate::error::AppError;
+    use chrono::{TimeZone, Utc};
     use std::collections::BTreeMap;
 
     #[test]
@@ -1281,5 +1946,28 @@ mod tests {
         mapping.insert("ops-admins".to_string(), vec!["admin".to_string()]);
         let resolved = resolve_ldap_role_keys(&mapping, &["unknown".to_string()]);
         assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn verifies_totp_code_for_current_time_window() {
+        let secret = "dev-secret-123";
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 5, 12, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let counter = (now.timestamp() / 30) as u64;
+        let code = compute_totp_code_for_counter(secret.as_bytes(), counter);
+
+        assert!(verify_totp_code(secret, code.as_str(), now));
+        assert!(!verify_totp_code(secret, "000000", now));
+    }
+
+    #[test]
+    fn computes_local_session_revoke_count_edges() {
+        assert_eq!(local_session_revoke_count(0, 3), 0);
+        assert_eq!(local_session_revoke_count(2, 3), 0);
+        assert_eq!(local_session_revoke_count(3, 3), 1);
+        assert_eq!(local_session_revoke_count(5, 3), 3);
+        assert_eq!(local_session_revoke_count(2, 0), 2);
     }
 }

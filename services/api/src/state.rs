@@ -26,6 +26,13 @@ pub struct LdapSettings {
 pub struct LocalAuthSettings {
     pub fallback_mode: String,
     pub break_glass_users: Vec<String>,
+    pub session_idle_timeout_minutes: u32,
+    pub session_max_age_minutes: u32,
+    pub session_max_concurrent: u32,
+    pub lockout_threshold: u32,
+    pub lockout_minutes: u32,
+    pub rate_limit_window_seconds: u32,
+    pub rate_limit_max_attempts: u32,
 }
 
 #[derive(Clone)]

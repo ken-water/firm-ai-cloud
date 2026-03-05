@@ -5,6 +5,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use sqlx::FromRow;
 use tracing::warn;
@@ -26,6 +27,8 @@ struct PermissionCheckRecord {
 #[derive(Debug, FromRow)]
 struct SessionUserRecord {
     username: String,
+    auth_source: String,
+    last_seen_at: DateTime<Utc>,
 }
 
 pub async fn rbac_guard(
@@ -288,7 +291,7 @@ pub fn read_bearer_token(headers: &HeaderMap) -> AppResult<Option<String>> {
 
 async fn resolve_user_from_bearer_token(state: &AppState, token: &str) -> AppResult<String> {
     let session: Option<SessionUserRecord> = sqlx::query_as(
-        "SELECT u.username
+        "SELECT u.username, s.auth_source, s.last_seen_at
          FROM auth_sessions s
          INNER JOIN iam_users u ON u.id = s.user_id
          WHERE s.id = $1
@@ -302,7 +305,51 @@ async fn resolve_user_from_bearer_token(state: &AppState, token: &str) -> AppRes
 
     let session = session
         .ok_or_else(|| AppError::Forbidden("bearer token is invalid or expired".to_string()))?;
+
+    if session.auth_source == "local"
+        && is_local_session_idle_expired(
+            session.last_seen_at,
+            Utc::now(),
+            state.local_auth.session_idle_timeout_minutes,
+        )
+    {
+        sqlx::query(
+            "UPDATE auth_sessions
+             SET revoked_at = NOW()
+             WHERE id = $1
+               AND revoked_at IS NULL",
+        )
+        .bind(token)
+        .execute(&state.db)
+        .await?;
+
+        return Err(AppError::Forbidden(
+            "local session expired by idle timeout".to_string(),
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE auth_sessions
+         SET last_seen_at = NOW()
+         WHERE id = $1
+           AND revoked_at IS NULL",
+    )
+    .bind(token)
+    .execute(&state.db)
+    .await?;
+
     Ok(session.username)
+}
+
+fn is_local_session_idle_expired(
+    last_seen_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+    idle_timeout_minutes: u32,
+) -> bool {
+    if idle_timeout_minutes == 0 {
+        return false;
+    }
+    now > last_seen_at + Duration::minutes(idle_timeout_minutes as i64)
 }
 
 fn required_permission(method: &Method, path: &str) -> Option<String> {
@@ -483,8 +530,12 @@ async fn check_permission(
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue, Method, header::AUTHORIZATION};
+    use chrono::{Duration, TimeZone, Utc};
 
-    use super::{evaluate_local_fallback_policy, read_bearer_token, required_permission};
+    use super::{
+        evaluate_local_fallback_policy, is_local_session_idle_expired, read_bearer_token,
+        required_permission,
+    };
 
     fn assert_permission(method: Method, path: &str, expected: &str) {
         assert_eq!(
@@ -523,6 +574,36 @@ mod tests {
         let (allowed, reason) = evaluate_local_fallback_policy("disabled", &[], "admin");
         assert!(!allowed);
         assert!(reason.contains("disabled"));
+    }
+
+    #[test]
+    fn local_session_idle_timeout_zero_disables_expiration() {
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 5, 12, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let last_seen = now - Duration::minutes(120);
+        assert!(!is_local_session_idle_expired(last_seen, now, 0));
+    }
+
+    #[test]
+    fn local_session_idle_timeout_allows_within_window() {
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 5, 12, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let last_seen = now - Duration::minutes(14);
+        assert!(!is_local_session_idle_expired(last_seen, now, 15));
+    }
+
+    #[test]
+    fn local_session_idle_timeout_expires_after_window() {
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 5, 12, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let last_seen = now - Duration::minutes(16);
+        assert!(is_local_session_idle_expired(last_seen, now, 15));
     }
 
     #[test]

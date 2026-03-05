@@ -105,6 +105,13 @@ Optional local fallback governance (break-glass):
 ```bash
 export AUTH_LOCAL_FALLBACK_MODE=break_glass_only
 export AUTH_LOCAL_BREAK_GLASS_USERS=admin,ops.emergency
+export AUTH_LOCAL_SESSION_IDLE_TIMEOUT_MINUTES=60
+export AUTH_LOCAL_SESSION_MAX_AGE_MINUTES=480
+export AUTH_LOCAL_SESSION_MAX_CONCURRENT=3
+export AUTH_LOCAL_LOCKOUT_THRESHOLD=5
+export AUTH_LOCAL_LOCKOUT_MINUTES=15
+export AUTH_LOCAL_RATE_LIMIT_WINDOW_SECONDS=60
+export AUTH_LOCAL_RATE_LIMIT_MAX_ATTEMPTS=10
 ```
 
 Discovery scheduler worker env settings (enabled by default):
@@ -745,6 +752,24 @@ curl -X POST -H 'Content-Type: application/json' \
   http://127.0.0.1:8080/api/v1/auth/ldap/login
 ```
 
+Local auth hardening APIs:
+
+```bash
+# set/update current user's local password (authenticated context required)
+curl -X POST -H "$AUTH_HEADER" -H 'Content-Type: application/json' \
+  -d '{"new_password":"ChangeMe_12345"}' \
+  http://127.0.0.1:8080/api/v1/auth/local/password
+
+# enroll current user for MFA and receive TOTP secret
+curl -X POST -H "$AUTH_HEADER" \
+  http://127.0.0.1:8080/api/v1/auth/local/mfa/enroll
+
+# local login with password (+ totp_code when mfa_enabled=true)
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"ChangeMe_12345","totp_code":"000000"}' \
+  http://127.0.0.1:8080/api/v1/auth/local/login
+```
+
 Notes:
 
 - LDAP login denies when no group-role mapping matches the user groups.
@@ -848,6 +873,12 @@ OIDC dev-flow smoke check (requires API running with `AUTH_OIDC_ENABLED=true` an
 
 ```bash
 bash scripts/test-oidc-dev.sh
+```
+
+Local auth hardening lockout check (requires API running):
+
+```bash
+bash scripts/test-local-auth-hardening.sh
 ```
 
 Frontend i18n key coverage check:

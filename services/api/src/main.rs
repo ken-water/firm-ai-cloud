@@ -77,6 +77,13 @@ async fn main() -> anyhow::Result<()> {
         local_auth: LocalAuthSettings {
             fallback_mode: config.local_fallback_mode,
             break_glass_users: config.local_break_glass_users,
+            session_idle_timeout_minutes: config.local_session_idle_timeout_minutes,
+            session_max_age_minutes: config.local_session_max_age_minutes,
+            session_max_concurrent: config.local_session_max_concurrent,
+            lockout_threshold: config.local_lockout_threshold,
+            lockout_minutes: config.local_lockout_minutes,
+            rate_limit_window_seconds: config.local_rate_limit_window_seconds,
+            rate_limit_max_attempts: config.local_rate_limit_max_attempts,
         },
         monitoring_secret: MonitoringSecretSettings {
             encryption_key: config.monitoring_secret_encryption_key,

@@ -11,6 +11,11 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Scale benchmark profile orchestration script: `scripts/benchmark-scale-profiles.sh`.
 - Benchmark trend delta reporting script: `scripts/benchmark-trend-delta.sh`.
 - LDAP dev connector login baseline API: `POST /api/v1/auth/ldap/login`.
+- Local auth hardening APIs:
+  - `POST /api/v1/auth/local/password`
+  - `POST /api/v1/auth/local/mfa/enroll`
+  - `POST /api/v1/auth/local/login`
+- Local auth lockout integration script: `scripts/test-local-auth-hardening.sh`.
 
 ### Changed
 
@@ -22,6 +27,7 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Developer quickstart benchmark section now includes profile-aware commands and one-command profile run flow.
 - LDAP login now supports startup-validated group-to-role mapping policy via `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON` with audit metadata.
 - Local fallback header auth now supports governance modes (`allow_all`, `break_glass_only`, `disabled`) with break-glass allowlist and audit events.
+- Local auth session and brute-force controls are configurable via env (idle/max-age/concurrency, lockout, and rate-limit knobs).
 
 ### Fixed
 

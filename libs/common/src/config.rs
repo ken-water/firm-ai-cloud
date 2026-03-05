@@ -29,6 +29,13 @@ pub struct AppConfig {
     pub ldap_group_role_mapping_json: Option<String>,
     pub local_fallback_mode: String,
     pub local_break_glass_users: Vec<String>,
+    pub local_session_idle_timeout_minutes: u32,
+    pub local_session_max_age_minutes: u32,
+    pub local_session_max_concurrent: u32,
+    pub local_lockout_threshold: u32,
+    pub local_lockout_minutes: u32,
+    pub local_rate_limit_window_seconds: u32,
+    pub local_rate_limit_max_attempts: u32,
     pub monitoring_secret_encryption_key: Option<String>,
     pub monitoring_secret_inline_policy: String,
     pub workflow_execution_policy_mode: String,
@@ -69,6 +76,17 @@ impl AppConfig {
             &["allow_all", "break_glass_only", "disabled"],
         )?;
         let local_break_glass_users = parse_csv_env("AUTH_LOCAL_BREAK_GLASS_USERS");
+        let local_session_idle_timeout_minutes =
+            parse_u32_env("AUTH_LOCAL_SESSION_IDLE_TIMEOUT_MINUTES", 60)?;
+        let local_session_max_age_minutes =
+            parse_u32_env("AUTH_LOCAL_SESSION_MAX_AGE_MINUTES", 480)?;
+        let local_session_max_concurrent = parse_u32_env("AUTH_LOCAL_SESSION_MAX_CONCURRENT", 3)?;
+        let local_lockout_threshold = parse_u32_env("AUTH_LOCAL_LOCKOUT_THRESHOLD", 5)?;
+        let local_lockout_minutes = parse_u32_env("AUTH_LOCAL_LOCKOUT_MINUTES", 15)?;
+        let local_rate_limit_window_seconds =
+            parse_u32_env("AUTH_LOCAL_RATE_LIMIT_WINDOW_SECONDS", 60)?;
+        let local_rate_limit_max_attempts =
+            parse_u32_env("AUTH_LOCAL_RATE_LIMIT_MAX_ATTEMPTS", 10)?;
         let monitoring_secret_encryption_key =
             parse_optional_env("MONITORING_SECRET_ENCRYPTION_KEY");
         let monitoring_secret_inline_policy = parse_enum_env(
@@ -110,6 +128,13 @@ impl AppConfig {
             ldap_group_role_mapping_json,
             local_fallback_mode,
             local_break_glass_users,
+            local_session_idle_timeout_minutes,
+            local_session_max_age_minutes,
+            local_session_max_concurrent,
+            local_lockout_threshold,
+            local_lockout_minutes,
+            local_rate_limit_window_seconds,
+            local_rate_limit_max_attempts,
             monitoring_secret_encryption_key,
             monitoring_secret_inline_policy,
             workflow_execution_policy_mode,
@@ -256,6 +281,13 @@ mod tests {
         assert!(cfg.ldap_group_role_mapping_json.is_none());
         assert_eq!(cfg.local_fallback_mode, "allow_all");
         assert!(cfg.local_break_glass_users.is_empty());
+        assert_eq!(cfg.local_session_idle_timeout_minutes, 60);
+        assert_eq!(cfg.local_session_max_age_minutes, 480);
+        assert_eq!(cfg.local_session_max_concurrent, 3);
+        assert_eq!(cfg.local_lockout_threshold, 5);
+        assert_eq!(cfg.local_lockout_minutes, 15);
+        assert_eq!(cfg.local_rate_limit_window_seconds, 60);
+        assert_eq!(cfg.local_rate_limit_max_attempts, 10);
         assert!(cfg.monitoring_secret_encryption_key.is_none());
         assert_eq!(cfg.monitoring_secret_inline_policy, "allow");
         assert_eq!(cfg.workflow_execution_policy_mode, "disabled");
