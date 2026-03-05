@@ -188,6 +188,27 @@ Operational notes:
 2. If inline secret mode is used, `MONITORING_SECRET_ENCRYPTION_KEY` is mandatory.
 3. API responses and probe payloads only return masked `secret_ref` values.
 
+### 3.6 Enterprise Identity Hardening (LDAP + Break-Glass)
+
+LDAP baseline and local fallback governance are controlled by:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `AUTH_LDAP_ENABLED` | `false` | Enable LDAP login endpoint |
+| `AUTH_LDAP_MODE` | `dev` | LDAP connector mode (`dev`/`live`) |
+| `AUTH_LDAP_DEV_USERS_JSON` | empty | Dev connector identity payload (JSON array) |
+| `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON` | empty | Group-to-role mapping policy (JSON object) |
+| `AUTH_LOCAL_FALLBACK_MODE` | `allow_all` | Local header fallback mode (`allow_all`/`break_glass_only`/`disabled`) |
+| `AUTH_LOCAL_BREAK_GLASS_USERS` | empty | Allowlisted principals in break-glass mode |
+
+Hardening checklist:
+
+1. Set `AUTH_LOCAL_FALLBACK_MODE=break_glass_only` or `disabled` for production.
+2. Keep `AUTH_LOCAL_BREAK_GLASS_USERS` limited to emergency principals and test quarterly.
+3. Define `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON` with least-privilege role mapping.
+4. Validate LDAP login audit events include mapping source and resolved groups/roles.
+5. Confirm non-mapped LDAP groups are denied before rollout.
+
 ## 4. Deployment Security Notes
 
 ### 4.1 Online/Connected Environments
@@ -212,6 +233,8 @@ For releases that include auth/RBAC/audit changes, verify:
 - [ ] Affected endpoints and permission impacts are documented.
 - [ ] Migration and rollback considerations are included.
 - [ ] OIDC config changes are listed with secure defaults.
+- [ ] LDAP group-role mapping and fallback governance changes are documented with explicit defaults.
+- [ ] Break-glass user scope and emergency access runbook are reviewed.
 - [ ] Audit behavior changes and retention impact are documented.
 - [ ] Online and offline deployment security notes are updated if behavior changed.
 - [ ] Validation includes auth/RBAC scripts and CI status.
