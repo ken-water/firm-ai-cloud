@@ -1,0 +1,46 @@
+{
+  "endpoint_default_class": "data_plane",
+  "endpoint_classes": {
+    "health": "control_plane",
+    "cmdb_assets": "data_plane",
+    "cmdb_asset_stats": "data_plane",
+    "monitoring_overview": "data_plane",
+    "monitoring_layer_hardware": "data_plane",
+    "workflow_requests": "control_plane"
+  },
+  "regions": {
+    "primary": {
+      "latency_overhead_ms": 0
+    },
+    "secondary": {
+      "latency_overhead_ms": 80
+    },
+    "tertiary": {
+      "latency_overhead_ms": 150
+    }
+  },
+  "failover": {
+    "from_region": "primary",
+    "to_region": "secondary",
+    "extra_latency_penalty_ms": 120,
+    "stream_error_penalty": 1
+  },
+  "budgets": {
+    "api_classes": {
+      "control_plane": {
+        "p95_ms_max": 2800,
+        "p99_ms_max": 4200
+      },
+      "data_plane": {
+        "p95_ms_max": 3200,
+        "p99_ms_max": 4800
+      }
+    },
+    "sse": {
+      "lag_p95_ms_max": 32000,
+      "lag_p99_ms_max": 44000,
+      "lag_max_ms_max": 62000,
+      "stream_error_count_max": 1
+    }
+  }
+}
