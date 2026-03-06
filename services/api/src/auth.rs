@@ -688,6 +688,17 @@ mod tests {
     fn maps_setup_permissions() {
         assert_permission(Method::GET, "/api/v1/setup/preflight", "ops.setup.read");
         assert_permission(Method::GET, "/api/v1/setup/checklist", "ops.setup.read");
+        assert_permission(Method::GET, "/api/v1/setup/templates", "ops.setup.read");
+        assert_permission(
+            Method::POST,
+            "/api/v1/setup/templates/identity-safe-baseline/preview",
+            "ops.setup.write",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/setup/templates/identity-safe-baseline/apply",
+            "ops.setup.write",
+        );
         assert_permission(Method::GET, "/setup/preflight", "ops.setup.read");
         assert_permission(Method::GET, "/preflight", "ops.setup.read");
         assert_permission(Method::GET, "/checklist", "ops.setup.read");
@@ -1025,6 +1036,17 @@ mod tests {
             ),
             (Method::GET, "/api/v1/setup/preflight", "ops.setup.read"),
             (Method::GET, "/api/v1/setup/checklist", "ops.setup.read"),
+            (Method::GET, "/api/v1/setup/templates", "ops.setup.read"),
+            (
+                Method::POST,
+                "/api/v1/setup/templates/identity-safe-baseline/preview",
+                "ops.setup.write",
+            ),
+            (
+                Method::POST,
+                "/api/v1/setup/templates/identity-safe-baseline/apply",
+                "ops.setup.write",
+            ),
             (Method::GET, "/api/v1/alerts", "alerts.read"),
             (Method::GET, "/api/v1/alerts/1", "alerts.read"),
             (Method::GET, "/api/v1/alerts/policies", "alerts.read"),

@@ -1038,6 +1038,33 @@
       "blockingTitle": "以下关键失败会阻止完成安装：",
       "completed": "安装向导已完成。你可以继续在总览与告警中心进行日常运维。",
       "completeBlocked": "当前无法完成安装：仍有 {{count}} 项关键检查失败。"
+    },
+    "templates": {
+      "title": "零代码初始化模板",
+      "description": "通过模板向导初始化认证、监控与通知基线，无需手工编辑 JSON。",
+      "selector": "模板",
+      "optionalValue": "可选",
+      "note": "应用备注",
+      "notePlaceholder": "可选，写入审计日志的变更说明",
+      "previewTitle": "预览结果",
+      "previewReady": "可应用",
+      "previewBlocked": "需修正参数",
+      "rollbackPrefix": "回滚提示：",
+      "applyTitle": "{{actor}} 已应用 {{key}}",
+      "readOnlyHint": "当前为只读模式：无模板应用权限。",
+      "actions": {
+        "preview": "预览模板",
+        "previewing": "预览中...",
+        "apply": "应用模板",
+        "applying": "应用中..."
+      },
+      "messages": {
+        "loading": "正在加载初始化模板...",
+        "empty": "当前没有可用初始化模板。",
+        "previewReady": "预览完成：共 {{count}} 项动作。",
+        "previewValidationFailed": "预览未通过：存在 {{count}} 项参数校验问题。",
+        "applySuccess": "模板 {{key}} 应用成功。"
+      }
     }
   },
   "alertsCenter": {

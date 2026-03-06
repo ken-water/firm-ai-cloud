@@ -24,6 +24,69 @@ type SetupChecklistResponse = {
   checks: SetupCheckItem[];
 };
 
+type SetupTemplateSchemaField = {
+  key: string;
+  label: string;
+  type: "string" | "enum";
+  required?: boolean;
+  options?: string[];
+  default?: string;
+  placeholder?: string;
+  max_length?: number;
+};
+
+type SetupTemplateCatalogItem = {
+  key: string;
+  name: string;
+  category: string;
+  description: string | null;
+  param_schema: {
+    fields: SetupTemplateSchemaField[];
+  };
+  apply_plan: {
+    actions?: string[];
+  };
+  rollback_hints: string[];
+  is_enabled: boolean;
+  is_system: boolean;
+  updated_at: string;
+};
+
+type SetupTemplateValidationError = {
+  field: string;
+  message: string;
+};
+
+type SetupTemplatePreviewAction = {
+  action_key: string;
+  summary: string;
+  outcome: string;
+  detail: string;
+};
+
+type SetupTemplatePreviewResponse = {
+  template: SetupTemplateCatalogItem;
+  ready: boolean;
+  validation_errors: SetupTemplateValidationError[];
+  actions: SetupTemplatePreviewAction[];
+  rollback_hints: string[];
+};
+
+type SetupTemplateApplyAction = {
+  action_key: string;
+  outcome: string;
+  target_id: string | null;
+  detail: string;
+};
+
+type SetupTemplateApplyResponse = {
+  actor: string;
+  template_key: string;
+  status: string;
+  applied_actions: SetupTemplateApplyAction[];
+  rollback_hints: string[];
+};
+
 export function SetupAlertSections(rawProps: Record<string, unknown>) {
   const {
     alertActionRunningId,
@@ -36,6 +99,7 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     alertStatusFilter,
     alerts,
     alertsTotal,
+    applySetupTemplate,
     canWriteCmdb,
     closeAlert,
     completeSetupWizard,
@@ -43,20 +107,34 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     loadingAlerts,
     loadingSetupChecklist,
     loadingSetupPreflight,
+    loadingSetupTemplates,
+    previewSetupTemplate,
     refreshAlerts,
     refreshSetupWizard,
+    runningSetupTemplateApply,
+    runningSetupTemplatePreview,
     selectedAlertId,
     selectedAlertIds,
+    selectedSetupTemplateKey,
     setAlertQueryFilter,
     setAlertSeverityFilter,
     setAlertSiteFilter,
     setAlertStatusFilter,
+    setSelectedSetupTemplateKey,
     setSetupStep,
+    setSetupTemplateNote,
+    setSetupTemplateParam,
     setupChecklist,
     setupCompleted,
     setupNotice,
+    setupTemplateApplyResult,
+    setupTemplateNote,
+    setupTemplateNotice,
+    setupTemplateParamsDraft,
+    setupTemplatePreview,
     setupPreflight,
     setupStep,
+    setupTemplates,
     t,
     toggleAlertSelection,
     toggleSelectAllAlerts,
@@ -75,6 +153,12 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
   const checklistBlockingChecks = (checklist?.checks ?? []).filter((item) => item.critical && item.status === "fail");
   const blockingChecks = [...preflightBlockingChecks, ...checklistBlockingChecks];
   const setupCanComplete = blockingChecks.length === 0;
+  const templateItems = (setupTemplates as SetupTemplateCatalogItem[]) ?? [];
+  const selectedSetupTemplate = templateItems.find((item) => item.key === selectedSetupTemplateKey) ?? null;
+  const selectedTemplateFields = selectedSetupTemplate?.param_schema.fields ?? [];
+  const templateDraft = (setupTemplateParamsDraft as Record<string, string>) ?? {};
+  const templatePreview = setupTemplatePreview as SetupTemplatePreviewResponse | null;
+  const templateApplyResult = setupTemplateApplyResult as SetupTemplateApplyResponse | null;
 
   const setupSteps = [
     {
@@ -112,6 +196,7 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
       description: t("setupWizard.steps.validation.description"),
       passed: checklist ? checklist.summary.critical_failed === 0 : false,
       checks: [
+        checklistByKey.get("setup-template-baseline"),
         checklistByKey.get("alert-policy-templates"),
         checklistByKey.get("database"),
         checklistByKey.get("web-console"),
@@ -224,6 +309,154 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
               )}
             </>
           )}
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <h3 style={{ marginTop: 0, marginBottom: "0.5rem", fontSize: "1rem" }}>{t("setupWizard.templates.title")}</h3>
+            <p className="section-note" style={{ marginBottom: "0.6rem" }}>{t("setupWizard.templates.description")}</p>
+            {setupTemplateNotice && <p className="banner banner-success">{setupTemplateNotice}</p>}
+            {!canWriteCmdb && <p className="inline-note">{t("setupWizard.templates.readOnlyHint")}</p>}
+            {loadingSetupTemplates ? (
+              <p>{t("setupWizard.templates.messages.loading")}</p>
+            ) : templateItems.length === 0 ? (
+              <p>{t("setupWizard.templates.messages.empty")}</p>
+            ) : (
+              <>
+                <label className="control-field" style={{ marginBottom: "0.6rem" }}>
+                  <span>{t("setupWizard.templates.selector")}</span>
+                  <select
+                    value={selectedSetupTemplateKey}
+                    onChange={(event) => setSelectedSetupTemplateKey(event.target.value)}
+                  >
+                    {templateItems.map((item) => (
+                      <option key={item.key} value={item.key}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {selectedSetupTemplate && (
+                  <>
+                    {selectedSetupTemplate.description && (
+                      <p className="section-note" style={{ marginBottom: "0.5rem" }}>
+                        {selectedSetupTemplate.description}
+                      </p>
+                    )}
+                    <div className="filter-grid">
+                      {selectedTemplateFields.map((field) => {
+                        const value = templateDraft[field.key] ?? "";
+                        if (field.type === "enum") {
+                          return (
+                            <label className="control-field" key={field.key}>
+                              <span>{field.label}</span>
+                              <select
+                                value={value}
+                                onChange={(event) => setSetupTemplateParam(field.key, event.target.value)}
+                              >
+                                {!field.required && <option value="">{t("setupWizard.templates.optionalValue")}</option>}
+                                {(field.options ?? []).map((option) => (
+                                  <option key={option} value={option}>
+                                    {option}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          );
+                        }
+
+                        return (
+                          <label className="control-field" key={field.key}>
+                            <span>{field.label}</span>
+                            <input
+                              value={value}
+                              onChange={(event) => setSetupTemplateParam(field.key, event.target.value)}
+                              placeholder={field.placeholder ?? ""}
+                            />
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    <label className="control-field" style={{ marginTop: "0.5rem" }}>
+                      <span>{t("setupWizard.templates.note")}</span>
+                      <input
+                        value={setupTemplateNote}
+                        onChange={(event) => setSetupTemplateNote(event.target.value)}
+                        placeholder={t("setupWizard.templates.notePlaceholder")}
+                      />
+                    </label>
+
+                    <div className="toolbar-row" style={{ marginTop: "0.65rem" }}>
+                      <button
+                        onClick={() => void previewSetupTemplate()}
+                        disabled={runningSetupTemplatePreview || runningSetupTemplateApply}
+                      >
+                        {runningSetupTemplatePreview
+                          ? t("setupWizard.templates.actions.previewing")
+                          : t("setupWizard.templates.actions.preview")}
+                      </button>
+                      <button
+                        onClick={() => void applySetupTemplate()}
+                        disabled={!canWriteCmdb || runningSetupTemplateApply || runningSetupTemplatePreview}
+                      >
+                        {runningSetupTemplateApply
+                          ? t("setupWizard.templates.actions.applying")
+                          : t("setupWizard.templates.actions.apply")}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {templatePreview && (
+                  <div className="hint-list" style={{ marginTop: "0.75rem" }}>
+                    <div className="hint-row" style={{ fontWeight: 600 }}>
+                      {t("setupWizard.templates.previewTitle")}
+                      {" "}
+                      <span className={`status-chip ${templatePreview.ready ? "status-chip-success" : "status-chip-warn"}`}>
+                        {templatePreview.ready
+                          ? t("setupWizard.templates.previewReady")
+                          : t("setupWizard.templates.previewBlocked")}
+                      </span>
+                    </div>
+                    {templatePreview.validation_errors.length > 0 ? (
+                      templatePreview.validation_errors.map((item) => (
+                        <div key={`${item.field}-${item.message}`} className="hint-row">
+                          <strong>{item.field}</strong>: {item.message}
+                        </div>
+                      ))
+                    ) : (
+                      templatePreview.actions.map((action) => (
+                        <div key={action.action_key} className="hint-row">
+                          <strong>{action.summary}</strong> [{action.outcome}] {action.detail}
+                        </div>
+                      ))
+                    )}
+                    {templatePreview.rollback_hints.map((hint) => (
+                      <div key={hint} className="hint-row">
+                        {t("setupWizard.templates.rollbackPrefix")} {hint}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {templateApplyResult && (
+                  <div className="hint-list" style={{ marginTop: "0.75rem" }}>
+                    <div className="hint-row" style={{ fontWeight: 600 }}>
+                      {t("setupWizard.templates.applyTitle", {
+                        actor: templateApplyResult.actor,
+                        key: templateApplyResult.template_key
+                      })}
+                    </div>
+                    {templateApplyResult.applied_actions.map((action) => (
+                      <div key={`${action.action_key}-${action.target_id ?? "-"}`} className="hint-row">
+                        <strong>{action.action_key}</strong> [{action.outcome}] {action.detail}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
 
           {currentSetupStep === 2 && (
             <div className="toolbar-row" style={{ marginBottom: "0.75rem" }}>

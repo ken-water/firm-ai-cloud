@@ -76,6 +76,8 @@ RBAC route mapping source:
 | --- | --- |
 | `/api/v1/setup/preflight` | `ops.setup.read` |
 | `/api/v1/setup/checklist` | `ops.setup.read` |
+| `/api/v1/setup/templates` | `ops.setup.read` |
+| `/api/v1/setup/templates/*/{preview,apply}` | `ops.setup.write` |
 | `/api/v1/ops/cockpit/queue` | `ops.cockpit.read` |
 | `/api/v1/alerts*` | `alerts.read` / `alerts.write` |
 
@@ -117,7 +119,7 @@ RBAC route mapping source:
 
 - Unit coverage in `services/api/src/auth.rs`:
   - permission matrix test for protected endpoints
-  - setup/alerts mapping tests
+  - setup template read/write and alert mapping tests
   - lookalike-prefix deny tests
 - Integration matrix script:
   - `scripts/test-rbac-policy.sh`

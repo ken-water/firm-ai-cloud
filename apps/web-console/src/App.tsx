@@ -800,6 +800,75 @@ type SetupChecklistResponse = {
   checks: SetupCheckItem[];
 };
 
+type SetupTemplateSchemaField = {
+  key: string;
+  label: string;
+  type: "string" | "enum";
+  required?: boolean;
+  options?: string[];
+  default?: string;
+  placeholder?: string;
+  max_length?: number;
+};
+
+type SetupTemplateCatalogItem = {
+  key: string;
+  name: string;
+  category: string;
+  description: string | null;
+  param_schema: {
+    fields: SetupTemplateSchemaField[];
+  };
+  apply_plan: {
+    actions?: string[];
+    [key: string]: unknown;
+  };
+  rollback_hints: string[];
+  is_enabled: boolean;
+  is_system: boolean;
+  updated_at: string;
+};
+
+type SetupTemplateCatalogResponse = {
+  items: SetupTemplateCatalogItem[];
+  total: number;
+};
+
+type SetupTemplateValidationError = {
+  field: string;
+  message: string;
+};
+
+type SetupTemplatePreviewAction = {
+  action_key: string;
+  summary: string;
+  outcome: string;
+  detail: string;
+};
+
+type SetupTemplatePreviewResponse = {
+  template: SetupTemplateCatalogItem;
+  ready: boolean;
+  validation_errors: SetupTemplateValidationError[];
+  actions: SetupTemplatePreviewAction[];
+  rollback_hints: string[];
+};
+
+type SetupTemplateApplyAction = {
+  action_key: string;
+  outcome: string;
+  target_id: string | null;
+  detail: string;
+};
+
+type SetupTemplateApplyResponse = {
+  actor: string;
+  template_key: string;
+  status: string;
+  applied_actions: SetupTemplateApplyAction[];
+  rollback_hints: string[];
+};
+
 type AlertSeverity = "critical" | "warning" | "info";
 type AlertStatus = "open" | "acknowledged" | "closed";
 
@@ -1272,6 +1341,16 @@ export function App() {
   const [setupChecklist, setSetupChecklist] = useState<SetupChecklistResponse | null>(null);
   const [loadingSetupPreflight, setLoadingSetupPreflight] = useState(false);
   const [loadingSetupChecklist, setLoadingSetupChecklist] = useState(false);
+  const [setupTemplates, setSetupTemplates] = useState<SetupTemplateCatalogItem[]>([]);
+  const [loadingSetupTemplates, setLoadingSetupTemplates] = useState(false);
+  const [selectedSetupTemplateKey, setSelectedSetupTemplateKey] = useState("");
+  const [setupTemplateParamsDraft, setSetupTemplateParamsDraft] = useState<Record<string, string>>({});
+  const [setupTemplateNote, setSetupTemplateNote] = useState("");
+  const [setupTemplatePreview, setSetupTemplatePreview] = useState<SetupTemplatePreviewResponse | null>(null);
+  const [setupTemplateApplyResult, setSetupTemplateApplyResult] = useState<SetupTemplateApplyResponse | null>(null);
+  const [runningSetupTemplatePreview, setRunningSetupTemplatePreview] = useState(false);
+  const [runningSetupTemplateApply, setRunningSetupTemplateApply] = useState(false);
+  const [setupTemplateNotice, setSetupTemplateNotice] = useState<string | null>(null);
   const [setupStep, setSetupStep] = useState(0);
   const [setupCompleted, setSetupCompleted] = useState(false);
   const [setupNotice, setSetupNotice] = useState<string | null>(null);
@@ -2166,6 +2245,41 @@ export function App() {
     }
   }, []);
 
+  const buildSetupTemplateDraft = useCallback((template: SetupTemplateCatalogItem | null) => {
+    if (!template) {
+      return {};
+    }
+
+    const draft: Record<string, string> = {};
+    for (const field of template.param_schema.fields ?? []) {
+      if (typeof field.key !== "string" || field.key.trim().length === 0) {
+        continue;
+      }
+      draft[field.key] = typeof field.default === "string" ? field.default : "";
+    }
+    return draft;
+  }, []);
+
+  const loadSetupTemplates = useCallback(async () => {
+    setLoadingSetupTemplates(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/setup/templates`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: SetupTemplateCatalogResponse = await response.json();
+      setSetupTemplates(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setSetupTemplates([]);
+      return [];
+    } finally {
+      setLoadingSetupTemplates(false);
+    }
+  }, []);
+
   const loadSetupPreflight = useCallback(async () => {
     setLoadingSetupPreflight(true);
     setError(null);
@@ -2208,8 +2322,9 @@ export function App() {
 
   const refreshSetupWizard = useCallback(async () => {
     setSetupNotice(null);
-    await Promise.all([loadSetupPreflight(), loadSetupChecklist()]);
-  }, [loadSetupChecklist, loadSetupPreflight]);
+    setSetupTemplateNotice(null);
+    await Promise.all([loadSetupPreflight(), loadSetupChecklist(), loadSetupTemplates()]);
+  }, [loadSetupChecklist, loadSetupPreflight, loadSetupTemplates]);
 
   const completeSetupWizard = useCallback(async () => {
     const blockingChecks = [...(setupPreflight?.checks ?? []), ...(setupChecklist?.checks ?? [])]
@@ -2223,6 +2338,138 @@ export function App() {
     setSetupCompleted(true);
     setSetupNotice(t("setupWizard.messages.completed"));
   }, [setupChecklist?.checks, setupPreflight?.checks, t]);
+
+  const setSetupTemplateParam = useCallback((key: string, value: string) => {
+    setSetupTemplateParamsDraft((prev) => ({
+      ...prev,
+      [key]: value
+    }));
+  }, []);
+
+  const previewSetupTemplate = useCallback(async () => {
+    if (!selectedSetupTemplateKey) {
+      return null;
+    }
+
+    setRunningSetupTemplatePreview(true);
+    setSetupTemplateNotice(null);
+    setError(null);
+    setSetupTemplateApplyResult(null);
+
+    const params = Object.entries(setupTemplateParamsDraft).reduce<Record<string, string>>((acc, [key, rawValue]) => {
+      const value = rawValue.trim();
+      if (value.length > 0) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/setup/templates/${encodeURIComponent(selectedSetupTemplateKey)}/preview`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            params,
+            note: trimToNull(setupTemplateNote)
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: SetupTemplatePreviewResponse = await response.json();
+      setSetupTemplatePreview(payload);
+      setSetupTemplateNotice(
+        payload.ready
+          ? t("setupWizard.templates.messages.previewReady", { count: payload.actions.length })
+          : t("setupWizard.templates.messages.previewValidationFailed", {
+            count: payload.validation_errors.length
+          })
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setSetupTemplatePreview(null);
+      return null;
+    } finally {
+      setRunningSetupTemplatePreview(false);
+    }
+  }, [selectedSetupTemplateKey, setupTemplateNote, setupTemplateParamsDraft, t]);
+
+  const applySetupTemplate = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    if (!selectedSetupTemplateKey) {
+      return null;
+    }
+
+    let preview = setupTemplatePreview;
+    if (!preview || preview.template.key !== selectedSetupTemplateKey || !preview.ready) {
+      preview = await previewSetupTemplate();
+      if (!preview || !preview.ready) {
+        return null;
+      }
+    }
+
+    setRunningSetupTemplateApply(true);
+    setSetupTemplateNotice(null);
+    setError(null);
+
+    const params = Object.entries(setupTemplateParamsDraft).reduce<Record<string, string>>((acc, [key, rawValue]) => {
+      const value = rawValue.trim();
+      if (value.length > 0) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/setup/templates/${encodeURIComponent(selectedSetupTemplateKey)}/apply`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            params,
+            note: trimToNull(setupTemplateNote)
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: SetupTemplateApplyResponse = await response.json();
+      setSetupTemplateApplyResult(payload);
+      setSetupTemplateNotice(t("setupWizard.templates.messages.applySuccess", { key: payload.template_key }));
+      await Promise.all([loadSetupChecklist(), loadSetupPreflight()]);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningSetupTemplateApply(false);
+    }
+  }, [
+    canWriteCmdb,
+    loadSetupChecklist,
+    loadSetupPreflight,
+    previewSetupTemplate,
+    selectedSetupTemplateKey,
+    setupTemplateNote,
+    setupTemplateParamsDraft,
+    setupTemplatePreview,
+    t
+  ]);
 
   const loadAlerts = useCallback(async () => {
     setLoadingAlerts(true);
@@ -3991,6 +4238,10 @@ export function App() {
     () => Array.from(new Set(playbookCatalog.map((item) => item.category))).sort(),
     [playbookCatalog]
   );
+  const selectedSetupTemplate = useMemo(
+    () => setupTemplates.find((item) => item.key === selectedSetupTemplateKey) ?? null,
+    [selectedSetupTemplateKey, setupTemplates]
+  );
   const selectedPlaybook = useMemo(
     () => playbookCatalog.find((item) => item.key === selectedPlaybookKey) ?? null,
     [playbookCatalog, selectedPlaybookKey]
@@ -4585,6 +4836,25 @@ export function App() {
     }
     void refreshSetupWizard();
   }, [authIdentity, refreshSetupWizard, visibleSections]);
+  useEffect(() => {
+    if (setupTemplates.length === 0) {
+      setSelectedSetupTemplateKey("");
+      return;
+    }
+
+    setSelectedSetupTemplateKey((current) => {
+      if (setupTemplates.some((item) => item.key === current)) {
+        return current;
+      }
+      return setupTemplates[0].key;
+    });
+  }, [setupTemplates]);
+  useEffect(() => {
+    setSetupTemplateParamsDraft(buildSetupTemplateDraft(selectedSetupTemplate));
+    setSetupTemplatePreview(null);
+    setSetupTemplateApplyResult(null);
+    setSetupTemplateNotice(null);
+  }, [buildSetupTemplateDraft, selectedSetupTemplate?.key]);
   useEffect(() => {
     if (!authIdentity || !visibleSections.has("section-alert-center")) {
       return;
@@ -5253,6 +5523,7 @@ export function App() {
     alertStatusFilter: alertFilters.status,
     alerts,
     alertsTotal,
+    applySetupTemplate,
     canWriteCmdb,
     closeAlert,
     completeSetupWizard,
@@ -5260,20 +5531,34 @@ export function App() {
     loadingAlerts,
     loadingSetupChecklist,
     loadingSetupPreflight,
+    loadingSetupTemplates,
+    previewSetupTemplate,
     refreshAlerts: loadAlerts,
     refreshSetupWizard,
+    runningSetupTemplateApply,
+    runningSetupTemplatePreview,
     selectedAlertId,
     selectedAlertIds,
+    selectedSetupTemplateKey,
     setAlertQueryFilter,
     setAlertSeverityFilter,
     setAlertSiteFilter,
     setAlertStatusFilter,
+    setSelectedSetupTemplateKey,
     setSetupStep,
+    setSetupTemplateNote,
+    setSetupTemplateParam,
     setupChecklist,
     setupCompleted,
     setupNotice,
+    setupTemplateApplyResult,
+    setupTemplateNote,
+    setupTemplateNotice,
+    setupTemplateParamsDraft,
+    setupTemplatePreview,
     setupPreflight,
     setupStep,
+    setupTemplates,
     t,
     toggleAlertSelection,
     toggleSelectAllAlerts,

@@ -182,13 +182,43 @@ curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/setup/preflight
 
 # integration checklist: api/web/db/redis/opensearch/minio/zabbix + bootstrap seeds
 curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/setup/checklist
+
+# list no-code setup templates
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/setup/templates
+
+# preview one template with operator-friendly validation errors
+curl -X POST http://127.0.0.1:8080/api/v1/setup/templates/identity-safe-baseline/preview \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "params": {
+      "identity_mode": "break_glass_only",
+      "break_glass_users": "admin,ops.emergency"
+    },
+    "note": "bootstrap identity baseline"
+  }'
+
+# apply template (writes onboarding baseline + audit log)
+curl -X POST http://127.0.0.1:8080/api/v1/setup/templates/identity-safe-baseline/apply \
+  -H "$AUTH_HEADER" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "params": {
+      "identity_mode": "break_glass_only",
+      "break_glass_users": "admin,ops.emergency"
+    },
+    "note": "apply from quickstart"
+  }'
 ```
 
 Notes:
 
 - Response schema is stable: `generated_at`, `category`, `summary`, `checks[]`.
 - Every failed check includes `remediation` text for UI next-action guidance.
-- Permission required: `ops.setup.read` (viewer/operator/admin default roles have read access).
+- Template preview/apply supports actionable validation errors and rollback hints for non-technical operators.
+- Permission required:
+  - read: `ops.setup.read`
+  - preview/apply: `ops.setup.write` (operator/admin default roles).
 
 Unified alert center APIs:
 

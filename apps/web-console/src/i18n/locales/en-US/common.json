@@ -1038,6 +1038,33 @@
       "blockingTitle": "Completion is blocked by critical failures:",
       "completed": "Setup wizard completed. You can continue daily operations from dashboard and alert center.",
       "completeBlocked": "Cannot complete setup: {{count}} critical check(s) are still failing."
+    },
+    "templates": {
+      "title": "No-Code Bootstrap Templates",
+      "description": "Use guided templates to initialize identity, monitoring, and notification baselines without JSON editing.",
+      "selector": "Template",
+      "optionalValue": "Optional",
+      "note": "Apply Note",
+      "notePlaceholder": "Optional change reason for audit logs",
+      "previewTitle": "Preview Result",
+      "previewReady": "Ready",
+      "previewBlocked": "Validation Required",
+      "rollbackPrefix": "Rollback hint:",
+      "applyTitle": "Applied by {{actor}} using {{key}}",
+      "readOnlyHint": "Read-only mode: template apply is disabled for current role.",
+      "actions": {
+        "preview": "Preview Template",
+        "previewing": "Previewing...",
+        "apply": "Apply Template",
+        "applying": "Applying..."
+      },
+      "messages": {
+        "loading": "Loading setup templates...",
+        "empty": "No setup templates are available.",
+        "previewReady": "Preview generated: {{count}} action(s).",
+        "previewValidationFailed": "Preview blocked: {{count}} validation issue(s).",
+        "applySuccess": "Template {{key}} applied successfully."
+      }
     }
   },
   "alertsCenter": {

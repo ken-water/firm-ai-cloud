@@ -111,6 +111,11 @@ VIEWER_USER="rbac-viewer-${STAMP}"
 log "Validate operator permission matrix"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/preflight"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/checklist"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/templates"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/setup/templates/identity-safe-baseline/preview" \
+  "{\"params\":{\"identity_mode\":\"break_glass_only\",\"break_glass_users\":\"${OPERATOR_USER}\"}}"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/setup/templates/identity-safe-baseline/apply" \
+  "{\"params\":{\"identity_mode\":\"break_glass_only\",\"break_glass_users\":\"${OPERATOR_USER}\"},\"note\":\"rbac apply\"}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
@@ -146,6 +151,9 @@ assert_code 403 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/audit/logs"
 log "Validate viewer permission matrix"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/preflight"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/checklist"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/templates"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/setup/templates/identity-safe-baseline/preview" \
+  "{\"params\":{\"identity_mode\":\"break_glass_only\",\"break_glass_users\":\"${VIEWER_USER}\"}}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
