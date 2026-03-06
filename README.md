@@ -132,12 +132,19 @@ Every version release must include detailed English release notes.
 
 GitHub Actions CI is manual-by-default to control resource usage (`workflow_dispatch` only).
 
-Use:
+Release command flow:
 
 ```bash
-bash scripts/validate-release-note.sh release-notes/vX.Y.Z.md
+make release-publish-dry VERSION=X.Y.Z
+make release-publish VERSION=X.Y.Z
+make release-check VERSION=X.Y.Z
 ```
 
 Template:
 
 - [`release-notes/TEMPLATE.md`](release-notes/TEMPLATE.md)
+
+Direct scripts:
+
+- `bash scripts/release-publish.sh --version X.Y.Z`
+- `bash scripts/release-sync-check.sh --version X.Y.Z`

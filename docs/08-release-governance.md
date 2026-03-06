@@ -1,7 +1,7 @@
 # CloudOps One Release Governance
 
-Version: v1.1  
-Date: 2026-03-05
+Version: v1.2  
+Date: 2026-03-06
 
 ## 1. Scope
 
@@ -73,14 +73,19 @@ Avoid one-line generic summaries for public releases.
 
 1. Prepare release note file from `release-notes/TEMPLATE.md`.
 2. Update `CHANGELOG.md` with the exact same version and date.
-3. Run release note validation script:
-   - `bash scripts/validate-release-note.sh release-notes/vX.Y.Z.md`
-4. Run project validation (`cargo check`, frontend build, and any required smoke tests).
-5. Commit release artifacts.
-6. Create tag and push:
-   - `git tag vX.Y.Z`
-   - `git push origin main --tags`
-7. Publish GitHub Release by copying content from `release-notes/vX.Y.Z.md`.
+3. Run project validation (`cargo check`, frontend build, and any required smoke tests).
+4. Commit release artifacts.
+5. Run dry-run release publish gate:
+   - `make release-publish-dry VERSION=X.Y.Z`
+6. Publish release through the scripted flow:
+   - `make release-publish VERSION=X.Y.Z`
+7. Run mandatory synchronization check:
+   - `make release-check VERSION=X.Y.Z`
+
+Notes:
+
+- `make release-publish` is the standard path. Do not publish by manually copying notes to GitHub UI.
+- The scripted flow enforces release-note structure, metadata consistency, changelog/tag alignment, and GitHub release status.
 
 ## 7. Quality Gate Checklist
 
@@ -93,6 +98,8 @@ Before publishing, confirm all items:
 - [ ] Upgrade instructions were tested.
 - [ ] Known issues are explicitly listed (or `None`).
 - [ ] If benchmark scope changed, release note includes CI benchmark artifact references (`profile`, `gate`, `trend`, `regression` summaries).
+- [ ] `make release-publish-dry VERSION=X.Y.Z` passes.
+- [ ] `make release-check VERSION=X.Y.Z` passes.
 
 ## 8. Responsibility
 
@@ -149,3 +156,22 @@ Enforcement:
 
 - If this gate is not satisfied, new-cycle feature development should be blocked.
 - Allowed exception: emergency fix required to complete or stabilize the pending previous release.
+- Gate verification command: `make release-check VERSION=X.Y.Z` for the immediate previous version.
+
+## 12. Automation Guardrail (Mandatory)
+
+To avoid release omissions caused by manual steps, every release owner must use the scripts below:
+
+- `scripts/release-publish.sh`:
+  - handles tag creation/push and GitHub release create/edit from `release-notes/vX.Y.Z.md`
+  - supports `--dry-run` for safe preflight checks
+- `scripts/release-sync-check.sh`:
+  - verifies changelog/release-note/tag/GitHub release synchronization
+  - verifies published (non-draft/non-prerelease) status
+  - verifies latest-release gate by default
+
+Minimal command set:
+
+1. `make release-publish-dry VERSION=X.Y.Z`
+2. `make release-publish VERSION=X.Y.Z`
+3. `make release-check VERSION=X.Y.Z`
