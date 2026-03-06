@@ -8,12 +8,72 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- v0.1.4 planning document: `docs/25-v0.1.4-safe-ops-planning.md`.
-- v0.1.4 issue baseline: GitHub issues `#118` to `#126` (safe-change policy, approval control, alert governance, backup/DR no-code flow, weekly digest, long-soak and multi-region evidence, release closure).
+- None yet.
 
 ### Changed
 
-- v0.1.x planning document now includes v0.1.4 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
+- None yet.
+
+### Fixed
+
+- None yet.
+
+## [0.1.4] - 2026-03-06
+
+### Added
+
+- v0.1.4 planning and continuity documentation:
+  - `docs/25-v0.1.4-safe-ops-planning.md`
+  - `docs/26-v0.1.4-ops-continuity-and-digest.md`
+  - `docs/27-v0.1.4-long-soak-stability.md`
+  - `docs/28-v0.1.4-multi-region-simulation.md`
+- v0.1.4 issue baseline and release-closure track: GitHub issues `#118` to `#126`.
+- High-risk playbook policy governance:
+  - migration: `202603060004_create_playbook_execution_policy.sql`
+  - endpoints:
+    - `GET /api/v1/workflow/playbooks/policy`
+    - `PUT /api/v1/workflow/playbooks/policy`
+- Two-person approval flow for high-risk playbook execution:
+  - migration: `202603060005_create_playbook_approval_requests.sql`
+  - endpoints:
+    - `GET /api/v1/workflow/playbooks/approvals`
+    - `POST /api/v1/workflow/playbooks/{key}/approval-request`
+    - `POST /api/v1/workflow/playbooks/approvals/{id}/approve`
+    - `POST /api/v1/workflow/playbooks/approvals/{id}/reject`
+- Alert suppression governance and explainability:
+  - endpoint: `POST /api/v1/alerts/policies/preview`
+  - `GET /api/v1/alerts` adds `suppressed` filter support
+  - `GET /api/v1/alerts/{id}` adds governance detail payload
+- Backup/DR no-code policy and run tracking:
+  - migration: `202603060006_create_backup_dr_policy_tables.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/backup/policies`
+    - `POST /api/v1/ops/cockpit/backup/policies`
+    - `PATCH /api/v1/ops/cockpit/backup/policies/{id}`
+    - `POST /api/v1/ops/cockpit/backup/policies/{id}/run`
+    - `GET /api/v1/ops/cockpit/backup/runs`
+    - `POST /api/v1/ops/cockpit/backup/scheduler/tick`
+- Weekly operations digest:
+  - `GET /api/v1/ops/cockpit/weekly-digest`
+  - `GET /api/v1/ops/cockpit/weekly-digest/export?format=csv|json`
+- Release-grade stability evidence scripts:
+  - `scripts/benchmark-long-soak.sh`
+  - `scripts/benchmark-long-soak-gate.sh`
+  - `scripts/benchmark-long-soak-policy.json`
+  - `scripts/benchmark-multiregion-sim.sh`
+  - `scripts/benchmark-multiregion-policy.json`
+
+### Changed
+
+- Web console daily cockpit now includes backup/DR policy wizard, recent run evidence panel, and weekly digest generation/export actions.
+- Alert remediation execution path now requests approval first for high-risk playbooks instead of direct execution.
+- RBAC integration test script now covers backup/DR policy APIs and weekly digest/export routes.
+- Release process now includes publish/reconcile and synchronization gate scripts:
+  - `scripts/release-publish.sh`
+  - `scripts/release-sync-check.sh`
+  - `make release-publish`
+  - `make release-publish-dry`
+  - `make release-check`
 
 ### Fixed
 
