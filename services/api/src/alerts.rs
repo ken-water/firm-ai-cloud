@@ -43,6 +43,10 @@ pub fn routes() -> Router<AppState> {
             get(list_alert_ticket_policies).post(create_alert_ticket_policy),
         )
         .route(
+            "/policies/preview",
+            axum::routing::post(preview_alert_ticket_policy),
+        )
+        .route(
             "/policies/{id}",
             axum::routing::patch(update_alert_ticket_policy),
         )
@@ -105,6 +109,16 @@ struct AlertDetailResponse {
     alert: AlertRecord,
     timeline: Vec<AlertTimelineRecord>,
     linked_tickets: Vec<AlertLinkedTicketRecord>,
+    governance: AlertGovernanceSummary,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct AlertGovernanceSummary {
+    dedup_event_count: i64,
+    suppressed_count: i64,
+    latest_suppression_reason: Option<String>,
+    latest_unsuppressed_event_at: Option<DateTime<Utc>>,
+    latest_unsuppressed_policy_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,6 +142,7 @@ struct ListAlertsQuery {
     source: Option<String>,
     site: Option<String>,
     department: Option<String>,
+    suppressed: Option<bool>,
     query: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
@@ -218,6 +233,36 @@ struct UpdateAlertTicketPolicyRequest {
     ticket_priority: Option<String>,
     ticket_category: Option<String>,
     workflow_template_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlertPolicyPreviewRequest {
+    match_source: Option<String>,
+    match_severity: Option<String>,
+    match_site: Option<String>,
+    match_department: Option<String>,
+    match_status: Option<String>,
+    dedup_window_seconds: Option<i32>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct AlertPolicyPreviewSample {
+    alert_id: i64,
+    title: String,
+    severity: String,
+    alert_source: String,
+    status: String,
+    last_seen_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct AlertPolicyPreviewResponse {
+    generated_at: DateTime<Utc>,
+    dedup_window_seconds: i32,
+    matched_alert_count: i64,
+    potentially_suppressed_count: i64,
+    sample_alerts: Vec<AlertPolicyPreviewSample>,
+    summary: String,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -504,6 +549,7 @@ async fn list_alerts(
     let source = trim_optional(query.source, 64);
     let site = trim_optional(query.site, 128);
     let department = trim_optional(query.department, 128);
+    let suppressed = query.suppressed;
     let query_text = trim_optional(query.query, 128);
 
     let mut count_builder: QueryBuilder<Postgres> =
@@ -515,6 +561,7 @@ async fn list_alerts(
         source.clone(),
         site.clone(),
         department.clone(),
+        suppressed,
         query_text.clone(),
     );
     let total: i64 = count_builder
@@ -536,6 +583,7 @@ async fn list_alerts(
         source,
         site,
         department,
+        suppressed,
         query_text,
     );
     list_builder
@@ -594,10 +642,54 @@ async fn get_alert_detail(
     .fetch_all(&state.db)
     .await?;
 
+    let governance: AlertGovernanceSummary = sqlx::query_as(
+        "SELECT
+            COALESCE((
+                SELECT COUNT(*)
+                FROM unified_alert_timeline t
+                WHERE t.alert_id = $1
+                  AND t.event_type IN ('observed', 'reopened')
+            ), 0)::BIGINT AS dedup_event_count,
+            COALESCE((
+                SELECT COUNT(*)
+                FROM alert_policy_actions pa
+                WHERE pa.alert_id = $1
+                  AND pa.action = 'suppressed'
+            ), 0)::BIGINT AS suppressed_count,
+            (
+                SELECT pa.message
+                FROM alert_policy_actions pa
+                WHERE pa.alert_id = $1
+                  AND pa.action = 'suppressed'
+                ORDER BY pa.created_at DESC, pa.id DESC
+                LIMIT 1
+            ) AS latest_suppression_reason,
+            (
+                SELECT pa.created_at
+                FROM alert_policy_actions pa
+                WHERE pa.alert_id = $1
+                  AND pa.action = 'ticket_created'
+                ORDER BY pa.created_at DESC, pa.id DESC
+                LIMIT 1
+            ) AS latest_unsuppressed_event_at,
+            (
+                SELECT NULLIF(pa.metadata->>'policy_key', '')
+                FROM alert_policy_actions pa
+                WHERE pa.alert_id = $1
+                  AND pa.action = 'ticket_created'
+                ORDER BY pa.created_at DESC, pa.id DESC
+                LIMIT 1
+            ) AS latest_unsuppressed_policy_key",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+
     Ok(Json(AlertDetailResponse {
         alert,
         timeline,
         linked_tickets,
+        governance,
     }))
 }
 
@@ -898,6 +990,95 @@ async fn create_alert_ticket_policy(
     .await;
 
     Ok(Json(item))
+}
+
+async fn preview_alert_ticket_policy(
+    State(state): State<AppState>,
+    Json(payload): Json<AlertPolicyPreviewRequest>,
+) -> AppResult<Json<AlertPolicyPreviewResponse>> {
+    let match_source = trim_optional(payload.match_source, 64);
+    let match_severity = normalize_optional_severity_filter(payload.match_severity)?;
+    let match_site = trim_optional(payload.match_site, 128);
+    let match_department = trim_optional(payload.match_department, 128);
+    let match_status = normalize_optional_status_filter(payload.match_status)?;
+    let dedup_window_seconds = payload.dedup_window_seconds.unwrap_or(1800);
+    validate_dedup_window(dedup_window_seconds)?;
+
+    let status_filter = match_status
+        .clone()
+        .or_else(|| Some(ALERT_STATUS_OPEN.to_string()));
+
+    let mut count_builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT COUNT(*) FROM unified_alerts a WHERE 1=1");
+    append_alert_filters(
+        &mut count_builder,
+        status_filter.clone(),
+        match_severity.clone(),
+        match_source.clone(),
+        match_site.clone(),
+        match_department.clone(),
+        None,
+        None,
+    );
+    let matched_alert_count: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    let mut sample_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT a.id AS alert_id, a.title, a.severity, a.alert_source, a.status, a.last_seen_at
+         FROM unified_alerts a
+         WHERE 1=1",
+    );
+    append_alert_filters(
+        &mut sample_builder,
+        status_filter.clone(),
+        match_severity.clone(),
+        match_source.clone(),
+        match_site.clone(),
+        match_department.clone(),
+        None,
+        None,
+    );
+    sample_builder.push(" ORDER BY a.last_seen_at DESC, a.id DESC LIMIT 5");
+    let sample_alerts: Vec<AlertPolicyPreviewSample> =
+        sample_builder.build_query_as().fetch_all(&state.db).await?;
+
+    let mut suppressed_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT COUNT(DISTINCT pa.alert_id)
+         FROM alert_policy_actions pa
+         INNER JOIN unified_alerts a ON a.id = pa.alert_id
+         WHERE pa.action = 'ticket_created'
+           AND pa.created_at >= NOW() - (",
+    );
+    suppressed_builder
+        .push_bind(dedup_window_seconds)
+        .push(" * INTERVAL '1 second')");
+    append_alert_filters(
+        &mut suppressed_builder,
+        status_filter,
+        match_severity,
+        match_source,
+        match_site,
+        match_department,
+        None,
+        None,
+    );
+    let potentially_suppressed_count: i64 = suppressed_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    Ok(Json(AlertPolicyPreviewResponse {
+        generated_at: Utc::now(),
+        dedup_window_seconds,
+        matched_alert_count,
+        potentially_suppressed_count,
+        sample_alerts,
+        summary: format!(
+            "Matched {matched_alert_count} alerts; {potentially_suppressed_count} could be suppressed within dedup window."
+        ),
+    }))
 }
 
 async fn update_alert_ticket_policy(
@@ -1325,8 +1506,7 @@ async fn evaluate_alert_ticket_policies_inner(
         .await?;
 
         if let Some(last_created) = last_action.created_at {
-            let age = Utc::now() - last_created;
-            if age < Duration::seconds(policy.dedup_window_seconds as i64) {
+            if is_within_dedup_window(last_created, policy.dedup_window_seconds, Utc::now()) {
                 let message = format!(
                     "Suppressed by dedup window ({}s)",
                     policy.dedup_window_seconds
@@ -1606,6 +1786,7 @@ fn append_alert_filters(
     source: Option<String>,
     site: Option<String>,
     department: Option<String>,
+    suppressed: Option<bool>,
     query_text: Option<String>,
 ) {
     if let Some(status) = status {
@@ -1622,6 +1803,27 @@ fn append_alert_filters(
     }
     if let Some(department) = department {
         builder.push(" AND a.department = ").push_bind(department);
+    }
+    if let Some(suppressed) = suppressed {
+        if suppressed {
+            builder.push(
+                " AND EXISTS (
+                    SELECT 1
+                    FROM alert_policy_actions ap
+                    WHERE ap.alert_id = a.id
+                      AND ap.action = 'suppressed'
+                )",
+            );
+        } else {
+            builder.push(
+                " AND NOT EXISTS (
+                    SELECT 1
+                    FROM alert_policy_actions ap
+                    WHERE ap.alert_id = a.id
+                      AND ap.action = 'suppressed'
+                )",
+            );
+        }
     }
     if let Some(query_text) = query_text {
         let pattern = format!("%{}%", query_text.to_lowercase());
@@ -1735,6 +1937,18 @@ fn validate_dedup_window(seconds: i32) -> AppResult<()> {
     }
 }
 
+fn is_within_dedup_window(
+    last_created_at: DateTime<Utc>,
+    dedup_window_seconds: i32,
+    now: DateTime<Utc>,
+) -> bool {
+    if dedup_window_seconds <= 0 {
+        return false;
+    }
+    let age = now.signed_duration_since(last_created_at);
+    age >= Duration::zero() && age < Duration::seconds(dedup_window_seconds as i64)
+}
+
 fn required_trimmed(field: &str, value: String, max_len: usize) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1778,13 +1992,14 @@ async fn resolve_actor(state: &AppState, headers: &HeaderMap) -> String {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Duration, Utc};
     use serde_json::json;
 
     use super::{
         ALERT_SEVERITY_CRITICAL, ALERT_SEVERITY_INFO, ALERT_SEVERITY_WARNING, ALERT_STATUS_ACK,
-        ALERT_STATUS_CLOSED, ALERT_STATUS_OPEN, normalize_optional_severity_filter,
-        normalize_optional_status_filter, normalize_priority, parse_playbook_execution_steps,
-        remediation_playbook_key, validate_dedup_window,
+        ALERT_STATUS_CLOSED, ALERT_STATUS_OPEN, is_within_dedup_window,
+        normalize_optional_severity_filter, normalize_optional_status_filter, normalize_priority,
+        parse_playbook_execution_steps, remediation_playbook_key, validate_dedup_window,
     };
 
     #[test]
@@ -1867,5 +2082,26 @@ mod tests {
             "steps": [" one ", "", "two"]
         }));
         assert_eq!(steps, vec!["one".to_string(), "two".to_string()]);
+    }
+
+    #[test]
+    fn dedup_window_edge_cases_are_stable() {
+        let now = Utc::now();
+        assert!(is_within_dedup_window(
+            now - Duration::seconds(60),
+            300,
+            now
+        ));
+        assert!(!is_within_dedup_window(
+            now - Duration::seconds(300),
+            300,
+            now
+        ));
+        assert!(!is_within_dedup_window(
+            now + Duration::seconds(1),
+            300,
+            now
+        ));
+        assert!(!is_within_dedup_window(now - Duration::seconds(1), 0, now));
     }
 }

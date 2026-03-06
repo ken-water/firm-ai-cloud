@@ -140,6 +140,8 @@ fi
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/monitoring/sources/${OPERATOR_MONITOR_SOURCE_ID}/probe"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/alerts"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/alerts/policies"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/alerts/policies/preview" \
+  "{\"match_source\":\"monitoring_sync\",\"match_severity\":\"warning\",\"match_status\":\"open\",\"dedup_window_seconds\":1800}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks/policy"
 assert_code 200 "$OPERATOR_USER" PUT "${API_BASE_URL}/api/v1/workflow/playbooks/policy" \
@@ -186,6 +188,8 @@ assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/discovery/notif
   "{\"name\":\"rbac-viewer-channel\",\"channel_type\":\"webhook\",\"target\":\"http://127.0.0.1:65535/h\"}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/alerts"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/alerts/policies"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/alerts/policies/preview" \
+  "{\"match_source\":\"monitoring_sync\",\"match_severity\":\"warning\",\"match_status\":\"open\",\"dedup_window_seconds\":1800}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks/policy"
 assert_code 403 "$VIEWER_USER" PUT "${API_BASE_URL}/api/v1/workflow/playbooks/policy" \

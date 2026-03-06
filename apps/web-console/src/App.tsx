@@ -1023,6 +1023,13 @@ type AlertDetailResponse = {
   alert: AlertRecord;
   timeline: AlertTimelineRecord[];
   linked_tickets: AlertLinkedTicketRecord[];
+  governance: {
+    dedup_event_count: number;
+    suppressed_count: number;
+    latest_suppression_reason: string | null;
+    latest_unsuppressed_event_at: string | null;
+    latest_unsuppressed_policy_key: string | null;
+  };
 };
 
 type AlertRemediationPlanResponse = {
@@ -1045,6 +1052,63 @@ type AlertBulkActionResponse = {
   skipped: number;
   updated_ids: number[];
   skipped_ids: number[];
+};
+
+type AlertTicketPolicyRecord = {
+  id: number;
+  policy_key: string;
+  name: string;
+  description: string | null;
+  is_system: boolean;
+  is_enabled: boolean;
+  match_source: string | null;
+  match_severity: string | null;
+  match_site: string | null;
+  match_department: string | null;
+  match_status: string | null;
+  dedup_window_seconds: number;
+  ticket_priority: string;
+  ticket_category: string;
+  workflow_template_id: number | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type AlertTicketPolicyListResponse = {
+  items: AlertTicketPolicyRecord[];
+  total: number;
+};
+
+type AlertPolicyPreviewSample = {
+  alert_id: number;
+  title: string;
+  severity: string;
+  alert_source: string;
+  status: string;
+  last_seen_at: string;
+};
+
+type AlertPolicyPreviewResponse = {
+  generated_at: string;
+  dedup_window_seconds: number;
+  matched_alert_count: number;
+  potentially_suppressed_count: number;
+  sample_alerts: AlertPolicyPreviewSample[];
+  summary: string;
+};
+
+type AlertPolicyForm = {
+  policy_key: string;
+  name: string;
+  description: string;
+  is_enabled: boolean;
+  match_source: string;
+  match_severity: "all" | AlertSeverity;
+  match_status: "all" | AlertStatus;
+  dedup_window_seconds: string;
+  ticket_priority: "low" | "medium" | "high" | "critical";
+  ticket_category: string;
 };
 
 type NewFieldForm = {
@@ -1106,6 +1170,7 @@ type MonitoringSourceFilterForm = {
 type AlertFilterForm = {
   status: "all" | AlertStatus;
   severity: "all" | AlertSeverity;
+  suppressed: "all" | "true" | "false";
   site: string;
   query: string;
 };
@@ -1245,8 +1310,22 @@ const defaultMonitoringSourceFilters: MonitoringSourceFilterForm = {
 const defaultAlertFilters: AlertFilterForm = {
   status: "open",
   severity: "all",
+  suppressed: "all",
   site: "",
   query: ""
+};
+
+const defaultAlertPolicyForm: AlertPolicyForm = {
+  policy_key: "",
+  name: "",
+  description: "",
+  is_enabled: true,
+  match_source: "monitoring_sync",
+  match_severity: "warning",
+  match_status: "open",
+  dedup_window_seconds: "1800",
+  ticket_priority: "high",
+  ticket_category: "incident"
 };
 
 const defaultWorkflowStepForm: NewWorkflowTemplateStepForm = {
@@ -1495,6 +1574,14 @@ export function App() {
   const [alertBulkActionRunning, setAlertBulkActionRunning] = useState<"ack" | "close" | null>(null);
   const [alertNotice, setAlertNotice] = useState<string | null>(null);
   const [alertFilters, setAlertFilters] = useState<AlertFilterForm>(defaultAlertFilters);
+  const [alertPolicies, setAlertPolicies] = useState<AlertTicketPolicyRecord[]>([]);
+  const [loadingAlertPolicies, setLoadingAlertPolicies] = useState(false);
+  const [creatingAlertPolicy, setCreatingAlertPolicy] = useState(false);
+  const [updatingAlertPolicyId, setUpdatingAlertPolicyId] = useState<number | null>(null);
+  const [previewingAlertPolicy, setPreviewingAlertPolicy] = useState(false);
+  const [alertPolicyDraft, setAlertPolicyDraft] = useState<AlertPolicyForm>(defaultAlertPolicyForm);
+  const [alertPolicyPreview, setAlertPolicyPreview] = useState<AlertPolicyPreviewResponse | null>(null);
+  const [alertPolicyNotice, setAlertPolicyNotice] = useState<string | null>(null);
   const [activePage, setActivePage] = useState<ConsolePage>(() =>
     resolveConsolePageFromHash(typeof window !== "undefined" ? window.location.hash : "", true)
   );
@@ -2789,6 +2876,9 @@ export function App() {
       if (alertFilters.severity !== "all") {
         params.set("severity", alertFilters.severity);
       }
+      if (alertFilters.suppressed !== "all") {
+        params.set("suppressed", alertFilters.suppressed);
+      }
       if (alertFilters.site.trim().length > 0) {
         params.set("site", alertFilters.site.trim());
       }
@@ -2838,6 +2928,163 @@ export function App() {
       setLoadingAlertDetail(false);
     }
   }, []);
+
+  const loadAlertPolicies = useCallback(async () => {
+    setLoadingAlertPolicies(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/alerts/policies`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AlertTicketPolicyListResponse = await response.json();
+      setAlertPolicies(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setAlertPolicies([]);
+      return [];
+    } finally {
+      setLoadingAlertPolicies(false);
+    }
+  }, []);
+
+  const previewAlertPolicy = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const dedupWindowSeconds = Number.parseInt(alertPolicyDraft.dedup_window_seconds.trim(), 10);
+    if (!Number.isFinite(dedupWindowSeconds) || dedupWindowSeconds <= 0) {
+      setError("Dedup window must be a positive integer.");
+      return;
+    }
+
+    setPreviewingAlertPolicy(true);
+    setAlertPolicyNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/alerts/policies/preview`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          match_source: trimToNull(alertPolicyDraft.match_source),
+          match_severity: alertPolicyDraft.match_severity === "all" ? null : alertPolicyDraft.match_severity,
+          match_status: alertPolicyDraft.match_status === "all" ? null : alertPolicyDraft.match_status,
+          dedup_window_seconds: dedupWindowSeconds
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AlertPolicyPreviewResponse = await response.json();
+      setAlertPolicyPreview(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setAlertPolicyPreview(null);
+      return null;
+    } finally {
+      setPreviewingAlertPolicy(false);
+    }
+  }, [alertPolicyDraft, canWriteCmdb, t]);
+
+  const createAlertPolicy = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const name = alertPolicyDraft.name.trim();
+    if (!name) {
+      setError("Policy name is required.");
+      return;
+    }
+
+    const autoPolicyKey = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    const policyKey = (alertPolicyDraft.policy_key.trim() || autoPolicyKey).slice(0, 64);
+    if (!policyKey) {
+      setError("Policy key is required.");
+      return;
+    }
+
+    const dedupWindowSeconds = Number.parseInt(alertPolicyDraft.dedup_window_seconds.trim(), 10);
+    if (!Number.isFinite(dedupWindowSeconds) || dedupWindowSeconds <= 0) {
+      setError("Dedup window must be a positive integer.");
+      return;
+    }
+
+    setCreatingAlertPolicy(true);
+    setAlertPolicyNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/alerts/policies`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          policy_key: policyKey,
+          name,
+          description: trimToNull(alertPolicyDraft.description),
+          is_enabled: alertPolicyDraft.is_enabled,
+          match_source: trimToNull(alertPolicyDraft.match_source),
+          match_severity: alertPolicyDraft.match_severity === "all" ? null : alertPolicyDraft.match_severity,
+          match_status: alertPolicyDraft.match_status === "all" ? null : alertPolicyDraft.match_status,
+          dedup_window_seconds: dedupWindowSeconds,
+          ticket_priority: alertPolicyDraft.ticket_priority,
+          ticket_category: trimToNull(alertPolicyDraft.ticket_category) ?? "incident"
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      setAlertPolicyDraft((prev) => ({ ...defaultAlertPolicyForm, match_source: prev.match_source }));
+      setAlertPolicyPreview(null);
+      await loadAlertPolicies();
+      setAlertPolicyNotice(`Policy '${policyKey}' created.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setCreatingAlertPolicy(false);
+    }
+  }, [alertPolicyDraft, canWriteCmdb, loadAlertPolicies, t]);
+
+  const toggleAlertPolicyEnabled = useCallback(async (policy: AlertTicketPolicyRecord) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    setUpdatingAlertPolicyId(policy.id);
+    setAlertPolicyNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/alerts/policies/${policy.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          is_enabled: !policy.is_enabled
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await loadAlertPolicies();
+      setAlertPolicyNotice(
+        `Policy '${policy.policy_key}' ${policy.is_enabled ? "disabled" : "enabled"}.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setUpdatingAlertPolicyId(null);
+    }
+  }, [canWriteCmdb, loadAlertPolicies, t]);
 
   const toggleAlertSelection = useCallback((alertId: number, focus?: boolean) => {
     if (!Number.isFinite(alertId) || alertId <= 0) {
@@ -5511,8 +5758,8 @@ export function App() {
     if (!authIdentity || !visibleSections.has("section-alert-center")) {
       return;
     }
-    void loadAlerts();
-  }, [authIdentity, loadAlerts, visibleSections]);
+    void Promise.all([loadAlerts(), loadAlertPolicies()]);
+  }, [authIdentity, loadAlertPolicies, loadAlerts, visibleSections]);
   useEffect(() => {
     if (alerts.length === 0) {
       setSelectedAlertId("");
@@ -5759,6 +6006,9 @@ export function App() {
   }, []);
   const setAlertSeverityFilter = useCallback((severity: AlertFilterForm["severity"]) => {
     setAlertFilters((prev) => ({ ...prev, severity }));
+  }, []);
+  const setAlertSuppressedFilter = useCallback((suppressed: AlertFilterForm["suppressed"]) => {
+    setAlertFilters((prev) => ({ ...prev, suppressed }));
   }, []);
   const setAlertSiteFilter = useCallback((site: string) => {
     setAlertFilters((prev) => ({ ...prev, site }));
@@ -6204,29 +6454,42 @@ export function App() {
     alertQueryFilter: alertFilters.query,
     alertSeverityFilter: alertFilters.severity,
     alertSiteFilter: alertFilters.site,
+    alertSuppressedFilter: alertFilters.suppressed,
     alertStatusFilter: alertFilters.status,
+    alertPolicies,
+    alertPolicyDraft,
+    alertPolicyNotice,
+    alertPolicyPreview,
     alerts,
     alertsTotal,
     applySetupTemplate,
+    createAlertPolicy,
     canWriteCmdb,
     closeAlert,
     completeSetupWizard,
+    creatingAlertPolicy,
     loadingAlertDetail,
     loadingAlerts,
+    loadingAlertPolicies,
     loadingSetupChecklist,
     loadingSetupPreflight,
     loadingSetupTemplates,
     previewSetupTemplate,
+    previewAlertPolicy,
+    previewingAlertPolicy,
     refreshAlerts: loadAlerts,
+    refreshAlertPolicies: loadAlertPolicies,
     refreshSetupWizard,
     runningSetupTemplateApply,
     runningSetupTemplatePreview,
     selectedAlertId,
     selectedAlertIds,
     selectedSetupTemplateKey,
+    setAlertPolicyDraft,
     setAlertQueryFilter,
     setAlertSeverityFilter,
     setAlertSiteFilter,
+    setAlertSuppressedFilter,
     setAlertStatusFilter,
     setSelectedSetupTemplateKey,
     setSetupStep,
@@ -6244,12 +6507,14 @@ export function App() {
     setupStep,
     setupTemplates,
     t,
+    toggleAlertPolicyEnabled,
     toggleAlertSelection,
     toggleSelectAllAlerts,
     triggerAlertRemediation,
     triggerBulkAcknowledge,
     triggerBulkClose,
     triggerSingleAcknowledge,
+    updatingAlertPolicyId,
     visibleSections
   };
 

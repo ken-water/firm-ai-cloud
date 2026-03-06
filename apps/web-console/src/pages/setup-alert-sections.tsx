@@ -96,29 +96,42 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     alertQueryFilter,
     alertSeverityFilter,
     alertSiteFilter,
+    alertSuppressedFilter,
     alertStatusFilter,
+    alertPolicies,
+    alertPolicyDraft,
+    alertPolicyNotice,
+    alertPolicyPreview,
     alerts,
     alertsTotal,
     applySetupTemplate,
+    createAlertPolicy,
     canWriteCmdb,
     closeAlert,
     completeSetupWizard,
+    creatingAlertPolicy,
     loadingAlertDetail,
     loadingAlerts,
+    loadingAlertPolicies,
     loadingSetupChecklist,
     loadingSetupPreflight,
     loadingSetupTemplates,
     previewSetupTemplate,
+    previewAlertPolicy,
+    previewingAlertPolicy,
     refreshAlerts,
+    refreshAlertPolicies,
     refreshSetupWizard,
     runningSetupTemplateApply,
     runningSetupTemplatePreview,
     selectedAlertId,
     selectedAlertIds,
     selectedSetupTemplateKey,
+    setAlertPolicyDraft,
     setAlertQueryFilter,
     setAlertSeverityFilter,
     setAlertSiteFilter,
+    setAlertSuppressedFilter,
     setAlertStatusFilter,
     setSelectedSetupTemplateKey,
     setSetupStep,
@@ -136,12 +149,14 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     setupStep,
     setupTemplates,
     t,
+    toggleAlertPolicyEnabled,
     toggleAlertSelection,
     toggleSelectAllAlerts,
     triggerAlertRemediation,
     triggerBulkAcknowledge,
     triggerBulkClose,
     triggerSingleAcknowledge,
+    updatingAlertPolicyId,
     visibleSections
   } = rawProps as any;
 
@@ -547,6 +562,17 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
               </select>
             </label>
             <label className="control-field">
+              <span>Suppression</span>
+              <select
+                value={alertSuppressedFilter}
+                onChange={(event) => setAlertSuppressedFilter(event.target.value as "all" | "true" | "false")}
+              >
+                <option value="all">All alerts</option>
+                <option value="true">Suppressed only</option>
+                <option value="false">Non-suppressed only</option>
+              </select>
+            </label>
+            <label className="control-field">
               <span>{t("alertsCenter.filters.siteLabel")}</span>
               <input
                 value={alertSiteFilter}
@@ -682,6 +708,27 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
                     {" | "}
                     <a href="#/tickets">{t("alertsCenter.detail.openTickets")}</a>
                   </p>
+                  <p className="inline-note">
+                    dedup_events={alertDetail.governance.dedup_event_count}
+                    {" | "}
+                    suppressed_count={alertDetail.governance.suppressed_count}
+                    {" | "}
+                    latest_unsuppressed={
+                      alertDetail.governance.latest_unsuppressed_event_at
+                        ? new Date(alertDetail.governance.latest_unsuppressed_event_at).toLocaleString()
+                        : "-"
+                    }
+                  </p>
+                  {alertDetail.governance.latest_suppression_reason && (
+                    <p className="inline-note">
+                      latest_suppression_reason={alertDetail.governance.latest_suppression_reason}
+                    </p>
+                  )}
+                  {alertDetail.governance.latest_unsuppressed_policy_key && (
+                    <p className="inline-note">
+                      latest_unsuppressed_policy={alertDetail.governance.latest_unsuppressed_policy_key}
+                    </p>
+                  )}
                   <h4 style={{ marginBottom: "0.4rem" }}>{t("alertsCenter.detail.timelineTitle")}</h4>
                   {alertDetail.timeline.length === 0 ? (
                     <p>{t("alertsCenter.detail.timelineEmpty")}</p>
@@ -757,6 +804,199 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
                 {t("alertsCenter.detail.selection", { id: selectedAlertId || "-" })}
               </p>
             </div>
+          </div>
+
+          <div className="detail-panel" style={{ marginTop: "0.85rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ margin: 0, fontSize: "1rem" }}>Alert policy governance</h3>
+              <button onClick={() => void refreshAlertPolicies()} disabled={loadingAlertPolicies}>
+                {loadingAlertPolicies ? t("alertsCenter.actions.refreshing") : "Refresh policies"}
+              </button>
+            </div>
+            {alertPolicyNotice && <p className="banner banner-success">{alertPolicyNotice}</p>}
+            <p className="section-note">
+              Configure dedup/suppression safely with form fields and preview before creating policy.
+            </p>
+            <div className="form-grid">
+              <label className="control-field">
+                <span>Policy key</span>
+                <input
+                  value={alertPolicyDraft.policy_key}
+                  onChange={(event) => setAlertPolicyDraft((prev: any) => ({ ...prev, policy_key: event.target.value }))}
+                  placeholder="repeated-failure-followup"
+                />
+              </label>
+              <label className="control-field">
+                <span>Name</span>
+                <input
+                  value={alertPolicyDraft.name}
+                  onChange={(event) => setAlertPolicyDraft((prev: any) => ({ ...prev, name: event.target.value }))}
+                  placeholder="Repeated Failure Follow-up"
+                />
+              </label>
+              <label className="control-field">
+                <span>Source</span>
+                <input
+                  value={alertPolicyDraft.match_source}
+                  onChange={(event) => setAlertPolicyDraft((prev: any) => ({ ...prev, match_source: event.target.value }))}
+                  placeholder="monitoring_sync"
+                />
+              </label>
+              <label className="control-field">
+                <span>Severity</span>
+                <select
+                  value={alertPolicyDraft.match_severity}
+                  onChange={(event) => setAlertPolicyDraft((prev: any) => ({ ...prev, match_severity: event.target.value }))}
+                >
+                  <option value="all">all</option>
+                  <option value="critical">critical</option>
+                  <option value="warning">warning</option>
+                  <option value="info">info</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Status</span>
+                <select
+                  value={alertPolicyDraft.match_status}
+                  onChange={(event) => setAlertPolicyDraft((prev: any) => ({ ...prev, match_status: event.target.value }))}
+                >
+                  <option value="all">all</option>
+                  <option value="open">open</option>
+                  <option value="acknowledged">acknowledged</option>
+                  <option value="closed">closed</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Dedup window (seconds)</span>
+                <input
+                  type="number"
+                  min={30}
+                  max={604800}
+                  value={alertPolicyDraft.dedup_window_seconds}
+                  onChange={(event) => setAlertPolicyDraft((prev: any) => ({ ...prev, dedup_window_seconds: event.target.value }))}
+                />
+              </label>
+              <label className="control-field">
+                <span>Ticket priority</span>
+                <select
+                  value={alertPolicyDraft.ticket_priority}
+                  onChange={(event) => setAlertPolicyDraft((prev: any) => ({ ...prev, ticket_priority: event.target.value }))}
+                >
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="critical">critical</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Ticket category</span>
+                <input
+                  value={alertPolicyDraft.ticket_category}
+                  onChange={(event) => setAlertPolicyDraft((prev: any) => ({ ...prev, ticket_category: event.target.value }))}
+                  placeholder="incident"
+                />
+              </label>
+              <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Description</span>
+                <textarea
+                  rows={2}
+                  value={alertPolicyDraft.description}
+                  onChange={(event) => setAlertPolicyDraft((prev: any) => ({ ...prev, description: event.target.value }))}
+                />
+              </label>
+              <label className="control-field">
+                <span>Enabled</span>
+                <select
+                  value={alertPolicyDraft.is_enabled ? "true" : "false"}
+                  onChange={(event) => setAlertPolicyDraft((prev: any) => ({ ...prev, is_enabled: event.target.value === "true" }))}
+                >
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+            </div>
+            <div className="toolbar-row" style={{ marginTop: "0.6rem" }}>
+              <button onClick={() => void previewAlertPolicy()} disabled={!canWriteCmdb || previewingAlertPolicy}>
+                {previewingAlertPolicy ? t("alertsCenter.actions.processing") : "Preview policy"}
+              </button>
+              <button onClick={() => void createAlertPolicy()} disabled={!canWriteCmdb || creatingAlertPolicy}>
+                {creatingAlertPolicy ? t("alertsCenter.actions.processing") : "Create policy"}
+              </button>
+            </div>
+
+            {alertPolicyPreview && (
+              <div className="detail-panel" style={{ marginTop: "0.6rem" }}>
+                <p className="section-note" style={{ margin: 0 }}>
+                  {alertPolicyPreview.summary}
+                </p>
+                <p className="inline-note" style={{ marginTop: "0.4rem" }}>
+                  generated_at={new Date(alertPolicyPreview.generated_at).toLocaleString()}
+                  {" | "}
+                  matched={alertPolicyPreview.matched_alert_count}
+                  {" | "}
+                  potentially_suppressed={alertPolicyPreview.potentially_suppressed_count}
+                </p>
+                {alertPolicyPreview.sample_alerts.length > 0 && (
+                  <div style={{ display: "grid", gap: "0.25rem" }}>
+                    {alertPolicyPreview.sample_alerts.map((item: any) => (
+                      <div key={`alert-policy-preview-${item.alert_id}`} className="hint-row">
+                        #{item.alert_id} | {item.alert_source} | {item.severity} | {item.status} | {item.title}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {loadingAlertPolicies && (alertPolicies as any[]).length === 0 ? (
+              <p>{t("alertsCenter.messages.loading")}</p>
+            ) : (alertPolicies as any[]).length === 0 ? (
+              <p>No policy configured.</p>
+            ) : (
+              <div style={{ overflowX: "auto", marginTop: "0.6rem" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={cellStyle}>Key</th>
+                      <th style={cellStyle}>Name</th>
+                      <th style={cellStyle}>Match</th>
+                      <th style={cellStyle}>Dedup(s)</th>
+                      <th style={cellStyle}>Ticket</th>
+                      <th style={cellStyle}>Enabled</th>
+                      <th style={cellStyle}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(alertPolicies as any[]).map((policy) => (
+                      <tr key={`alert-policy-row-${policy.id}`}>
+                        <td style={cellStyle}>{policy.policy_key}</td>
+                        <td style={cellStyle}>{policy.name}</td>
+                        <td style={cellStyle}>
+                          source={policy.match_source ?? "*"} | severity={policy.match_severity ?? "*"} | status={policy.match_status ?? "*"}
+                        </td>
+                        <td style={cellStyle}>{policy.dedup_window_seconds}</td>
+                        <td style={cellStyle}>
+                          {policy.ticket_priority}/{policy.ticket_category}
+                        </td>
+                        <td style={cellStyle}>{policy.is_enabled ? "true" : "false"}</td>
+                        <td style={cellStyle}>
+                          <button
+                            onClick={() => void toggleAlertPolicyEnabled(policy)}
+                            disabled={!canWriteCmdb || updatingAlertPolicyId === policy.id}
+                          >
+                            {updatingAlertPolicyId === policy.id
+                              ? t("alertsCenter.actions.processing")
+                              : policy.is_enabled
+                                ? "Disable"
+                                : "Enable"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </SectionCard>
       )}
