@@ -123,6 +123,9 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.x operator simplicity + efficiency plan](docs/20-v0.1x-operator-simplicity-plan.md)
 - [v0.1.1 validation suite](docs/21-v0.1.1-validation-suite.md)
 - [v0.1.1 operator runbook](docs/22-v0.1.1-operator-runbook.md)
+- [v0.1.2 security and scale evidence](docs/23-v0.1.2-security-scale-evidence.md)
+- [v0.1.3 capacity guidance](docs/24-v0.1.3-capacity-guidance.md)
+- [v0.1.4 safe-ops planning](docs/25-v0.1.4-safe-ops-planning.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 

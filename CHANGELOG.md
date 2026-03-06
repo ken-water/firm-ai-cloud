@@ -8,11 +8,12 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- None yet.
+- v0.1.4 planning document: `docs/25-v0.1.4-safe-ops-planning.md`.
+- v0.1.4 issue baseline: GitHub issues `#118` to `#126` (safe-change policy, approval control, alert governance, backup/DR no-code flow, weekly digest, long-soak and multi-region evidence, release closure).
 
 ### Changed
 
-- None yet.
+- v0.1.x planning document now includes v0.1.4 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
 
 ### Fixed
 
