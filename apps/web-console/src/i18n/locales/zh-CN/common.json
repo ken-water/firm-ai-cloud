@@ -151,6 +151,48 @@
         "scope": "范围",
         "time": "观察时间",
         "actions": "下一步动作"
+      },
+      "checklist": {
+        "title": "引导式值守清单",
+        "description": "按天跟踪例行运维任务，突出逾期项，并保留可审计的异常备注。",
+        "summary": "清单总数={{total}} | 已完成={{completed}} | 待处理={{pending}} | 已跳过={{skipped}} | 已逾期={{overdue}}",
+        "weekday": "星期 {{day}}",
+        "cards": {
+          "completed": "已完成 {{value}}",
+          "pending": "待处理 {{value}}",
+          "skipped": "已跳过 {{value}}",
+          "overdue": "已逾期 {{value}}"
+        },
+        "fields": {
+          "date": "清单日期"
+        },
+        "actions": {
+          "refresh": "刷新清单",
+          "complete": "标记完成",
+          "exception": "登记异常"
+        },
+        "status": {
+          "pending": "待处理",
+          "completed": "已完成",
+          "skipped": "已跳过",
+          "overdue": "已逾期"
+        },
+        "table": {
+          "item": "清单项",
+          "frequency": "频率",
+          "status": "状态",
+          "note": "异常备注",
+          "updatedAt": "更新时间",
+          "actions": "操作"
+        },
+        "messages": {
+          "loading": "正在加载清单状态...",
+          "noData": "尚未加载清单数据。",
+          "empty": "当前日期无计划清单项。",
+          "completeDone": "清单 '{{key}}' 已标记完成。",
+          "exceptionDone": "清单 '{{key}}' 已登记异常。",
+          "exceptionPrompt": "请输入异常备注（必填）。该信息会写入审计日志。"
+        }
       }
     },
     "workflow": {
@@ -1101,7 +1143,9 @@
       "ack": "确认",
       "close": "关闭",
       "ackSelected": "确认当前选中告警",
-      "closeSelected": "关闭当前选中告警"
+      "closeSelected": "关闭当前选中告警",
+      "remediate": "执行映射修复",
+      "remediating": "修复中..."
     },
     "table": {
       "id": "告警 ID",
@@ -1136,7 +1180,12 @@
       "ackSuccess": "告警 #{{id}} 已确认。",
       "closeSuccess": "告警 #{{id}} 已关闭。",
       "bulkAckSuccess": "批量确认完成：成功={{updated}}，跳过={{skipped}}。",
-      "bulkCloseSuccess": "批量关闭完成：成功={{updated}}，跳过={{skipped}}。"
+      "bulkCloseSuccess": "批量关闭完成：成功={{updated}}，跳过={{skipped}}。",
+      "remediationSuccess": "修复剧本 {{key}} 执行成功（执行 #{{executionId}}）。",
+      "remediationCancelled": "已取消修复执行确认。",
+      "remediationConfirmPrompt": "该修复为高风险操作。请输入确认令牌 '{{token}}'（过期时间：{{expiresAt}}）。",
+      "remediationTokenMismatch": "确认令牌与挑战值不一致。",
+      "remediationMissingChallenge": "干跑结果缺少修复确认挑战令牌。"
     }
   }
 }

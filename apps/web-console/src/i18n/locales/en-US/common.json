@@ -151,6 +151,48 @@
         "scope": "Scope",
         "time": "Observed At",
         "actions": "Next Actions"
+      },
+      "checklist": {
+        "title": "Guided Checklist",
+        "description": "Track routine operations by day, capture overdue items, and keep exception notes auditable.",
+        "summary": "Checklist total={{total}} | completed={{completed}} | pending={{pending}} | skipped={{skipped}} | overdue={{overdue}}",
+        "weekday": "weekday {{day}}",
+        "cards": {
+          "completed": "Completed {{value}}",
+          "pending": "Pending {{value}}",
+          "skipped": "Skipped {{value}}",
+          "overdue": "Overdue {{value}}"
+        },
+        "fields": {
+          "date": "Checklist Date"
+        },
+        "actions": {
+          "refresh": "Refresh Checklist",
+          "complete": "Mark Completed",
+          "exception": "Record Exception"
+        },
+        "status": {
+          "pending": "Pending",
+          "completed": "Completed",
+          "skipped": "Skipped",
+          "overdue": "Overdue"
+        },
+        "table": {
+          "item": "Checklist Item",
+          "frequency": "Frequency",
+          "status": "Status",
+          "note": "Exception Note",
+          "updatedAt": "Updated At",
+          "actions": "Actions"
+        },
+        "messages": {
+          "loading": "Loading checklist state...",
+          "noData": "Checklist is not loaded yet.",
+          "empty": "No checklist templates scheduled for current date.",
+          "completeDone": "Checklist '{{key}}' marked as completed.",
+          "exceptionDone": "Checklist '{{key}}' exception has been recorded.",
+          "exceptionPrompt": "Input exception note (required). This will be stored in audit logs."
+        }
       }
     },
     "workflow": {
@@ -1101,7 +1143,9 @@
       "ack": "Acknowledge",
       "close": "Close",
       "ackSelected": "Acknowledge Selected Alert",
-      "closeSelected": "Close Selected Alert"
+      "closeSelected": "Close Selected Alert",
+      "remediate": "Run Mapped Remediation",
+      "remediating": "Remediating..."
     },
     "table": {
       "id": "Alert ID",
@@ -1136,7 +1180,12 @@
       "ackSuccess": "Alert #{{id}} acknowledged.",
       "closeSuccess": "Alert #{{id}} closed.",
       "bulkAckSuccess": "Bulk acknowledge done: updated={{updated}}, skipped={{skipped}}.",
-      "bulkCloseSuccess": "Bulk close done: updated={{updated}}, skipped={{skipped}}."
+      "bulkCloseSuccess": "Bulk close done: updated={{updated}}, skipped={{skipped}}.",
+      "remediationSuccess": "Remediation playbook {{key}} executed successfully (execution #{{executionId}}).",
+      "remediationCancelled": "Remediation cancelled before execute confirmation.",
+      "remediationConfirmPrompt": "High-risk remediation confirmation required. Enter token '{{token}}' (expires: {{expiresAt}}).",
+      "remediationTokenMismatch": "Confirmation token does not match challenge.",
+      "remediationMissingChallenge": "Remediation confirmation challenge is missing from dry-run result."
     }
   }
 }

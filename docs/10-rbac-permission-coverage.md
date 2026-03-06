@@ -23,6 +23,7 @@ This document records the current permission matrix, route-to-permission mapping
 | `monitoring.sources.write` | Allow | Allow | Deny |
 | `ops.setup.read` | Allow | Allow | Allow |
 | `ops.cockpit.read` | Allow | Allow | Allow |
+| `ops.cockpit.write` | Allow | Allow | Deny |
 | `alerts.read` | Allow | Allow | Allow |
 | `alerts.write` | Allow | Allow | Deny |
 | `workflow.requests.read` | Allow | Allow | Allow |
@@ -41,6 +42,7 @@ Source of truth:
 - Setup/alert permissions: `services/api/migrations/202603050003_create_alerting_and_setup_permissions.sql`
 - Playbook permissions: `services/api/migrations/202603050004_create_playbook_catalog_and_execution_logs.sql`
 - Daily cockpit permission: `services/api/migrations/202603050005_add_ops_cockpit_permission.sql`
+- Guided checklist and cockpit write permission: `services/api/migrations/202603060003_create_ops_checklist_tables.sql`
 
 ## 2. Endpoint Group Mapping
 
@@ -79,6 +81,8 @@ RBAC route mapping source:
 | `/api/v1/setup/templates` | `ops.setup.read` |
 | `/api/v1/setup/templates/*/{preview,apply}` | `ops.setup.write` |
 | `/api/v1/ops/cockpit/queue` | `ops.cockpit.read` |
+| `/api/v1/ops/cockpit/checklists` | `ops.cockpit.read` |
+| `/api/v1/ops/cockpit/checklists/*/{complete,exception}` | `ops.cockpit.write` |
 | `/api/v1/alerts*` | `alerts.read` / `alerts.write` |
 
 ### 2.4 Workflow and Tickets

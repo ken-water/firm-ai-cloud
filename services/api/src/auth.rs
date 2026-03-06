@@ -707,13 +707,30 @@ mod tests {
     #[test]
     fn maps_ops_cockpit_permissions() {
         assert_permission(Method::GET, "/api/v1/ops/cockpit/queue", "ops.cockpit.read");
+        assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/checklists",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete",
+            "ops.cockpit.write",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception",
+            "ops.cockpit.write",
+        );
         assert_permission(Method::GET, "/cockpit/queue", "ops.cockpit.read");
+        assert_permission(Method::GET, "/cockpit/checklists", "ops.cockpit.read");
     }
 
     #[test]
     fn maps_alert_permissions() {
         assert_permission(Method::GET, "/api/v1/alerts", "alerts.read");
         assert_permission(Method::GET, "/api/v1/alerts/1", "alerts.read");
+        assert_permission(Method::GET, "/api/v1/alerts/1/remediation", "alerts.read");
         assert_permission(Method::GET, "/api/v1/alerts/policies", "alerts.read");
         assert_permission(Method::POST, "/api/v1/alerts/1/ack", "alerts.write");
         assert_permission(Method::POST, "/api/v1/alerts/1/close", "alerts.write");
@@ -925,6 +942,21 @@ mod tests {
                 "workflow.playbooks.write",
             ),
             (Method::GET, "/api/v1/ops/cockpit/queue", "ops.cockpit.read"),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/checklists",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete",
+                "ops.cockpit.write",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception",
+                "ops.cockpit.write",
+            ),
             (Method::GET, "/api/v1/tickets", "tickets.read"),
             (Method::GET, "/api/v1/tickets/1", "tickets.read"),
             (Method::POST, "/api/v1/tickets", "tickets.write"),
@@ -1049,6 +1081,7 @@ mod tests {
             ),
             (Method::GET, "/api/v1/alerts", "alerts.read"),
             (Method::GET, "/api/v1/alerts/1", "alerts.read"),
+            (Method::GET, "/api/v1/alerts/1/remediation", "alerts.read"),
             (Method::GET, "/api/v1/alerts/policies", "alerts.read"),
             (Method::POST, "/api/v1/alerts/1/ack", "alerts.write"),
             (Method::POST, "/api/v1/alerts/1/close", "alerts.write"),

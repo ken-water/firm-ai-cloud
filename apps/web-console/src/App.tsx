@@ -709,6 +709,51 @@ type DailyCockpitQueueResponse = {
   items: DailyCockpitQueueItem[];
 };
 
+type OpsChecklistItem = {
+  template_key: string;
+  title: string;
+  description: string | null;
+  frequency: string;
+  due_weekday: number | null;
+  status: "pending" | "completed" | "skipped";
+  overdue: boolean;
+  exception_note: string | null;
+  completed_at: string | null;
+  updated_at: string | null;
+  guidance: string | null;
+};
+
+type OpsChecklistResponse = {
+  generated_at: string;
+  checklist_date: string;
+  operator: string;
+  scope: {
+    site: string | null;
+    department: string | null;
+  };
+  summary: {
+    total: number;
+    completed: number;
+    pending: number;
+    skipped: number;
+    overdue: number;
+  };
+  items: OpsChecklistItem[];
+};
+
+type OpsChecklistUpdateResponse = {
+  checklist_date: string;
+  template_key: string;
+  status: string;
+  operator: string;
+  scope: {
+    site: string | null;
+    department: string | null;
+  };
+  completed_at: string | null;
+  exception_note: string | null;
+};
+
 type TicketListItem = {
   id: number;
   ticket_no: string;
@@ -924,6 +969,19 @@ type AlertDetailResponse = {
   alert: AlertRecord;
   timeline: AlertTimelineRecord[];
   linked_tickets: AlertLinkedTicketRecord[];
+};
+
+type AlertRemediationPlanResponse = {
+  alert_id: number;
+  playbook_key: string;
+  playbook_name: string;
+  risk_level: string;
+  requires_confirmation: boolean;
+  summary: string;
+  params: Record<string, unknown>;
+  execution_steps: string[];
+  confirmation_flow: string;
+  rollback_guidance: string[];
 };
 
 type AlertBulkActionResponse = {
@@ -1308,11 +1366,16 @@ export function App() {
   const [playbookExecutionResult, setPlaybookExecutionResult] = useState<PlaybookExecutionDetail | null>(null);
   const [playbookNotice, setPlaybookNotice] = useState<string | null>(null);
   const [dailyCockpitQueue, setDailyCockpitQueue] = useState<DailyCockpitQueueResponse | null>(null);
+  const [opsChecklist, setOpsChecklist] = useState<OpsChecklistResponse | null>(null);
   const [loadingDailyCockpit, setLoadingDailyCockpit] = useState(false);
+  const [loadingOpsChecklist, setLoadingOpsChecklist] = useState(false);
   const [runningDailyCockpitActionKey, setRunningDailyCockpitActionKey] = useState<string | null>(null);
+  const [runningOpsChecklistActionKey, setRunningOpsChecklistActionKey] = useState<string | null>(null);
   const [dailyCockpitNotice, setDailyCockpitNotice] = useState<string | null>(null);
+  const [opsChecklistNotice, setOpsChecklistNotice] = useState<string | null>(null);
   const [dailyCockpitSiteFilter, setDailyCockpitSiteFilter] = useState("");
   const [dailyCockpitDepartmentFilter, setDailyCockpitDepartmentFilter] = useState("");
+  const [opsChecklistDate, setOpsChecklistDate] = useState(() => formatLocalDateKey(new Date()));
   const [tickets, setTickets] = useState<TicketListItem[]>([]);
   const [ticketDetail, setTicketDetail] = useState<TicketDetailResponse | null>(null);
   const [loadingTickets, setLoadingTickets] = useState(false);
@@ -2084,6 +2147,50 @@ export function App() {
     }
   }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter, t]);
 
+  const loadOpsChecklist = useCallback(async () => {
+    setLoadingOpsChecklist(true);
+    setError(null);
+    setOpsChecklistNotice(null);
+    try {
+      const params = new URLSearchParams();
+      if (opsChecklistDate.trim().length > 0) {
+        params.set("date", opsChecklistDate.trim());
+      }
+      if (dailyCockpitSiteFilter.trim().length > 0) {
+        params.set("site", dailyCockpitSiteFilter.trim());
+      }
+      if (dailyCockpitDepartmentFilter.trim().length > 0) {
+        params.set("department", dailyCockpitDepartmentFilter.trim());
+      }
+
+      const query = params.toString();
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/checklists${query ? `?${query}` : ""}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: OpsChecklistResponse = await response.json();
+      setOpsChecklist(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setOpsChecklist(null);
+      return null;
+    } finally {
+      setLoadingOpsChecklist(false);
+    }
+  }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter, opsChecklistDate]);
+
+  const loadDailyCockpitSnapshot = useCallback(async () => {
+    const [queue, checklist] = await Promise.all([
+      loadDailyCockpitQueue(),
+      loadOpsChecklist()
+    ]);
+    return { queue, checklist };
+  }, [loadDailyCockpitQueue, loadOpsChecklist]);
+
   const runDailyCockpitAction = useCallback(async (
     item: DailyCockpitQueueItem,
     action: DailyCockpitAction
@@ -2115,7 +2222,7 @@ export function App() {
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
-      await loadDailyCockpitQueue();
+      await loadDailyCockpitSnapshot();
       setDailyCockpitNotice(
         t("cmdb.dailyCockpit.messages.actionDone", {
           action: action.label
@@ -2126,7 +2233,92 @@ export function App() {
     } finally {
       setRunningDailyCockpitActionKey(null);
     }
-  }, [canWriteCmdb, loadDailyCockpitQueue, t]);
+  }, [canWriteCmdb, loadDailyCockpitSnapshot, t]);
+
+  const updateOpsChecklistStatus = useCallback(
+    async (templateKey: string, action: "complete" | "exception", note?: string) => {
+      if (!canWriteCmdb) {
+        setError(t("auth.messages.forbiddenAction"));
+        return null;
+      }
+      if (!templateKey || templateKey.trim().length === 0) {
+        return null;
+      }
+
+      const normalizedTemplateKey = templateKey.trim();
+      const actionKey = `${normalizedTemplateKey}:${action}`;
+      setRunningOpsChecklistActionKey(actionKey);
+      setError(null);
+      setOpsChecklistNotice(null);
+
+      try {
+        const response = await apiFetch(
+          `${API_BASE_URL}/api/v1/ops/cockpit/checklists/${encodeURIComponent(normalizedTemplateKey)}/${action}`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              date: opsChecklistDate.trim().length > 0 ? opsChecklistDate.trim() : null,
+              site: trimToNull(dailyCockpitSiteFilter),
+              department: trimToNull(dailyCockpitDepartmentFilter),
+              note: trimToNull(note ?? ""),
+              mark_skipped: action === "exception"
+            })
+          }
+        );
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response));
+        }
+        const payload: OpsChecklistUpdateResponse = await response.json();
+        await Promise.all([loadOpsChecklist(), loadDailyCockpitQueue()]);
+        setOpsChecklistNotice(
+          t(
+            action === "complete"
+              ? "cmdb.dailyCockpit.checklist.messages.completeDone"
+              : "cmdb.dailyCockpit.checklist.messages.exceptionDone",
+            {
+              key: payload.template_key
+            }
+          )
+        );
+        return payload;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "unknown error");
+        return null;
+      } finally {
+        setRunningOpsChecklistActionKey(null);
+      }
+    },
+    [
+      canWriteCmdb,
+      dailyCockpitDepartmentFilter,
+      dailyCockpitSiteFilter,
+      loadDailyCockpitQueue,
+      loadOpsChecklist,
+      opsChecklistDate,
+      t
+    ]
+  );
+
+  const completeOpsChecklistItem = useCallback(
+    async (templateKey: string) => updateOpsChecklistStatus(templateKey, "complete"),
+    [updateOpsChecklistStatus]
+  );
+
+  const recordOpsChecklistException = useCallback(
+    async (templateKey: string) => {
+      const note = typeof window !== "undefined"
+        ? window.prompt(t("cmdb.dailyCockpit.checklist.messages.exceptionPrompt"), "")
+        : null;
+      if (note === null || note.trim().length === 0) {
+        return null;
+      }
+      return updateOpsChecklistStatus(templateKey, "exception", note);
+    },
+    [t, updateOpsChecklistStatus]
+  );
 
   const loadTickets = useCallback(async () => {
     setLoadingTickets(true);
@@ -2631,6 +2823,116 @@ export function App() {
       setAlertActionRunningId(null);
     }
   }, [canWriteCmdb, loadAlertDetail, loadAlerts, t]);
+
+  const triggerAlertRemediation = useCallback(async (alertId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+    if (!Number.isFinite(alertId) || alertId <= 0) {
+      return;
+    }
+
+    setAlertActionRunningId(alertId);
+    setAlertNotice(null);
+    setError(null);
+
+    try {
+      const remediationResponse = await apiFetch(`${API_BASE_URL}/api/v1/alerts/${alertId}/remediation`);
+      if (!remediationResponse.ok) {
+        throw new Error(await readErrorMessage(remediationResponse));
+      }
+      const remediationPlan: AlertRemediationPlanResponse = await remediationResponse.json();
+
+      const assetRef = typeof remediationPlan.params.asset_ref === "string"
+        ? remediationPlan.params.asset_ref.trim()
+        : "";
+      const dryRunResponse = await apiFetch(
+        `${API_BASE_URL}/api/v1/workflow/playbooks/${encodeURIComponent(remediationPlan.playbook_key)}/dry-run`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            params: remediationPlan.params,
+            asset_ref: assetRef.length > 0 ? assetRef : null,
+            related_alert_id: alertId
+          })
+        }
+      );
+      if (!dryRunResponse.ok) {
+        throw new Error(await readErrorMessage(dryRunResponse));
+      }
+      const dryRunPayload: PlaybookDryRunResponse = await dryRunResponse.json();
+
+      let executePayload: Record<string, unknown> = {
+        params: remediationPlan.params,
+        asset_ref: assetRef.length > 0 ? assetRef : null,
+        related_alert_id: alertId
+      };
+
+      if (dryRunPayload.risk_summary.requires_confirmation) {
+        const challenge = dryRunPayload.confirmation;
+        if (!challenge) {
+          throw new Error(t("alertsCenter.messages.remediationMissingChallenge"));
+        }
+        const inputToken = typeof window !== "undefined"
+          ? window.prompt(
+            t("alertsCenter.messages.remediationConfirmPrompt", {
+              token: challenge.token,
+              expiresAt: new Date(challenge.expires_at).toLocaleString()
+            }),
+            ""
+          )
+          : null;
+        if (inputToken === null) {
+          setAlertNotice(t("alertsCenter.messages.remediationCancelled"));
+          return;
+        }
+        if (inputToken.trim() !== challenge.token) {
+          throw new Error(t("alertsCenter.messages.remediationTokenMismatch"));
+        }
+        executePayload = {
+          ...executePayload,
+          dry_run_id: dryRunPayload.execution.id,
+          confirmation_token: inputToken.trim()
+        };
+      }
+
+      const executeResponse = await apiFetch(
+        `${API_BASE_URL}/api/v1/workflow/playbooks/${encodeURIComponent(remediationPlan.playbook_key)}/execute`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(executePayload)
+        }
+      );
+      if (!executeResponse.ok) {
+        throw new Error(await readErrorMessage(executeResponse));
+      }
+      const executeResult: PlaybookExecutionDetail = await executeResponse.json();
+
+      setSelectedAlertId(String(alertId));
+      await Promise.all([
+        loadAlerts(),
+        loadAlertDetail(alertId),
+        loadDailyCockpitSnapshot()
+      ]);
+      setAlertNotice(
+        t("alertsCenter.messages.remediationSuccess", {
+          key: remediationPlan.playbook_key,
+          executionId: executeResult.id
+        })
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setAlertActionRunningId(null);
+    }
+  }, [canWriteCmdb, loadAlertDetail, loadAlerts, loadDailyCockpitSnapshot, t]);
 
   const runBulkAlertAction = useCallback(
     async (action: "ack" | "close") => {
@@ -4917,18 +5219,18 @@ export function App() {
       return;
     }
 
-    void loadDailyCockpitQueue();
+    void loadDailyCockpitSnapshot();
 
     const timer = window.setInterval(() => {
       void apiFetch(`${API_BASE_URL}/api/v1/streams/metrics?window_minutes=10&sample_limit=200&scope_limit=5`)
         .catch(() => null)
         .finally(() => {
-          void loadDailyCockpitQueue();
+          void loadDailyCockpitSnapshot();
         });
     }, 30000);
 
     return () => window.clearInterval(timer);
-  }, [authIdentity, loadDailyCockpitQueue, visibleSections]);
+  }, [authIdentity, loadDailyCockpitSnapshot, visibleSections]);
   useEffect(() => {
     if (!authIdentity || !visibleSections.has("section-workflow")) {
       return;
@@ -5562,6 +5864,7 @@ export function App() {
     t,
     toggleAlertSelection,
     toggleSelectAllAlerts,
+    triggerAlertRemediation,
     triggerBulkAcknowledge,
     triggerBulkClose,
     triggerSingleAcknowledge,
@@ -5633,14 +5936,17 @@ export function App() {
     dailyCockpitNotice,
     dailyCockpitQueue,
     dailyCockpitSiteFilter,
+    completeOpsChecklistItem,
     departmentWorkspace,
     departmentWorkspaceOptions,
     functionWorkspace,
-    loadDailyCockpitQueue,
+    loadDailyCockpitSnapshot,
+    loadOpsChecklist,
     loadAssets,
     loadAssetStats,
     loadFieldDefinitions,
     loadingDailyCockpit,
+    loadingOpsChecklist,
     loadingAssetStats,
     loadingAssets,
     loadingFields,
@@ -5648,7 +5954,12 @@ export function App() {
     menuAxis,
     monitoringOverview,
     monitoringSources,
+    opsChecklist,
+    opsChecklistDate,
+    opsChecklistNotice,
     perspectiveScopeLabel,
+    recordOpsChecklistException,
+    runningOpsChecklistActionKey,
     selectedBusinessAssetCount,
     selectedDepartmentAssetCount,
     runDailyCockpitAction,
@@ -5659,6 +5970,7 @@ export function App() {
     setDepartmentWorkspace,
     setFunctionWorkspace,
     setMenuAxis,
+    setOpsChecklistDate,
     subSectionTitleStyle,
     t,
     visibleSections

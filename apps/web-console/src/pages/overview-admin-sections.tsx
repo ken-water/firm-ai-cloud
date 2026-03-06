@@ -19,6 +19,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     canWriteCmdb,
     cockpitCriticalAssets,
     cockpitOperationalAssets,
+    completeOpsChecklistItem,
     createSampleAsset,
     departmentWorkspace,
     departmentWorkspaceOptions,
@@ -27,11 +28,13 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     dailyCockpitQueue,
     dailyCockpitSiteFilter,
     functionWorkspace,
-    loadDailyCockpitQueue,
+    loadDailyCockpitSnapshot,
+    loadOpsChecklist,
     loadAssets,
     loadAssetStats,
     loadFieldDefinitions,
     loadingDailyCockpit,
+    loadingOpsChecklist,
     loadingAssetStats,
     loadingAssets,
     loadingFields,
@@ -39,7 +42,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     menuAxis,
     monitoringOverview,
     monitoringSources,
+    opsChecklist,
+    opsChecklistDate,
+    opsChecklistNotice,
     perspectiveScopeLabel,
+    recordOpsChecklistException,
+    runningOpsChecklistActionKey,
     selectedBusinessAssetCount,
     selectedDepartmentAssetCount,
     runDailyCockpitAction,
@@ -50,6 +58,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setDepartmentWorkspace,
     setFunctionWorkspace,
     setMenuAxis,
+    setOpsChecklistDate,
     subSectionTitleStyle,
     t,
     visibleSections,
@@ -151,12 +160,18 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           id="section-daily-cockpit"
           title={t("cmdb.dailyCockpit.title")}
           actions={(
-            <button onClick={() => void loadDailyCockpitQueue()} disabled={loadingDailyCockpit}>
-              {loadingDailyCockpit ? t("cmdb.actions.loading") : t("cmdb.dailyCockpit.actions.refresh")}
+            <button
+              onClick={() => void loadDailyCockpitSnapshot()}
+              disabled={loadingDailyCockpit || loadingOpsChecklist}
+            >
+              {loadingDailyCockpit || loadingOpsChecklist
+                ? t("cmdb.actions.loading")
+                : t("cmdb.dailyCockpit.actions.refresh")}
             </button>
           )}
         >
           {dailyCockpitNotice && <p className="banner banner-success">{dailyCockpitNotice}</p>}
+          {opsChecklistNotice && <p className="banner banner-success">{opsChecklistNotice}</p>}
           {!canWriteCmdb && <p className="inline-note">{t("cmdb.dailyCockpit.messages.readOnlyHint")}</p>}
 
           <div className="filter-grid" style={{ marginBottom: "0.75rem" }}>
@@ -176,6 +191,153 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 placeholder="platform"
               />
             </label>
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
+            <h3 style={{ ...subSectionTitleStyle, marginTop: 0 }}>{t("cmdb.dailyCockpit.checklist.title")}</h3>
+            <p className="section-note">{t("cmdb.dailyCockpit.checklist.description")}</p>
+            <div className="toolbar-row" style={{ marginBottom: "0.65rem" }}>
+              <label className="control-field" style={{ minWidth: "220px" }}>
+                <span>{t("cmdb.dailyCockpit.checklist.fields.date")}</span>
+                <input
+                  type="date"
+                  value={opsChecklistDate}
+                  onChange={(event) => setOpsChecklistDate(event.target.value)}
+                />
+              </label>
+              <button onClick={() => void loadOpsChecklist()} disabled={loadingOpsChecklist}>
+                {loadingOpsChecklist
+                  ? t("cmdb.actions.loading")
+                  : t("cmdb.dailyCockpit.checklist.actions.refresh")}
+              </button>
+            </div>
+
+            {!opsChecklist ? (
+              <p>
+                {loadingOpsChecklist
+                  ? t("cmdb.dailyCockpit.checklist.messages.loading")
+                  : t("cmdb.dailyCockpit.checklist.messages.noData")}
+              </p>
+            ) : opsChecklist.items.length === 0 ? (
+              <p>{t("cmdb.dailyCockpit.checklist.messages.empty")}</p>
+            ) : (
+              <>
+                <p className="section-note">
+                  {t("cmdb.dailyCockpit.checklist.summary", {
+                    total: opsChecklist.summary.total,
+                    completed: opsChecklist.summary.completed,
+                    pending: opsChecklist.summary.pending,
+                    skipped: opsChecklist.summary.skipped,
+                    overdue: opsChecklist.summary.overdue
+                  })}
+                </p>
+                <div className="toolbar-row" style={{ marginBottom: "0.5rem" }}>
+                  <span className="status-chip status-chip-success">
+                    {t("cmdb.dailyCockpit.checklist.cards.completed", { value: opsChecklist.summary.completed })}
+                  </span>
+                  <span className="status-chip">
+                    {t("cmdb.dailyCockpit.checklist.cards.pending", { value: opsChecklist.summary.pending })}
+                  </span>
+                  <span className="status-chip status-chip-warn">
+                    {t("cmdb.dailyCockpit.checklist.cards.skipped", { value: opsChecklist.summary.skipped })}
+                  </span>
+                  <span className="status-chip status-chip-danger">
+                    {t("cmdb.dailyCockpit.checklist.cards.overdue", { value: opsChecklist.summary.overdue })}
+                  </span>
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", minWidth: "1120px", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                          {t("cmdb.dailyCockpit.checklist.table.item")}
+                        </th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                          {t("cmdb.dailyCockpit.checklist.table.frequency")}
+                        </th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                          {t("cmdb.dailyCockpit.checklist.table.status")}
+                        </th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                          {t("cmdb.dailyCockpit.checklist.table.note")}
+                        </th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                          {t("cmdb.dailyCockpit.checklist.table.updatedAt")}
+                        </th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                          {t("cmdb.dailyCockpit.checklist.table.actions")}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {opsChecklist.items.map((item: any) => {
+                        const statusClass = item.status === "completed"
+                          ? "status-chip-success"
+                          : item.status === "skipped"
+                            ? "status-chip-warn"
+                            : item.overdue
+                              ? "status-chip-danger"
+                              : "";
+                        const runningComplete = runningOpsChecklistActionKey === `${item.template_key}:complete`;
+                        const runningException = runningOpsChecklistActionKey === `${item.template_key}:exception`;
+                        return (
+                          <tr key={`ops-checklist-${item.template_key}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <p style={{ margin: 0 }}>{item.title}</p>
+                              {item.description && <p className="section-note" style={{ marginTop: "0.25rem" }}>{item.description}</p>}
+                              {item.guidance && <p className="inline-note" style={{ marginTop: "0.2rem" }}>{item.guidance}</p>}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.frequency}
+                              {item.frequency === "weekly" && Number.isFinite(item.due_weekday)
+                                ? ` / ${t("cmdb.dailyCockpit.checklist.weekday", { day: item.due_weekday })}`
+                                : ""}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <span className={`status-chip ${statusClass}`}>
+                                {item.status === "completed"
+                                  ? t("cmdb.dailyCockpit.checklist.status.completed")
+                                  : item.status === "skipped"
+                                    ? t("cmdb.dailyCockpit.checklist.status.skipped")
+                                    : item.overdue
+                                      ? t("cmdb.dailyCockpit.checklist.status.overdue")
+                                      : t("cmdb.dailyCockpit.checklist.status.pending")}
+                              </span>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.exception_note ?? "-"}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.updated_at ? new Date(item.updated_at).toLocaleString() : "-"}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div className="toolbar-row">
+                                <button
+                                  onClick={() => void completeOpsChecklistItem(item.template_key)}
+                                  disabled={!canWriteCmdb || runningComplete || runningOpsChecklistActionKey !== null}
+                                >
+                                  {runningComplete
+                                    ? t("cmdb.actions.loading")
+                                    : t("cmdb.dailyCockpit.checklist.actions.complete")}
+                                </button>
+                                <button
+                                  onClick={() => void recordOpsChecklistException(item.template_key)}
+                                  disabled={!canWriteCmdb || runningException || runningOpsChecklistActionKey !== null}
+                                >
+                                  {runningException
+                                    ? t("cmdb.actions.loading")
+                                    : t("cmdb.dailyCockpit.checklist.actions.exception")}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
 
           {!dailyCockpitQueue ? (

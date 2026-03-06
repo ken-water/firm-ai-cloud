@@ -138,6 +138,7 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     t,
     toggleAlertSelection,
     toggleSelectAllAlerts,
+    triggerAlertRemediation,
     triggerBulkAcknowledge,
     triggerBulkClose,
     triggerSingleAcknowledge,
@@ -737,6 +738,19 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
                   }
                 >
                   {t("alertsCenter.actions.closeSelected")}
+                </button>
+                <button
+                  onClick={() => void triggerAlertRemediation(Number.parseInt(selectedAlertId, 10))}
+                  disabled={
+                    !canWriteCmdb
+                    || !selectedAlertId
+                    || !Number.isFinite(Number.parseInt(selectedAlertId, 10))
+                    || alertActionRunningId !== null
+                  }
+                >
+                  {alertActionRunningId !== null
+                    ? t("alertsCenter.actions.remediating")
+                    : t("alertsCenter.actions.remediate")}
                 </button>
               </div>
               <p className="inline-note" style={{ marginTop: "0.6rem" }}>

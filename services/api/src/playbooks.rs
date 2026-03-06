@@ -10,9 +10,11 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value, json};
 use sqlx::{FromRow, Postgres, QueryBuilder};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
+    alerts::append_alert_remediation_timeline,
     audit::{actor_from_headers, write_from_headers_best_effort},
     error::{AppError, AppResult},
     state::AppState,
@@ -499,6 +501,8 @@ async fn dry_run_playbook(
     )
     .await;
 
+    write_alert_remediation_timeline_best_effort(&state.db, &execution, actor.as_str()).await;
+
     let confirmation = execution_confirmation_challenge(&execution);
 
     Ok(Json(PlaybookDryRunResponse {
@@ -621,6 +625,8 @@ async fn execute_playbook(
         }),
     )
     .await;
+
+    write_alert_remediation_timeline_best_effort(&state.db, &execution, actor.as_str()).await;
 
     Ok(Json(execution))
 }
@@ -864,6 +870,8 @@ async fn run_replay_dry_run(
     )
     .await;
 
+    write_alert_remediation_timeline_best_effort(&state.db, &execution, actor.as_str()).await;
+
     Ok(execution)
 }
 
@@ -959,6 +967,8 @@ async fn run_replay_execute(
         }),
     )
     .await;
+
+    write_alert_remediation_timeline_best_effort(&state.db, &execution, actor.as_str()).await;
 
     Ok(execution)
 }
@@ -1319,6 +1329,61 @@ async fn insert_playbook_execution(
     .await?;
 
     Ok(item)
+}
+
+async fn write_alert_remediation_timeline_best_effort(
+    db: &sqlx::PgPool,
+    execution: &PlaybookExecutionDetail,
+    actor: &str,
+) {
+    let Some(alert_id) = execution.related_alert_id else {
+        return;
+    };
+
+    let event_type = if execution.mode == "dry_run" {
+        "remediation_dry_run"
+    } else {
+        "remediation_executed"
+    };
+    let message = if execution.mode == "dry_run" {
+        Some(format!(
+            "Remediation dry-run prepared with playbook '{}' (execution #{})",
+            execution.playbook_key, execution.id
+        ))
+    } else {
+        Some(format!(
+            "Remediation execution finished with playbook '{}' status='{}' (execution #{})",
+            execution.playbook_key, execution.status, execution.id
+        ))
+    };
+
+    if let Err(err) = append_alert_remediation_timeline(
+        db,
+        alert_id,
+        event_type,
+        actor,
+        message,
+        json!({
+            "playbook_execution_id": execution.id,
+            "playbook_key": execution.playbook_key,
+            "playbook_name": execution.playbook_name,
+            "mode": execution.mode,
+            "status": execution.status,
+            "risk_level": execution.risk_level,
+            "confirmation_required": execution.confirmation_required,
+            "confirmation_verified": execution.confirmation_verified,
+            "replay_of_execution_id": execution.replay_of_execution_id,
+        }),
+    )
+    .await
+    {
+        warn!(
+            error = %err,
+            alert_id,
+            playbook_execution_id = execution.id,
+            "failed to append alert remediation timeline event"
+        );
+    }
 }
 
 fn parse_parameter_schema(schema: Value) -> AppResult<PlaybookParameterSchema> {

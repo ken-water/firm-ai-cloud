@@ -117,6 +117,11 @@ assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/setup/templates/id
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/setup/templates/identity-safe-baseline/apply" \
   "{\"params\":{\"identity_mode\":\"break_glass_only\",\"break_glass_users\":\"${OPERATOR_USER}\"},\"note\":\"rbac apply\"}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/checklists"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete" \
+  "{\"date\":\"$(date +%F)\",\"note\":\"operator completed checklist\"}"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception" \
+  "{\"date\":\"$(date +%F)\",\"note\":\"operator deferred checklist by policy\",\"mark_skipped\":true}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-op-asset-${STAMP}\",\"status\":\"active\"}"
@@ -155,6 +160,11 @@ assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/templates"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/setup/templates/identity-safe-baseline/preview" \
   "{\"params\":{\"identity_mode\":\"break_glass_only\",\"break_glass_users\":\"${VIEWER_USER}\"}}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/checklists"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete" \
+  "{\"date\":\"$(date +%F)\",\"note\":\"viewer should not update checklist\"}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception" \
+  "{\"date\":\"$(date +%F)\",\"note\":\"viewer should not write checklist exception\",\"mark_skipped\":true}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-viewer-asset-${STAMP}\",\"status\":\"active\"}"

@@ -1,22 +1,44 @@
+use std::collections::HashMap;
+
 use axum::{
     Json, Router,
-    extract::{Query, State},
-    routing::get,
+    extract::{Path, Query, State},
+    http::HeaderMap,
+    routing::{get, post},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{FromRow, Postgres, QueryBuilder};
 
-use crate::{error::AppResult, state::AppState};
+use crate::{
+    audit::{AuditLogWriteInput, write_audit_log_best_effort},
+    auth::resolve_auth_user,
+    error::{AppError, AppResult},
+    state::AppState,
+};
 
 const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 200;
 const STALE_PENDING_MINUTES: i64 = 15;
 const STALE_STREAM_MINUTES: i64 = 20;
+const CHECKLIST_STATUS_PENDING: &str = "pending";
+const CHECKLIST_STATUS_COMPLETED: &str = "completed";
+const CHECKLIST_STATUS_SKIPPED: &str = "skipped";
+const MAX_CHECKLIST_NOTE_LEN: usize = 1024;
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/cockpit/queue", get(get_daily_cockpit_queue))
+    Router::new()
+        .route("/cockpit/queue", get(get_daily_cockpit_queue))
+        .route("/cockpit/checklists", get(get_ops_checklist))
+        .route(
+            "/cockpit/checklists/{template_key}/complete",
+            post(complete_ops_checklist_item),
+        )
+        .route(
+            "/cockpit/checklists/{template_key}/exception",
+            post(mark_ops_checklist_exception),
+        )
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -86,6 +108,11 @@ struct AlertQueueRow {
     department: Option<String>,
     asset_id: Option<i64>,
     last_seen_at: DateTime<Utc>,
+    remediation_execution_id: Option<i64>,
+    remediation_playbook_key: Option<String>,
+    remediation_mode: Option<String>,
+    remediation_status: Option<String>,
+    remediation_created_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, FromRow)]
@@ -113,6 +140,87 @@ struct SyncJobQueueRow {
     last_error: Option<String>,
     site: Option<String>,
     department: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OpsChecklistQuery {
+    date: Option<String>,
+    site: Option<String>,
+    department: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OpsChecklistUpdateRequest {
+    date: Option<String>,
+    site: Option<String>,
+    department: Option<String>,
+    note: Option<String>,
+    mark_skipped: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsChecklistResponse {
+    generated_at: DateTime<Utc>,
+    checklist_date: String,
+    operator: String,
+    scope: DailyCockpitScope,
+    summary: OpsChecklistSummary,
+    items: Vec<OpsChecklistItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsChecklistSummary {
+    total: usize,
+    completed: usize,
+    pending: usize,
+    skipped: usize,
+    overdue: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsChecklistItem {
+    template_key: String,
+    title: String,
+    description: Option<String>,
+    frequency: String,
+    due_weekday: Option<i16>,
+    status: String,
+    overdue: bool,
+    exception_note: Option<String>,
+    completed_at: Option<DateTime<Utc>>,
+    updated_at: Option<DateTime<Utc>>,
+    guidance: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpsChecklistUpdateResponse {
+    checklist_date: String,
+    template_key: String,
+    status: String,
+    operator: String,
+    scope: DailyCockpitScope,
+    completed_at: Option<DateTime<Utc>>,
+    exception_note: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct OpsChecklistTemplateRow {
+    id: i64,
+    template_key: String,
+    title: String,
+    description: Option<String>,
+    frequency: String,
+    due_weekday: Option<i16>,
+    guidance: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct OpsChecklistEntryRow {
+    template_id: i64,
+    status: String,
+    exception_note: Option<String>,
+    completed_at: Option<DateTime<Utc>>,
+    updated_at: DateTime<Utc>,
 }
 
 async fn get_daily_cockpit_queue(
@@ -182,6 +290,408 @@ async fn get_daily_cockpit_queue(
     }))
 }
 
+async fn get_ops_checklist(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<OpsChecklistQuery>,
+) -> AppResult<Json<OpsChecklistResponse>> {
+    let operator = resolve_auth_user(&state, &headers).await?;
+    let checklist_date = parse_optional_date(query.date)?;
+    let site_scope = normalize_scope_value(query.site);
+    let department_scope = normalize_scope_value(query.department);
+
+    let templates = load_ops_checklist_templates(&state.db).await?;
+    let entries = load_ops_checklist_entries(
+        &state.db,
+        checklist_date,
+        operator.as_str(),
+        site_scope.as_str(),
+        department_scope.as_str(),
+    )
+    .await?;
+    let response = build_ops_checklist_response(
+        checklist_date,
+        operator,
+        site_scope,
+        department_scope,
+        templates,
+        entries,
+    );
+
+    Ok(Json(response))
+}
+
+async fn complete_ops_checklist_item(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(template_key): Path<String>,
+    Json(payload): Json<OpsChecklistUpdateRequest>,
+) -> AppResult<Json<OpsChecklistUpdateResponse>> {
+    let operator = resolve_auth_user(&state, &headers).await?;
+    let checklist_date = parse_optional_date(payload.date)?;
+    let site_scope = normalize_scope_value(payload.site);
+    let department_scope = normalize_scope_value(payload.department);
+    let note = normalize_optional_note(payload.note)?;
+
+    let (template, entry) = upsert_ops_checklist_status(
+        &state.db,
+        template_key.as_str(),
+        checklist_date,
+        operator.as_str(),
+        site_scope.as_str(),
+        department_scope.as_str(),
+        CHECKLIST_STATUS_COMPLETED,
+        note.clone(),
+    )
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: operator.clone(),
+            action: "ops.checklist.complete".to_string(),
+            target_type: "ops_checklist".to_string(),
+            target_id: Some(format!("{}:{}", template.template_key, checklist_date)),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "template_key": template.template_key,
+                "checklist_date": checklist_date.to_string(),
+                "site": site_scope,
+                "department": department_scope,
+                "status": entry.status,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(OpsChecklistUpdateResponse {
+        checklist_date: checklist_date.to_string(),
+        template_key: template.template_key,
+        status: entry.status,
+        operator,
+        scope: DailyCockpitScope {
+            site: if site_scope.is_empty() {
+                None
+            } else {
+                Some(site_scope)
+            },
+            department: if department_scope.is_empty() {
+                None
+            } else {
+                Some(department_scope)
+            },
+        },
+        completed_at: entry.completed_at,
+        exception_note: entry.exception_note,
+    }))
+}
+
+async fn mark_ops_checklist_exception(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(template_key): Path<String>,
+    Json(payload): Json<OpsChecklistUpdateRequest>,
+) -> AppResult<Json<OpsChecklistUpdateResponse>> {
+    let operator = resolve_auth_user(&state, &headers).await?;
+    let checklist_date = parse_optional_date(payload.date)?;
+    let site_scope = normalize_scope_value(payload.site);
+    let department_scope = normalize_scope_value(payload.department);
+    let note = normalize_optional_note(payload.note)?.ok_or_else(|| {
+        AppError::Validation("note is required when recording checklist exception".to_string())
+    })?;
+    let status = if payload.mark_skipped.unwrap_or(true) {
+        CHECKLIST_STATUS_SKIPPED
+    } else {
+        CHECKLIST_STATUS_PENDING
+    };
+
+    let (template, entry) = upsert_ops_checklist_status(
+        &state.db,
+        template_key.as_str(),
+        checklist_date,
+        operator.as_str(),
+        site_scope.as_str(),
+        department_scope.as_str(),
+        status,
+        Some(note.clone()),
+    )
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: operator.clone(),
+            action: "ops.checklist.exception".to_string(),
+            target_type: "ops_checklist".to_string(),
+            target_id: Some(format!("{}:{}", template.template_key, checklist_date)),
+            result: "success".to_string(),
+            message: Some(note),
+            metadata: json!({
+                "template_key": template.template_key,
+                "checklist_date": checklist_date.to_string(),
+                "site": site_scope,
+                "department": department_scope,
+                "status": entry.status,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(OpsChecklistUpdateResponse {
+        checklist_date: checklist_date.to_string(),
+        template_key: template.template_key,
+        status: entry.status,
+        operator,
+        scope: DailyCockpitScope {
+            site: if site_scope.is_empty() {
+                None
+            } else {
+                Some(site_scope)
+            },
+            department: if department_scope.is_empty() {
+                None
+            } else {
+                Some(department_scope)
+            },
+        },
+        completed_at: entry.completed_at,
+        exception_note: entry.exception_note,
+    }))
+}
+
+async fn load_ops_checklist_templates(
+    db: &sqlx::PgPool,
+) -> AppResult<Vec<OpsChecklistTemplateRow>> {
+    let rows: Vec<OpsChecklistTemplateRow> = sqlx::query_as(
+        "SELECT id, template_key, title, description, frequency, due_weekday, guidance
+         FROM ops_checklist_templates
+         WHERE is_enabled = TRUE
+         ORDER BY sort_order ASC, template_key ASC",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+async fn load_ops_checklist_entries(
+    db: &sqlx::PgPool,
+    checklist_date: NaiveDate,
+    operator: &str,
+    site: &str,
+    department: &str,
+) -> AppResult<Vec<OpsChecklistEntryRow>> {
+    let rows: Vec<OpsChecklistEntryRow> = sqlx::query_as(
+        "SELECT template_id, status, exception_note, completed_at, updated_at
+         FROM ops_checklist_entries
+         WHERE check_date = $1
+           AND operator = $2
+           AND site = $3
+           AND department = $4",
+    )
+    .bind(checklist_date)
+    .bind(operator)
+    .bind(site)
+    .bind(department)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+fn build_ops_checklist_response(
+    checklist_date: NaiveDate,
+    operator: String,
+    site_scope: String,
+    department_scope: String,
+    templates: Vec<OpsChecklistTemplateRow>,
+    entries: Vec<OpsChecklistEntryRow>,
+) -> OpsChecklistResponse {
+    let today = Utc::now().date_naive();
+    let weekday = checklist_date.weekday().number_from_monday() as i16;
+    let entry_map = entries
+        .into_iter()
+        .map(|item| (item.template_id, item))
+        .collect::<HashMap<_, _>>();
+
+    let mut items = Vec::new();
+    let mut summary = OpsChecklistSummary {
+        total: 0,
+        completed: 0,
+        pending: 0,
+        skipped: 0,
+        overdue: 0,
+    };
+
+    for template in templates {
+        if template.frequency == "weekly" {
+            let due_weekday = template.due_weekday.unwrap_or(1);
+            if due_weekday != weekday {
+                continue;
+            }
+        }
+
+        let entry = entry_map.get(&template.id);
+        let status = entry
+            .map(|item| item.status.as_str())
+            .unwrap_or(CHECKLIST_STATUS_PENDING);
+        let overdue = status == CHECKLIST_STATUS_PENDING && checklist_date < today;
+
+        summary.total += 1;
+        if status == CHECKLIST_STATUS_COMPLETED {
+            summary.completed += 1;
+        } else if status == CHECKLIST_STATUS_SKIPPED {
+            summary.skipped += 1;
+        } else {
+            summary.pending += 1;
+        }
+        if overdue {
+            summary.overdue += 1;
+        }
+
+        items.push(OpsChecklistItem {
+            template_key: template.template_key,
+            title: template.title,
+            description: template.description,
+            frequency: template.frequency,
+            due_weekday: template.due_weekday,
+            status: status.to_string(),
+            overdue,
+            exception_note: entry.and_then(|item| item.exception_note.clone()),
+            completed_at: entry.and_then(|item| item.completed_at),
+            updated_at: entry.map(|item| item.updated_at),
+            guidance: template.guidance,
+        });
+    }
+
+    OpsChecklistResponse {
+        generated_at: Utc::now(),
+        checklist_date: checklist_date.to_string(),
+        operator,
+        scope: DailyCockpitScope {
+            site: if site_scope.is_empty() {
+                None
+            } else {
+                Some(site_scope)
+            },
+            department: if department_scope.is_empty() {
+                None
+            } else {
+                Some(department_scope)
+            },
+        },
+        summary,
+        items,
+    }
+}
+
+async fn upsert_ops_checklist_status(
+    db: &sqlx::PgPool,
+    template_key: &str,
+    checklist_date: NaiveDate,
+    operator: &str,
+    site: &str,
+    department: &str,
+    status: &str,
+    note: Option<String>,
+) -> AppResult<(OpsChecklistTemplateRow, OpsChecklistEntryRow)> {
+    let template = resolve_ops_checklist_template(db, template_key).await?;
+    if template.frequency == "weekly" {
+        let expected_weekday = template.due_weekday.unwrap_or(1);
+        let actual_weekday = checklist_date.weekday().number_from_monday() as i16;
+        if expected_weekday != actual_weekday {
+            return Err(AppError::Validation(format!(
+                "weekly checklist '{}' is due on weekday {}",
+                template.template_key, expected_weekday
+            )));
+        }
+    }
+
+    let entry: OpsChecklistEntryRow = sqlx::query_as(
+        "INSERT INTO ops_checklist_entries
+            (template_id, check_date, operator, site, department, status, exception_note, completed_at, updated_at)
+         VALUES
+            ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $6 = 'completed' THEN NOW() ELSE NULL END, NOW())
+         ON CONFLICT (template_id, check_date, operator, site, department)
+         DO UPDATE SET
+            status = EXCLUDED.status,
+            exception_note = EXCLUDED.exception_note,
+            completed_at = CASE WHEN EXCLUDED.status = 'completed' THEN NOW() ELSE NULL END,
+            updated_at = NOW()
+         RETURNING template_id, status, exception_note, completed_at, updated_at",
+    )
+    .bind(template.id)
+    .bind(checklist_date)
+    .bind(operator)
+    .bind(site)
+    .bind(department)
+    .bind(status)
+    .bind(note)
+    .fetch_one(db)
+    .await?;
+
+    Ok((template, entry))
+}
+
+async fn resolve_ops_checklist_template(
+    db: &sqlx::PgPool,
+    template_key: &str,
+) -> AppResult<OpsChecklistTemplateRow> {
+    let normalized = template_key.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(AppError::Validation("template_key is required".to_string()));
+    }
+
+    let template: Option<OpsChecklistTemplateRow> = sqlx::query_as(
+        "SELECT id, template_key, title, description, frequency, due_weekday, guidance
+         FROM ops_checklist_templates
+         WHERE template_key = $1
+           AND is_enabled = TRUE
+         LIMIT 1",
+    )
+    .bind(normalized)
+    .fetch_optional(db)
+    .await?;
+
+    template.ok_or_else(|| AppError::NotFound("checklist template not found".to_string()))
+}
+
+fn parse_optional_date(raw: Option<String>) -> AppResult<NaiveDate> {
+    match raw {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(Utc::now().date_naive())
+            } else {
+                NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
+                    .map_err(|_| AppError::Validation("date must be YYYY-MM-DD format".to_string()))
+            }
+        }
+        None => Ok(Utc::now().date_naive()),
+    }
+}
+
+fn normalize_scope_value(raw: Option<String>) -> String {
+    raw.map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+}
+
+fn normalize_optional_note(raw: Option<String>) -> AppResult<Option<String>> {
+    let Some(value) = raw else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.len() > MAX_CHECKLIST_NOTE_LEN {
+        return Err(AppError::Validation(format!(
+            "note length must be <= {MAX_CHECKLIST_NOTE_LEN}"
+        )));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
 async fn fetch_alert_queue_rows(
     db: &sqlx::PgPool,
     site: Option<&str>,
@@ -189,8 +699,30 @@ async fn fetch_alert_queue_rows(
     limit: i64,
 ) -> AppResult<Vec<AlertQueueRow>> {
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
-        "SELECT id, alert_source, alert_key, title, severity, status, site, department, asset_id, last_seen_at
+        "SELECT
+            a.id,
+            a.alert_source,
+            a.alert_key,
+            a.title,
+            a.severity,
+            a.status,
+            a.site,
+            a.department,
+            a.asset_id,
+            a.last_seen_at,
+            remediation.id AS remediation_execution_id,
+            remediation.playbook_key AS remediation_playbook_key,
+            remediation.mode AS remediation_mode,
+            remediation.status AS remediation_status,
+            remediation.created_at AS remediation_created_at
          FROM unified_alerts a
+         LEFT JOIN LATERAL (
+            SELECT e.id, e.playbook_key, e.mode, e.status, e.created_at
+            FROM workflow_playbook_executions e
+            WHERE e.related_alert_id = a.id
+            ORDER BY e.created_at DESC, e.id DESC
+            LIMIT 1
+         ) AS remediation ON TRUE
          WHERE a.status IN ('open', 'acknowledged')",
     );
 
@@ -399,6 +931,23 @@ fn build_alert_queue_items(rows: Vec<AlertQueueRow>) -> Vec<DailyCockpitQueueIte
             let age_minutes = (Utc::now() - row.last_seen_at).num_minutes().max(0);
             let (priority_score, priority_level, rationale) =
                 score_alert_item(&row.severity, &row.status, age_minutes);
+            let mut rationale_details = vec![
+                format!("severity:{}", row.severity),
+                format!("status:{}", row.status),
+                format!("age_minutes:{age_minutes}"),
+            ];
+            if let (Some(exec_id), Some(playbook_key), Some(mode), Some(status), Some(created_at)) = (
+                row.remediation_execution_id,
+                row.remediation_playbook_key.as_deref(),
+                row.remediation_mode.as_deref(),
+                row.remediation_status.as_deref(),
+                row.remediation_created_at,
+            ) {
+                rationale_details.push(format!(
+                    "latest_remediation:#{exec_id} {playbook_key} {mode}/{status} at {}",
+                    created_at.to_rfc3339()
+                ));
+            }
 
             DailyCockpitQueueItem {
                 queue_key: format!("alert:{}", row.id),
@@ -406,11 +955,7 @@ fn build_alert_queue_items(rows: Vec<AlertQueueRow>) -> Vec<DailyCockpitQueueIte
                 priority_score,
                 priority_level,
                 rationale,
-                rationale_details: vec![
-                    format!("severity:{}", row.severity),
-                    format!("status:{}", row.status),
-                    format!("age_minutes:{age_minutes}"),
-                ],
+                rationale_details,
                 observed_at: row.last_seen_at,
                 site: row.site.clone(),
                 department: row.department.clone(),
@@ -422,6 +967,13 @@ fn build_alert_queue_items(rows: Vec<AlertQueueRow>) -> Vec<DailyCockpitQueueIte
                     "severity": row.severity,
                     "status": row.status,
                     "asset_id": row.asset_id,
+                    "latest_remediation": {
+                        "execution_id": row.remediation_execution_id,
+                        "playbook_key": row.remediation_playbook_key,
+                        "mode": row.remediation_mode,
+                        "status": row.remediation_status,
+                        "created_at": row.remediation_created_at,
+                    },
                 }),
                 actions: vec![
                     DailyCockpitAction {
@@ -443,9 +995,9 @@ fn build_alert_queue_items(rows: Vec<AlertQueueRow>) -> Vec<DailyCockpitQueueIte
                         requires_write: true,
                     },
                     DailyCockpitAction {
-                        key: "open-playbook-diagnostics".to_string(),
-                        label: "Run Diagnostics Playbook".to_string(),
-                        href: Some("#/workflow".to_string()),
+                        key: "open-alert-remediation".to_string(),
+                        label: "Run Alert Remediation".to_string(),
+                        href: Some("#/alerts".to_string()),
                         api_path: None,
                         method: None,
                         body: None,
@@ -734,11 +1286,12 @@ fn trim_optional(value: Option<String>, max_len: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, Utc};
+    use chrono::{Datelike, Duration, NaiveDate, Utc};
 
     use super::{
-        DailyCockpitAction, DailyCockpitQueueItem, score_alert_item, score_ticket_item,
-        sort_daily_queue_items,
+        DailyCockpitAction, DailyCockpitQueueItem, MAX_CHECKLIST_NOTE_LEN, OpsChecklistEntryRow,
+        OpsChecklistTemplateRow, build_ops_checklist_response, normalize_optional_note,
+        parse_optional_date, score_alert_item, score_ticket_item, sort_daily_queue_items,
     };
 
     fn test_item(key: &str, score: i32, observed_at_offset_minutes: i64) -> DailyCockpitQueueItem {
@@ -786,5 +1339,132 @@ mod tests {
         assert_eq!(items[1].queue_key, "d");
         assert_eq!(items[2].queue_key, "a");
         assert_eq!(items[3].queue_key, "b");
+    }
+
+    #[test]
+    fn checklist_response_marks_overdue_and_summarizes_status() {
+        let checklist_date = Utc::now().date_naive() - Duration::days(1);
+        let weekday = checklist_date.weekday().number_from_monday() as i16;
+        let weekly_next = if weekday == 7 { 1 } else { weekday + 1 };
+        let now = Utc::now();
+
+        let templates = vec![
+            OpsChecklistTemplateRow {
+                id: 1,
+                template_key: "daily-alert-queue-review".to_string(),
+                title: "Daily Alert Queue Review".to_string(),
+                description: None,
+                frequency: "daily".to_string(),
+                due_weekday: None,
+                guidance: Some("daily guidance".to_string()),
+            },
+            OpsChecklistTemplateRow {
+                id: 2,
+                template_key: "daily-monitoring-sync-backlog".to_string(),
+                title: "Daily Monitoring Sync Backlog Sweep".to_string(),
+                description: None,
+                frequency: "daily".to_string(),
+                due_weekday: None,
+                guidance: Some("backlog guidance".to_string()),
+            },
+            OpsChecklistTemplateRow {
+                id: 3,
+                template_key: "weekly-break-glass-review".to_string(),
+                title: "Weekly Break-Glass Review".to_string(),
+                description: None,
+                frequency: "weekly".to_string(),
+                due_weekday: Some(weekday),
+                guidance: Some("weekly guidance".to_string()),
+            },
+            OpsChecklistTemplateRow {
+                id: 4,
+                template_key: "weekly-capacity-review".to_string(),
+                title: "Weekly Capacity Review".to_string(),
+                description: None,
+                frequency: "weekly".to_string(),
+                due_weekday: Some(weekly_next),
+                guidance: Some("capacity guidance".to_string()),
+            },
+        ];
+        let entries = vec![
+            OpsChecklistEntryRow {
+                template_id: 1,
+                status: "completed".to_string(),
+                exception_note: None,
+                completed_at: Some(now),
+                updated_at: now,
+            },
+            OpsChecklistEntryRow {
+                template_id: 2,
+                status: "skipped".to_string(),
+                exception_note: Some("deferred by operator".to_string()),
+                completed_at: None,
+                updated_at: now,
+            },
+        ];
+
+        let response = build_ops_checklist_response(
+            checklist_date,
+            "operator".to_string(),
+            "".to_string(),
+            "".to_string(),
+            templates,
+            entries,
+        );
+
+        assert_eq!(response.summary.total, 3);
+        assert_eq!(response.summary.completed, 1);
+        assert_eq!(response.summary.skipped, 1);
+        assert_eq!(response.summary.pending, 1);
+        assert_eq!(response.summary.overdue, 1);
+        assert_eq!(response.items.len(), 3);
+
+        let pending = response
+            .items
+            .iter()
+            .find(|item| item.template_key == "weekly-break-glass-review")
+            .expect("weekly checklist due item should exist");
+        assert_eq!(pending.status, "pending");
+        assert!(pending.overdue);
+
+        let skipped = response
+            .items
+            .iter()
+            .find(|item| item.template_key == "daily-monitoring-sync-backlog")
+            .expect("skipped checklist item should exist");
+        assert_eq!(skipped.status, "skipped");
+        assert_eq!(
+            skipped.exception_note.as_deref(),
+            Some("deferred by operator")
+        );
+    }
+
+    #[test]
+    fn optional_note_is_trimmed_and_has_length_limit() {
+        assert_eq!(
+            normalize_optional_note(None).expect("none should pass"),
+            None
+        );
+        assert_eq!(
+            normalize_optional_note(Some("  acknowledged  ".to_string()))
+                .expect("trim should pass"),
+            Some("acknowledged".to_string())
+        );
+        assert_eq!(
+            normalize_optional_note(Some("   ".to_string())).expect("blank should pass"),
+            None
+        );
+
+        let too_long = "x".repeat(MAX_CHECKLIST_NOTE_LEN + 1);
+        assert!(normalize_optional_note(Some(too_long)).is_err());
+    }
+
+    #[test]
+    fn parses_optional_date_with_expected_format() {
+        assert_eq!(
+            parse_optional_date(Some("2026-03-06".to_string())).expect("date should parse"),
+            NaiveDate::from_ymd_opt(2026, 3, 6).expect("date is valid")
+        );
+        assert!(parse_optional_date(Some("2026/03/06".to_string())).is_err());
     }
 }

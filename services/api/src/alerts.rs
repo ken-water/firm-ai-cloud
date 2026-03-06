@@ -33,6 +33,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_alerts))
         .route("/{id}", get(get_alert_detail))
+        .route("/{id}/remediation", get(get_alert_remediation_plan))
         .route("/{id}/ack", axum::routing::post(acknowledge_alert))
         .route("/{id}/close", axum::routing::post(close_alert))
         .route("/bulk/ack", axum::routing::post(bulk_acknowledge_alerts))
@@ -104,6 +105,20 @@ struct AlertDetailResponse {
     alert: AlertRecord,
     timeline: Vec<AlertTimelineRecord>,
     linked_tickets: Vec<AlertLinkedTicketRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct AlertRemediationPlanResponse {
+    alert_id: i64,
+    playbook_key: String,
+    playbook_name: String,
+    risk_level: String,
+    requires_confirmation: bool,
+    summary: String,
+    params: Value,
+    execution_steps: Vec<String>,
+    confirmation_flow: String,
+    rollback_guidance: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -253,6 +268,109 @@ struct AlertUpsertResult {
 #[derive(Debug, FromRow)]
 struct TicketSeedRow {
     id: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct PlaybookRemediationRow {
+    playbook_key: String,
+    name: String,
+    risk_level: String,
+    requires_confirmation: bool,
+    execution_plan: Value,
+}
+
+#[derive(Debug)]
+struct MappedAlertRemediation {
+    playbook_key: String,
+    params: Value,
+    summary: String,
+    rollback_guidance: Vec<String>,
+}
+
+fn remediation_playbook_key(alert_source: &str, severity: &str) -> &'static str {
+    if alert_source.eq_ignore_ascii_case(ALERT_SOURCE_MONITORING_SYNC)
+        && severity.eq_ignore_ascii_case(ALERT_SEVERITY_CRITICAL)
+    {
+        "drain-node-maintenance"
+    } else {
+        "refresh-monitoring-binding"
+    }
+}
+
+fn map_alert_remediation(alert: &AlertRecord, asset_ref: &str) -> MappedAlertRemediation {
+    let playbook_key =
+        remediation_playbook_key(alert.alert_source.as_str(), alert.severity.as_str());
+    if playbook_key == "drain-node-maintenance" {
+        return MappedAlertRemediation {
+            playbook_key: playbook_key.to_string(),
+            params: json!({
+                "asset_ref": asset_ref,
+                "maintenance_ticket": format!("ALERT-{}", alert.id),
+                "max_wait_seconds": 900
+            }),
+            summary: "Critical monitoring alert mapped to controlled node-drain remediation."
+                .to_string(),
+            rollback_guidance: vec![
+                "If impact increases, stop execution and return service traffic before maintenance actions."
+                    .to_string(),
+                "Re-run as dry-run after updating maintenance context and ownership confirmation."
+                    .to_string(),
+            ],
+        };
+    }
+
+    MappedAlertRemediation {
+        playbook_key: playbook_key.to_string(),
+        params: json!({
+            "asset_ref": asset_ref,
+            "source_type": "zabbix",
+            "force_probe": true
+        }),
+        summary: "Alert mapped to monitoring-binding refresh remediation for fast recovery."
+            .to_string(),
+        rollback_guidance: vec![
+            "If source probe remains unreachable, verify endpoint and secret_ref before retry."
+                .to_string(),
+            "Use alert close only after monitoring sync confirms recovery.".to_string(),
+        ],
+    }
+}
+
+async fn resolve_alert_asset_ref(db: &sqlx::PgPool, alert: &AlertRecord) -> AppResult<String> {
+    let from_asset = if let Some(asset_id) = alert.asset_id {
+        sqlx::query_scalar::<_, String>("SELECT name FROM assets WHERE id = $1")
+            .bind(asset_id)
+            .fetch_optional(db)
+            .await?
+    } else {
+        None
+    };
+
+    Ok(from_asset
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            if let Some(asset_id) = alert.asset_id {
+                format!("asset-{asset_id}")
+            } else {
+                alert.alert_key.clone()
+            }
+        }))
+}
+
+fn parse_playbook_execution_steps(plan: Value) -> Vec<String> {
+    plan.as_object()
+        .and_then(|object| object.get("steps"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 pub(crate) async fn upsert_monitoring_sync_alert(
@@ -480,6 +598,59 @@ async fn get_alert_detail(
         alert,
         timeline,
         linked_tickets,
+    }))
+}
+
+async fn get_alert_remediation_plan(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> AppResult<Json<AlertRemediationPlanResponse>> {
+    let alert: Option<AlertRecord> = sqlx::query_as(
+        "SELECT id, alert_source, alert_key, dedup_key, title, severity, status, site, department, asset_id,
+                payload, first_seen_at, last_seen_at, acknowledged_by, acknowledged_at, closed_by, closed_at,
+                created_at, updated_at
+         FROM unified_alerts
+         WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let alert = alert.ok_or_else(|| AppError::NotFound(format!("alert {id} not found")))?;
+    let asset_ref = resolve_alert_asset_ref(&state.db, &alert).await?;
+    let mapped = map_alert_remediation(&alert, asset_ref.as_str());
+
+    let playbook: Option<PlaybookRemediationRow> = sqlx::query_as(
+        "SELECT playbook_key, name, risk_level, requires_confirmation, execution_plan
+         FROM workflow_playbooks
+         WHERE playbook_key = $1
+           AND is_enabled = TRUE
+         LIMIT 1",
+    )
+    .bind(mapped.playbook_key.as_str())
+    .fetch_optional(&state.db)
+    .await?;
+    let playbook = playbook.ok_or_else(|| {
+        AppError::Validation(format!(
+            "mapped remediation playbook '{}' is not available",
+            mapped.playbook_key
+        ))
+    })?;
+
+    Ok(Json(AlertRemediationPlanResponse {
+        alert_id: alert.id,
+        playbook_key: playbook.playbook_key,
+        playbook_name: playbook.name,
+        risk_level: playbook.risk_level,
+        requires_confirmation: playbook.requires_confirmation,
+        summary: mapped.summary,
+        params: mapped.params,
+        execution_steps: parse_playbook_execution_steps(playbook.execution_plan),
+        confirmation_flow: if playbook.requires_confirmation {
+            "dry_run_token".to_string()
+        } else {
+            "optional".to_string()
+        },
+        rollback_guidance: mapped.rollback_guidance,
     }))
 }
 
@@ -1065,6 +1236,25 @@ async fn insert_alert_timeline(
     Ok(())
 }
 
+pub(crate) async fn append_alert_remediation_timeline(
+    db: &sqlx::PgPool,
+    alert_id: i64,
+    event_type: &str,
+    actor: &str,
+    message: Option<String>,
+    metadata: Value,
+) -> AppResult<()> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM unified_alerts WHERE id = $1)")
+            .bind(alert_id)
+            .fetch_one(db)
+            .await?;
+    if !exists {
+        return Ok(());
+    }
+    insert_alert_timeline(db, alert_id, event_type, actor, message, metadata).await
+}
+
 async fn evaluate_alert_ticket_policies(state: &AppState, alert_id: i64, actor: &str) {
     if let Err(err) = evaluate_alert_ticket_policies_inner(state, alert_id, actor).await {
         warn!(error = %err, alert_id, "failed to evaluate alert ticket policies");
@@ -1588,10 +1778,13 @@ async fn resolve_actor(state: &AppState, headers: &HeaderMap) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::{
         ALERT_SEVERITY_CRITICAL, ALERT_SEVERITY_INFO, ALERT_SEVERITY_WARNING, ALERT_STATUS_ACK,
         ALERT_STATUS_CLOSED, ALERT_STATUS_OPEN, normalize_optional_severity_filter,
-        normalize_optional_status_filter, normalize_priority, validate_dedup_window,
+        normalize_optional_status_filter, normalize_priority, parse_playbook_execution_steps,
+        remediation_playbook_key, validate_dedup_window,
     };
 
     #[test]
@@ -1650,5 +1843,29 @@ mod tests {
         assert!(validate_dedup_window(604800).is_ok());
         assert!(validate_dedup_window(29).is_err());
         assert!(validate_dedup_window(604801).is_err());
+    }
+
+    #[test]
+    fn maps_remediation_playbook_by_alert_source_and_severity() {
+        assert_eq!(
+            remediation_playbook_key("monitoring_sync", ALERT_SEVERITY_CRITICAL),
+            "drain-node-maintenance"
+        );
+        assert_eq!(
+            remediation_playbook_key("monitoring_sync", ALERT_SEVERITY_WARNING),
+            "refresh-monitoring-binding"
+        );
+        assert_eq!(
+            remediation_playbook_key("other", ALERT_SEVERITY_INFO),
+            "refresh-monitoring-binding"
+        );
+    }
+
+    #[test]
+    fn parses_playbook_execution_steps_from_json_plan() {
+        let steps = parse_playbook_execution_steps(json!({
+            "steps": [" one ", "", "two"]
+        }));
+        assert_eq!(steps, vec!["one".to_string(), "two".to_string()]);
     }
 }
