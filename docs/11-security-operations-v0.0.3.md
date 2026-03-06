@@ -198,6 +198,16 @@ LDAP baseline and local fallback governance are controlled by:
 | `AUTH_LDAP_MODE` | `dev` | LDAP connector mode (`dev`/`live`) |
 | `AUTH_LDAP_DEV_USERS_JSON` | empty | Dev connector identity payload (JSON array) |
 | `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON` | empty | Group-to-role mapping policy (JSON object) |
+| `AUTH_LDAP_LIVE_URL` | empty | LDAP live endpoint URL (`ldap://` or `ldaps://`) |
+| `AUTH_LDAP_LIVE_BASE_DN` | empty | LDAP search base DN for user lookup |
+| `AUTH_LDAP_LIVE_BIND_DN` | empty | Optional service bind DN used before user lookup |
+| `AUTH_LDAP_LIVE_BIND_PASSWORD` | empty | Optional service bind password (must pair with bind DN) |
+| `AUTH_LDAP_LIVE_USER_FILTER` | `(uid={username})` | LDAP user search filter template (`{username}` required) |
+| `AUTH_LDAP_LIVE_ATTR_EMAIL` | `mail` | LDAP attribute mapped to email |
+| `AUTH_LDAP_LIVE_ATTR_DISPLAY_NAME` | `displayName` | LDAP attribute mapped to display name |
+| `AUTH_LDAP_LIVE_ATTR_GROUPS` | `memberOf` | LDAP attribute mapped to group list |
+| `AUTH_LDAP_LIVE_STARTTLS` | `false` | Enable StartTLS for `ldap://` endpoints |
+| `AUTH_LDAP_LIVE_TLS_INSECURE_SKIP_VERIFY` | `false` | Unsafe TLS verify bypass (rejected in live mode) |
 | `AUTH_LOCAL_FALLBACK_MODE` | `allow_all` | Local header fallback mode (`allow_all`/`break_glass_only`/`disabled`) |
 | `AUTH_LOCAL_BREAK_GLASS_USERS` | empty | Allowlisted principals in break-glass mode |
 
@@ -206,8 +216,10 @@ Hardening checklist:
 1. Set `AUTH_LOCAL_FALLBACK_MODE=break_glass_only` or `disabled` for production.
 2. Keep `AUTH_LOCAL_BREAK_GLASS_USERS` limited to emergency principals and test quarterly.
 3. Define `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON` with least-privilege role mapping.
-4. Validate LDAP login audit events include mapping source and resolved groups/roles.
-5. Confirm non-mapped LDAP groups are denied before rollout.
+4. For live mode, set `AUTH_LDAP_LIVE_URL`, `AUTH_LDAP_LIVE_BASE_DN`, and a filter with `{username}` placeholder.
+5. Keep `AUTH_LDAP_LIVE_TLS_INSECURE_SKIP_VERIFY=false`; unsafe bypass is rejected in live mode.
+6. Validate LDAP login audit events include mapping source and resolved groups/roles.
+7. Confirm non-mapped LDAP groups are denied before rollout.
 
 ## 4. Deployment Security Notes
 

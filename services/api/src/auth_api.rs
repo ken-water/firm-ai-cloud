@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Duration, Utc};
+use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, ldap_escape};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -896,6 +897,81 @@ pub fn validate_ldap_group_role_mapping_config(raw: Option<&str>) -> AppResult<(
     Ok(())
 }
 
+pub fn validate_ldap_live_config(ldap: &LdapSettings) -> AppResult<()> {
+    if !ldap.enabled || ldap.mode != "live" {
+        return Ok(());
+    }
+
+    let live_url = required_setting(&ldap.live_url, "AUTH_LDAP_LIVE_URL")?;
+    let live_base_dn = required_setting(&ldap.live_base_dn, "AUTH_LDAP_LIVE_BASE_DN")?;
+    if live_base_dn.trim().is_empty() {
+        return Err(AppError::Validation(
+            "AUTH_LDAP_LIVE_BASE_DN cannot be empty".to_string(),
+        ));
+    }
+
+    if !(live_url.starts_with("ldap://") || live_url.starts_with("ldaps://")) {
+        return Err(AppError::Validation(
+            "AUTH_LDAP_LIVE_URL must start with ldap:// or ldaps://".to_string(),
+        ));
+    }
+
+    if ldap.live_starttls && live_url.starts_with("ldaps://") {
+        return Err(AppError::Validation(
+            "AUTH_LDAP_LIVE_STARTTLS=true cannot be used with ldaps:// URL".to_string(),
+        ));
+    }
+
+    if ldap.live_tls_insecure_skip_verify {
+        return Err(AppError::Validation(
+            "AUTH_LDAP_LIVE_TLS_INSECURE_SKIP_VERIFY=true is not allowed in live mode".to_string(),
+        ));
+    }
+
+    if ldap.live_user_filter.trim().is_empty() {
+        return Err(AppError::Validation(
+            "AUTH_LDAP_LIVE_USER_FILTER cannot be empty".to_string(),
+        ));
+    }
+    if !ldap.live_user_filter.contains("{username}") {
+        return Err(AppError::Validation(
+            "AUTH_LDAP_LIVE_USER_FILTER must include '{username}' placeholder".to_string(),
+        ));
+    }
+
+    let bind_dn_present = ldap
+        .live_bind_dn
+        .as_deref()
+        .map(|item| !item.trim().is_empty())
+        .unwrap_or(false);
+    let bind_pw_present = ldap
+        .live_bind_password
+        .as_deref()
+        .map(|item| !item.trim().is_empty())
+        .unwrap_or(false);
+    if bind_dn_present != bind_pw_present {
+        return Err(AppError::Validation(
+            "AUTH_LDAP_LIVE_BIND_DN and AUTH_LDAP_LIVE_BIND_PASSWORD must be provided together"
+                .to_string(),
+        ));
+    }
+
+    for (key, value) in [
+        ("AUTH_LDAP_LIVE_ATTR_EMAIL", ldap.live_attr_email.as_str()),
+        (
+            "AUTH_LDAP_LIVE_ATTR_DISPLAY_NAME",
+            ldap.live_attr_display_name.as_str(),
+        ),
+        ("AUTH_LDAP_LIVE_ATTR_GROUPS", ldap.live_attr_groups.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(AppError::Validation(format!("{key} cannot be empty")));
+        }
+    }
+
+    Ok(())
+}
+
 async fn authenticate_ldap_user(
     state: &AppState,
     username: &str,
@@ -912,9 +988,7 @@ async fn authenticate_ldap_user(
             })?;
             authenticate_ldap_dev_user(payload, username, password)
         }
-        "live" => Err(AppError::Validation(
-            "AUTH_LDAP_MODE=live is not implemented in this baseline; use AUTH_LDAP_MODE=dev for verification".to_string(),
-        )),
+        "live" => authenticate_ldap_live_user(ldap, username, password).await,
         _ => Err(AppError::Validation(format!(
             "unsupported AUTH_LDAP_MODE '{}'",
             ldap.mode
@@ -956,6 +1030,182 @@ fn authenticate_ldap_dev_user(
             .filter(|item| !item.is_empty())
             .collect(),
     })
+}
+
+async fn authenticate_ldap_live_user(
+    ldap: &LdapSettings,
+    username: &str,
+    password: &str,
+) -> AppResult<LdapUserInfo> {
+    validate_ldap_live_config(ldap)?;
+    let live_url = required_setting(&ldap.live_url, "AUTH_LDAP_LIVE_URL")?;
+    let live_base_dn = required_setting(&ldap.live_base_dn, "AUTH_LDAP_LIVE_BASE_DN")?;
+    let normalized_username = username.trim().to_ascii_lowercase();
+    if normalized_username.is_empty() {
+        return Err(AppError::Validation("username cannot be empty".to_string()));
+    }
+    if password.trim().is_empty() {
+        return Err(AppError::Validation("password cannot be empty".to_string()));
+    }
+
+    let escaped_username = ldap_escape(normalized_username.as_str()).into_owned();
+    let user_filter =
+        build_ldap_live_user_filter(ldap.live_user_filter.as_str(), escaped_username.as_str())?;
+
+    let mut settings = LdapConnSettings::new().set_starttls(ldap.live_starttls);
+    if ldap.live_tls_insecure_skip_verify {
+        settings = settings.set_no_tls_verify(true);
+    }
+
+    let (conn, mut client) = LdapConnAsync::with_settings(settings, live_url)
+        .await
+        .map_err(|_| {
+            AppError::Validation(
+                "failed to connect to ldap server in AUTH_LDAP_MODE=live".to_string(),
+            )
+        })?;
+    ldap3::drive!(conn);
+
+    if let (Some(bind_dn), Some(bind_password)) = (
+        ldap.live_bind_dn.as_deref(),
+        ldap.live_bind_password.as_deref(),
+    ) {
+        let bind_result = client
+            .simple_bind(bind_dn, bind_password)
+            .await
+            .map_err(|_| AppError::Validation("ldap service bind request failed".to_string()))?;
+        bind_result
+            .success()
+            .map_err(|_| AppError::Validation("ldap service bind failed".to_string()))?;
+    }
+
+    let attrs = vec![
+        ldap.live_attr_email.as_str(),
+        ldap.live_attr_display_name.as_str(),
+        ldap.live_attr_groups.as_str(),
+    ];
+    let (entries, _res) = client
+        .search(live_base_dn, Scope::Subtree, user_filter.as_str(), attrs)
+        .await
+        .map_err(|_| AppError::Validation("ldap user search request failed".to_string()))?
+        .success()
+        .map_err(|_| AppError::Validation("ldap user search failed".to_string()))?;
+
+    if entries.is_empty() {
+        let _ = client.unbind().await;
+        return Err(AppError::Forbidden(
+            "ldap authentication failed: invalid credentials".to_string(),
+        ));
+    }
+    if entries.len() > 1 {
+        let _ = client.unbind().await;
+        return Err(AppError::Validation(
+            "ldap user search returned multiple entries; refine AUTH_LDAP_LIVE_USER_FILTER"
+                .to_string(),
+        ));
+    }
+
+    let search_entry = SearchEntry::construct(
+        entries
+            .into_iter()
+            .next()
+            .expect("entry exists when len is checked"),
+    );
+    let user_dn = search_entry.dn.trim().to_string();
+    if user_dn.is_empty() {
+        let _ = client.unbind().await;
+        return Err(AppError::Validation(
+            "ldap user entry DN is empty in search result".to_string(),
+        ));
+    }
+
+    let user_bind = client
+        .simple_bind(user_dn.as_str(), password)
+        .await
+        .map_err(|_| AppError::Validation("ldap user bind request failed".to_string()))?;
+    if user_bind.success().is_err() {
+        let _ = client.unbind().await;
+        return Err(AppError::Forbidden(
+            "ldap authentication failed: invalid credentials".to_string(),
+        ));
+    }
+    let _ = client.unbind().await;
+
+    let email = normalize_email(first_attr_value(
+        &search_entry,
+        ldap.live_attr_email.as_str(),
+    ));
+    let display_name = trim_optional(first_attr_value(
+        &search_entry,
+        ldap.live_attr_display_name.as_str(),
+    ));
+    let groups = extract_ldap_live_groups(&search_entry, ldap.live_attr_groups.as_str());
+
+    Ok(LdapUserInfo {
+        sub: user_dn,
+        username: normalized_username,
+        email,
+        display_name,
+        groups,
+    })
+}
+
+fn build_ldap_live_user_filter(template: &str, escaped_username: &str) -> AppResult<String> {
+    let trimmed = template.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(
+            "AUTH_LDAP_LIVE_USER_FILTER cannot be empty".to_string(),
+        ));
+    }
+    if !trimmed.contains("{username}") {
+        return Err(AppError::Validation(
+            "AUTH_LDAP_LIVE_USER_FILTER must include '{username}' placeholder".to_string(),
+        ));
+    }
+    Ok(trimmed.replace("{username}", escaped_username))
+}
+
+fn first_attr_value(entry: &SearchEntry, attr_key: &str) -> Option<String> {
+    entry
+        .attrs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(attr_key))
+        .and_then(|(_, values)| values.first().cloned())
+}
+
+fn extract_ldap_live_groups(entry: &SearchEntry, attr_key: &str) -> Vec<String> {
+    let values = entry
+        .attrs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(attr_key))
+        .map(|(_, values)| values.clone())
+        .unwrap_or_default();
+
+    let mut groups = BTreeSet::new();
+    for value in values {
+        let normalized = normalize_ldap_group_value(value.as_str());
+        if !normalized.is_empty() {
+            groups.insert(normalized);
+        }
+    }
+    groups.into_iter().collect()
+}
+
+fn normalize_ldap_group_value(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let first_component = trimmed.split(',').next().unwrap_or(trimmed).trim();
+    if let Some((_, value)) = first_component.split_once('=') {
+        let group = value.trim();
+        if !group.is_empty() {
+            return group.to_ascii_lowercase();
+        }
+    }
+
+    trimmed.to_ascii_lowercase()
 }
 
 fn parse_ldap_group_role_mapping(raw: Option<&str>) -> AppResult<BTreeMap<String, Vec<String>>> {
@@ -1792,7 +2042,7 @@ fn required_setting<'a>(value: &'a Option<String>, key: &str) -> AppResult<&'a s
     value
         .as_deref()
         .filter(|item| !item.trim().is_empty())
-        .ok_or_else(|| AppError::Validation(format!("{key} is required when OIDC is enabled")))
+        .ok_or_else(|| AppError::Validation(format!("{key} is required")))
 }
 
 fn required_trimmed(field: &str, value: String) -> AppResult<String> {
@@ -1828,13 +2078,34 @@ fn normalize_email(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        authenticate_ldap_dev_user, choose_base_username, compute_totp_code_for_counter,
-        local_session_revoke_count, parse_ldap_group_role_mapping, resolve_ldap_role_keys,
+        authenticate_ldap_dev_user, build_ldap_live_user_filter, choose_base_username,
+        compute_totp_code_for_counter, local_session_revoke_count, normalize_ldap_group_value,
+        parse_ldap_group_role_mapping, resolve_ldap_role_keys, validate_ldap_live_config,
         verify_totp_code,
     };
-    use crate::error::AppError;
+    use crate::{error::AppError, state::LdapSettings};
     use chrono::{TimeZone, Utc};
     use std::collections::BTreeMap;
+
+    fn sample_live_ldap_settings() -> LdapSettings {
+        LdapSettings {
+            enabled: true,
+            mode: "live".to_string(),
+            auto_provision: false,
+            dev_users_json: None,
+            group_role_mapping_json: None,
+            live_url: Some("ldaps://ldap.example.local:636".to_string()),
+            live_bind_dn: Some("cn=svc,ou=svc,dc=example,dc=local".to_string()),
+            live_bind_password: Some("svc-pass".to_string()),
+            live_base_dn: Some("ou=users,dc=example,dc=local".to_string()),
+            live_user_filter: "(&(objectClass=person)(uid={username}))".to_string(),
+            live_attr_email: "mail".to_string(),
+            live_attr_display_name: "displayName".to_string(),
+            live_attr_groups: "memberOf".to_string(),
+            live_starttls: false,
+            live_tls_insecure_skip_verify: false,
+        }
+    }
 
     #[test]
     fn authenticates_ldap_dev_user_successfully() {
@@ -1969,5 +2240,55 @@ mod tests {
         assert_eq!(local_session_revoke_count(3, 3), 1);
         assert_eq!(local_session_revoke_count(5, 3), 3);
         assert_eq!(local_session_revoke_count(2, 0), 2);
+    }
+
+    #[test]
+    fn validates_live_ldap_config_accepts_safe_settings() {
+        let settings = sample_live_ldap_settings();
+        let result = validate_ldap_live_config(&settings);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validates_live_ldap_config_rejects_missing_url() {
+        let mut settings = sample_live_ldap_settings();
+        settings.live_url = None;
+        let err =
+            validate_ldap_live_config(&settings).expect_err("missing ldap live url should fail");
+        assert_eq!(err.to_string(), "AUTH_LDAP_LIVE_URL is required");
+    }
+
+    #[test]
+    fn validates_live_ldap_config_rejects_insecure_tls_skip_verify() {
+        let mut settings = sample_live_ldap_settings();
+        settings.live_tls_insecure_skip_verify = true;
+        let err =
+            validate_ldap_live_config(&settings).expect_err("insecure tls skip verify should fail");
+        assert!(err.to_string().contains("not allowed in live mode"));
+    }
+
+    #[test]
+    fn validates_live_ldap_config_rejects_filter_without_placeholder() {
+        let mut settings = sample_live_ldap_settings();
+        settings.live_user_filter = "(uid=ops-admin)".to_string();
+        let err = validate_ldap_live_config(&settings)
+            .expect_err("missing username placeholder should fail");
+        assert!(err.to_string().contains("must include '{username}'"));
+    }
+
+    #[test]
+    fn builds_live_ldap_user_filter_by_substituting_username() {
+        let filter = build_ldap_live_user_filter("(uid={username})", "ops\\2aadmin")
+            .expect("filter should build");
+        assert_eq!(filter, "(uid=ops\\2aadmin)");
+    }
+
+    #[test]
+    fn normalizes_ldap_group_value_from_dn_or_plain_value() {
+        let from_dn = normalize_ldap_group_value("CN=Ops-Admins,OU=Groups,DC=example,DC=local");
+        assert_eq!(from_dn, "ops-admins");
+
+        let plain = normalize_ldap_group_value("platform-oncall");
+        assert_eq!(plain, "platform-oncall");
     }
 }

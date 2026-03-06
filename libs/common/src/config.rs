@@ -27,6 +27,16 @@ pub struct AppConfig {
     pub ldap_auto_provision: bool,
     pub ldap_dev_users_json: Option<String>,
     pub ldap_group_role_mapping_json: Option<String>,
+    pub ldap_live_url: Option<String>,
+    pub ldap_live_bind_dn: Option<String>,
+    pub ldap_live_bind_password: Option<String>,
+    pub ldap_live_base_dn: Option<String>,
+    pub ldap_live_user_filter: String,
+    pub ldap_live_attr_email: String,
+    pub ldap_live_attr_display_name: String,
+    pub ldap_live_attr_groups: String,
+    pub ldap_live_starttls: bool,
+    pub ldap_live_tls_insecure_skip_verify: bool,
     pub local_fallback_mode: String,
     pub local_break_glass_users: Vec<String>,
     pub local_session_idle_timeout_minutes: u32,
@@ -70,6 +80,21 @@ impl AppConfig {
         let ldap_auto_provision = parse_bool_env("AUTH_LDAP_AUTO_PROVISION", false)?;
         let ldap_dev_users_json = parse_optional_env("AUTH_LDAP_DEV_USERS_JSON");
         let ldap_group_role_mapping_json = parse_optional_env("AUTH_LDAP_GROUP_ROLE_MAPPING_JSON");
+        let ldap_live_url = parse_optional_env("AUTH_LDAP_LIVE_URL");
+        let ldap_live_bind_dn = parse_optional_env("AUTH_LDAP_LIVE_BIND_DN");
+        let ldap_live_bind_password = parse_optional_env("AUTH_LDAP_LIVE_BIND_PASSWORD");
+        let ldap_live_base_dn = parse_optional_env("AUTH_LDAP_LIVE_BASE_DN");
+        let ldap_live_user_filter = env::var("AUTH_LDAP_LIVE_USER_FILTER")
+            .unwrap_or_else(|_| "(uid={username})".to_string());
+        let ldap_live_attr_email =
+            env::var("AUTH_LDAP_LIVE_ATTR_EMAIL").unwrap_or_else(|_| "mail".to_string());
+        let ldap_live_attr_display_name = env::var("AUTH_LDAP_LIVE_ATTR_DISPLAY_NAME")
+            .unwrap_or_else(|_| "displayName".to_string());
+        let ldap_live_attr_groups =
+            env::var("AUTH_LDAP_LIVE_ATTR_GROUPS").unwrap_or_else(|_| "memberOf".to_string());
+        let ldap_live_starttls = parse_bool_env("AUTH_LDAP_LIVE_STARTTLS", false)?;
+        let ldap_live_tls_insecure_skip_verify =
+            parse_bool_env("AUTH_LDAP_LIVE_TLS_INSECURE_SKIP_VERIFY", false)?;
         let local_fallback_mode = parse_enum_env(
             "AUTH_LOCAL_FALLBACK_MODE",
             "allow_all",
@@ -126,6 +151,16 @@ impl AppConfig {
             ldap_auto_provision,
             ldap_dev_users_json,
             ldap_group_role_mapping_json,
+            ldap_live_url,
+            ldap_live_bind_dn,
+            ldap_live_bind_password,
+            ldap_live_base_dn,
+            ldap_live_user_filter,
+            ldap_live_attr_email,
+            ldap_live_attr_display_name,
+            ldap_live_attr_groups,
+            ldap_live_starttls,
+            ldap_live_tls_insecure_skip_verify,
             local_fallback_mode,
             local_break_glass_users,
             local_session_idle_timeout_minutes,
@@ -279,6 +314,16 @@ mod tests {
         assert!(!cfg.ldap_auto_provision);
         assert!(cfg.ldap_dev_users_json.is_none());
         assert!(cfg.ldap_group_role_mapping_json.is_none());
+        assert!(cfg.ldap_live_url.is_none());
+        assert!(cfg.ldap_live_bind_dn.is_none());
+        assert!(cfg.ldap_live_bind_password.is_none());
+        assert!(cfg.ldap_live_base_dn.is_none());
+        assert_eq!(cfg.ldap_live_user_filter, "(uid={username})");
+        assert_eq!(cfg.ldap_live_attr_email, "mail");
+        assert_eq!(cfg.ldap_live_attr_display_name, "displayName");
+        assert_eq!(cfg.ldap_live_attr_groups, "memberOf");
+        assert!(!cfg.ldap_live_starttls);
+        assert!(!cfg.ldap_live_tls_insecure_skip_verify);
         assert_eq!(cfg.local_fallback_mode, "allow_all");
         assert!(cfg.local_break_glass_users.is_empty());
         assert_eq!(cfg.local_session_idle_timeout_minutes, 60);

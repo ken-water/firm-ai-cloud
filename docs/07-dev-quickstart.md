@@ -100,6 +100,28 @@ export AUTH_LDAP_GROUP_ROLE_MAPPING_JSON='{
 }'
 ```
 
+LDAP live-mode settings (optional, production connector):
+
+```bash
+export AUTH_LDAP_ENABLED=true
+export AUTH_LDAP_MODE=live
+export AUTH_LDAP_AUTO_PROVISION=false
+export AUTH_LDAP_LIVE_URL='ldaps://ldap.example.local:636'
+export AUTH_LDAP_LIVE_BASE_DN='ou=users,dc=example,dc=local'
+export AUTH_LDAP_LIVE_BIND_DN='cn=svc-ldap,ou=svc,dc=example,dc=local'
+export AUTH_LDAP_LIVE_BIND_PASSWORD='replace-with-secret'
+export AUTH_LDAP_LIVE_USER_FILTER='(&(objectClass=person)(uid={username}))'
+export AUTH_LDAP_LIVE_ATTR_EMAIL='mail'
+export AUTH_LDAP_LIVE_ATTR_DISPLAY_NAME='displayName'
+export AUTH_LDAP_LIVE_ATTR_GROUPS='memberOf'
+export AUTH_LDAP_LIVE_STARTTLS=false
+export AUTH_LDAP_LIVE_TLS_INSECURE_SKIP_VERIFY=false
+export AUTH_LDAP_GROUP_ROLE_MAPPING_JSON='{
+  "ops-admins": ["admin"],
+  "oncall": ["operator"]
+}'
+```
+
 Optional local fallback governance (break-glass):
 
 ```bash

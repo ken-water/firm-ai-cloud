@@ -8,15 +8,28 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- None yet.
+- LDAP live connector baseline for production mode (`AUTH_LDAP_MODE=live`) with bind/search + user-bind verification.
+- LDAP live configuration validation on API startup (URL/base DN/filter placeholder/TLS policy checks).
+- LDAP live environment controls:
+  - `AUTH_LDAP_LIVE_URL`
+  - `AUTH_LDAP_LIVE_BIND_DN`
+  - `AUTH_LDAP_LIVE_BIND_PASSWORD`
+  - `AUTH_LDAP_LIVE_BASE_DN`
+  - `AUTH_LDAP_LIVE_USER_FILTER`
+  - `AUTH_LDAP_LIVE_ATTR_EMAIL`
+  - `AUTH_LDAP_LIVE_ATTR_DISPLAY_NAME`
+  - `AUTH_LDAP_LIVE_ATTR_GROUPS`
+  - `AUTH_LDAP_LIVE_STARTTLS`
+  - `AUTH_LDAP_LIVE_TLS_INSECURE_SKIP_VERIFY`
 
 ### Changed
 
-- None yet.
+- Local auth hardening integration script now supports optional bearer-token auth mode and safer payload/temp-file handling.
+- Developer quickstart and security operations docs now include LDAP live-mode setup guidance.
 
 ### Fixed
 
-- None yet.
+- Shared required-setting validation message is now identity-provider-agnostic (`<KEY> is required`).
 
 ## [0.1.2] - 2026-03-05
 

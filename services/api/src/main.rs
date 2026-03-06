@@ -73,6 +73,16 @@ async fn main() -> anyhow::Result<()> {
             auto_provision: config.ldap_auto_provision,
             dev_users_json: config.ldap_dev_users_json,
             group_role_mapping_json: config.ldap_group_role_mapping_json,
+            live_url: config.ldap_live_url,
+            live_bind_dn: config.ldap_live_bind_dn,
+            live_bind_password: config.ldap_live_bind_password,
+            live_base_dn: config.ldap_live_base_dn,
+            live_user_filter: config.ldap_live_user_filter,
+            live_attr_email: config.ldap_live_attr_email,
+            live_attr_display_name: config.ldap_live_attr_display_name,
+            live_attr_groups: config.ldap_live_attr_groups,
+            live_starttls: config.ldap_live_starttls,
+            live_tls_insecure_skip_verify: config.ldap_live_tls_insecure_skip_verify,
         },
         local_auth: LocalAuthSettings {
             fallback_mode: config.local_fallback_mode,
@@ -99,6 +109,8 @@ async fn main() -> anyhow::Result<()> {
         state.ldap.group_role_mapping_json.as_deref(),
     )
     .context("invalid AUTH_LDAP_GROUP_ROLE_MAPPING_JSON")?;
+    auth_api::validate_ldap_live_config(&state.ldap)
+        .context("invalid LDAP live-mode configuration")?;
     monitoring_sync_worker::start(state.clone());
     discovery_scheduler_worker::start(state.clone());
     let app = build_router(state);

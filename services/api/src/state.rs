@@ -20,6 +20,16 @@ pub struct LdapSettings {
     pub auto_provision: bool,
     pub dev_users_json: Option<String>,
     pub group_role_mapping_json: Option<String>,
+    pub live_url: Option<String>,
+    pub live_bind_dn: Option<String>,
+    pub live_bind_password: Option<String>,
+    pub live_base_dn: Option<String>,
+    pub live_user_filter: String,
+    pub live_attr_email: String,
+    pub live_attr_display_name: String,
+    pub live_attr_groups: String,
+    pub live_starttls: bool,
+    pub live_tls_insecure_skip_verify: bool,
 }
 
 #[derive(Clone)]
