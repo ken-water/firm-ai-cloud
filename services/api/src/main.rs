@@ -2,6 +2,7 @@ mod alerts;
 mod audit;
 mod auth;
 mod auth_api;
+mod backup_dr;
 mod cmdb;
 mod cockpit;
 mod discovery_scheduler_worker;
@@ -9,6 +10,7 @@ mod error;
 mod iam;
 mod monitoring;
 mod monitoring_sync_worker;
+mod ops_digest;
 mod playbooks;
 mod secrets;
 mod setup;
@@ -231,7 +233,9 @@ fn build_router(state: AppState) -> Router {
         ));
     }
 
-    let mut ops_routes = cockpit::routes();
+    let mut ops_routes = cockpit::routes()
+        .merge(backup_dr::routes())
+        .merge(ops_digest::routes());
     if state.rbac_enabled {
         ops_routes = ops_routes.route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

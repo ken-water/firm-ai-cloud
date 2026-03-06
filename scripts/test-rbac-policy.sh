@@ -122,6 +122,24 @@ assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checkl
   "{\"date\":\"$(date +%F)\",\"note\":\"operator completed checklist\"}"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception" \
   "{\"date\":\"$(date +%F)\",\"note\":\"operator deferred checklist by policy\",\"mark_skipped\":true}"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies" \
+  "{\"policy_key\":\"rbac-op-backup-${STAMP}\",\"name\":\"RBAC OP BACKUP ${STAMP}\",\"frequency\":\"daily\",\"schedule_time_utc\":\"01:30\",\"retention_days\":7,\"destination_type\":\"local\",\"destination_uri\":\"file:///tmp/rbac-op-backup-${STAMP}\",\"drill_enabled\":true,\"drill_frequency\":\"weekly\",\"drill_weekday\":3,\"drill_time_utc\":\"02:30\"}"
+OPERATOR_BACKUP_POLICY_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
+if [[ -z "$OPERATOR_BACKUP_POLICY_ID" ]]; then
+  echo "ERROR: failed to parse operator backup policy ID" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
+assert_code 200 "$OPERATOR_USER" PATCH "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies/${OPERATOR_BACKUP_POLICY_ID}" \
+  "{\"retention_days\":14,\"note\":\"rbac operator tuning\"}"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies/${OPERATOR_BACKUP_POLICY_ID}/run" \
+  "{\"run_type\":\"backup\"}"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/scheduler/tick" \
+  "{\"note\":\"rbac scheduler tick\"}"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/runs"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest/export?format=csv"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-op-asset-${STAMP}\",\"status\":\"active\"}"
@@ -166,10 +184,22 @@ assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/setup/templates/iden
   "{\"params\":{\"identity_mode\":\"break_glass_only\",\"break_glass_users\":\"${VIEWER_USER}\"}}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/checklists"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/runs"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest/export?format=json"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete" \
   "{\"date\":\"$(date +%F)\",\"note\":\"viewer should not update checklist\"}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception" \
   "{\"date\":\"$(date +%F)\",\"note\":\"viewer should not write checklist exception\",\"mark_skipped\":true}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies" \
+  "{\"policy_key\":\"rbac-viewer-backup-${STAMP}\",\"name\":\"RBAC VIEWER BACKUP ${STAMP}\",\"frequency\":\"daily\",\"schedule_time_utc\":\"01:30\",\"retention_days\":7,\"destination_type\":\"local\",\"destination_uri\":\"file:///tmp/rbac-viewer-backup-${STAMP}\"}"
+assert_code 403 "$VIEWER_USER" PATCH "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies/${OPERATOR_BACKUP_POLICY_ID}" \
+  "{\"retention_days\":21}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies/${OPERATOR_BACKUP_POLICY_ID}/run" \
+  "{\"run_type\":\"backup\"}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/scheduler/tick" \
+  "{\"note\":\"viewer should not trigger scheduler\"}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-viewer-asset-${STAMP}\",\"status\":\"active\"}"

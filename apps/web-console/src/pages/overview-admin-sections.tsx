@@ -13,6 +13,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     assetStatsStatusMax,
     assets,
     bucketBarWidth,
+    backupPolicies,
+    backupPolicyDraft,
+    backupPolicyNotice,
+    backupPolicyRuns,
     businessWorkspace,
     businessWorkspaceOptions,
     canAccessAdmin,
@@ -27,14 +31,25 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     dailyCockpitNotice,
     dailyCockpitQueue,
     dailyCockpitSiteFilter,
+    exportingWeeklyDigest,
+    exportWeeklyDigest,
     functionWorkspace,
+    loadBackupPolicies,
+    loadBackupPolicyRuns,
+    loadWeeklyDigest,
     loadDailyCockpitSnapshot,
     loadOpsChecklist,
     loadAssets,
     loadAssetStats,
     loadFieldDefinitions,
+    runBackupPolicy,
+    runBackupSchedulerTick,
+    runningBackupPolicyActionId,
     loadingDailyCockpit,
     loadingOpsChecklist,
+    loadingBackupPolicies,
+    loadingBackupPolicyRuns,
+    loadingWeeklyDigest,
     loadingAssetStats,
     loadingAssets,
     loadingFields,
@@ -52,15 +67,23 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     selectedDepartmentAssetCount,
     runDailyCockpitAction,
     runningDailyCockpitActionKey,
+    saveBackupPolicy,
+    savingBackupPolicy,
     setBusinessWorkspace,
+    setBackupPolicyDraft,
     setDailyCockpitDepartmentFilter,
     setDailyCockpitSiteFilter,
     setDepartmentWorkspace,
     setFunctionWorkspace,
     setMenuAxis,
     setOpsChecklistDate,
+    setWeeklyDigestWeekStart,
     subSectionTitleStyle,
     t,
+    tickingBackupScheduler,
+    weeklyDigest,
+    weeklyDigestNotice,
+    weeklyDigestWeekStart,
     visibleSections,
     creatingSample
   } = rawProps as any;
@@ -335,6 +358,421 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                       })}
                     </tbody>
                   </table>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Backup & DR policy</h3>
+              <div className="toolbar-row">
+                <button onClick={() => void loadBackupPolicies()} disabled={loadingBackupPolicies}>
+                  {loadingBackupPolicies ? t("cmdb.actions.loading") : "Refresh policies"}
+                </button>
+                <button onClick={() => void loadBackupPolicyRuns()} disabled={loadingBackupPolicyRuns}>
+                  {loadingBackupPolicyRuns ? t("cmdb.actions.loading") : "Refresh runs"}
+                </button>
+              </div>
+            </div>
+            {backupPolicyNotice && <p className="banner banner-success">{backupPolicyNotice}</p>}
+            <p className="section-note">
+              Configure backup frequency/retention/destination with no-code form and schedule drill orchestration.
+            </p>
+
+            <div className="form-grid">
+              <label className="control-field">
+                <span>Policy</span>
+                <select
+                  value={backupPolicyDraft.policy_id}
+                  onChange={(event) => {
+                    const nextId = event.target.value;
+                    const next = (backupPolicies as any[]).find((item) => String(item.id) === nextId);
+                    if (!next) {
+                      return;
+                    }
+                    setBackupPolicyDraft((prev: any) => ({
+                      ...prev,
+                      policy_id: String(next.id),
+                      policy_key: next.policy_key,
+                      name: next.name,
+                      frequency: next.frequency,
+                      schedule_time_utc: next.schedule_time_utc,
+                      schedule_weekday: String(next.schedule_weekday ?? 1),
+                      retention_days: String(next.retention_days),
+                      destination_type: next.destination_type,
+                      destination_uri: next.destination_uri,
+                      drill_enabled: next.drill_enabled,
+                      drill_frequency: next.drill_frequency,
+                      drill_weekday: String(next.drill_weekday ?? 3),
+                      drill_time_utc: next.drill_time_utc
+                    }));
+                  }}
+                >
+                  {(backupPolicies as any[]).map((item) => (
+                    <option key={`backup-policy-${item.id}`} value={String(item.id)}>
+                      {item.policy_key}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Policy key</span>
+                <input
+                  value={backupPolicyDraft.policy_key}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, policy_key: event.target.value }))}
+                />
+              </label>
+              <label className="control-field">
+                <span>Name</span>
+                <input
+                  value={backupPolicyDraft.name}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, name: event.target.value }))}
+                />
+              </label>
+              <label className="control-field">
+                <span>Frequency</span>
+                <select
+                  value={backupPolicyDraft.frequency}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, frequency: event.target.value }))}
+                >
+                  <option value="daily">daily</option>
+                  <option value="weekly">weekly</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Schedule time (UTC)</span>
+                <input
+                  value={backupPolicyDraft.schedule_time_utc}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, schedule_time_utc: event.target.value }))}
+                  placeholder="01:30"
+                />
+              </label>
+              <label className="control-field">
+                <span>Schedule weekday</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={7}
+                  value={backupPolicyDraft.schedule_weekday}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, schedule_weekday: event.target.value }))}
+                  disabled={backupPolicyDraft.frequency !== "weekly"}
+                />
+              </label>
+              <label className="control-field">
+                <span>Retention days</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={3650}
+                  value={backupPolicyDraft.retention_days}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, retention_days: event.target.value }))}
+                />
+              </label>
+              <label className="control-field">
+                <span>Destination type</span>
+                <select
+                  value={backupPolicyDraft.destination_type}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, destination_type: event.target.value }))}
+                >
+                  <option value="local">local</option>
+                  <option value="s3">s3</option>
+                  <option value="nfs">nfs</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Destination URI</span>
+                <input
+                  value={backupPolicyDraft.destination_uri}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, destination_uri: event.target.value }))}
+                />
+              </label>
+              <label className="control-field">
+                <span>Drill enabled</span>
+                <select
+                  value={backupPolicyDraft.drill_enabled ? "true" : "false"}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, drill_enabled: event.target.value === "true" }))}
+                >
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Drill frequency</span>
+                <select
+                  value={backupPolicyDraft.drill_frequency}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, drill_frequency: event.target.value }))}
+                  disabled={!backupPolicyDraft.drill_enabled}
+                >
+                  <option value="weekly">weekly</option>
+                  <option value="monthly">monthly</option>
+                  <option value="quarterly">quarterly</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Drill weekday</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={7}
+                  value={backupPolicyDraft.drill_weekday}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, drill_weekday: event.target.value }))}
+                  disabled={!backupPolicyDraft.drill_enabled || backupPolicyDraft.drill_frequency !== "weekly"}
+                />
+              </label>
+              <label className="control-field">
+                <span>Drill time (UTC)</span>
+                <input
+                  value={backupPolicyDraft.drill_time_utc}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, drill_time_utc: event.target.value }))}
+                  disabled={!backupPolicyDraft.drill_enabled}
+                />
+              </label>
+              <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Note</span>
+                <input
+                  value={backupPolicyDraft.note}
+                  onChange={(event) => setBackupPolicyDraft((prev: any) => ({ ...prev, note: event.target.value }))}
+                  placeholder="Change reason or run note"
+                />
+              </label>
+            </div>
+
+            <div className="toolbar-row" style={{ marginTop: "0.65rem" }}>
+              <button onClick={() => void saveBackupPolicy()} disabled={!canWriteCmdb || savingBackupPolicy}>
+                {savingBackupPolicy ? t("cmdb.actions.loading") : "Save policy"}
+              </button>
+              <button
+                onClick={() => {
+                  const id = Number.parseInt(backupPolicyDraft.policy_id, 10);
+                  if (Number.isFinite(id) && id > 0) {
+                    void runBackupPolicy(id, "backup", false);
+                  }
+                }}
+                disabled={
+                  !canWriteCmdb
+                  || runningBackupPolicyActionId === `${backupPolicyDraft.policy_id}:backup:run`
+                }
+              >
+                {runningBackupPolicyActionId === `${backupPolicyDraft.policy_id}:backup:run`
+                  ? t("cmdb.actions.loading")
+                  : "Run backup now"}
+              </button>
+              <button
+                onClick={() => {
+                  const id = Number.parseInt(backupPolicyDraft.policy_id, 10);
+                  if (Number.isFinite(id) && id > 0) {
+                    void runBackupPolicy(id, "drill", false);
+                  }
+                }}
+                disabled={
+                  !canWriteCmdb
+                  || runningBackupPolicyActionId === `${backupPolicyDraft.policy_id}:drill:run`
+                }
+              >
+                {runningBackupPolicyActionId === `${backupPolicyDraft.policy_id}:drill:run`
+                  ? t("cmdb.actions.loading")
+                  : "Run drill now"}
+              </button>
+              <button
+                onClick={() => {
+                  const id = Number.parseInt(backupPolicyDraft.policy_id, 10);
+                  if (Number.isFinite(id) && id > 0) {
+                    void runBackupPolicy(id, "backup", true);
+                  }
+                }}
+                disabled={
+                  !canWriteCmdb
+                  || runningBackupPolicyActionId === `${backupPolicyDraft.policy_id}:backup:fail`
+                }
+              >
+                {runningBackupPolicyActionId === `${backupPolicyDraft.policy_id}:backup:fail`
+                  ? t("cmdb.actions.loading")
+                  : "Simulate backup failure"}
+              </button>
+              <button onClick={() => void runBackupSchedulerTick()} disabled={!canWriteCmdb || tickingBackupScheduler}>
+                {tickingBackupScheduler ? t("cmdb.actions.loading") : "Run scheduler tick"}
+              </button>
+            </div>
+
+            {(backupPolicies as any[]).length > 0 && (
+              <div style={{ overflowX: "auto", marginTop: "0.65rem" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "1120px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Policy</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Backup status</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Drill status</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Next schedule</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Destination</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(backupPolicies as any[]).map((item) => (
+                      <tr key={`backup-policy-status-${item.id}`}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.policy_key} ({item.frequency})
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.last_backup_status}
+                          {item.last_backup_at ? ` @ ${new Date(item.last_backup_at).toLocaleString()}` : ""}
+                          {item.last_backup_error ? ` | ${item.last_backup_error}` : ""}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.last_drill_status}
+                          {item.last_drill_at ? ` @ ${new Date(item.last_drill_at).toLocaleString()}` : ""}
+                          {item.last_drill_error ? ` | ${item.last_drill_error}` : ""}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          backup={item.next_backup_at ? new Date(item.next_backup_at).toLocaleString() : "-"}
+                          <br />
+                          drill={item.next_drill_at ? new Date(item.next_drill_at).toLocaleString() : "-"}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.destination_type}:{item.destination_uri}
+                          {item.destination_validated ? " (validated)" : " (invalid)"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <h4 style={{ marginBottom: "0.4rem", marginTop: "0.8rem" }}>Recent backup/drill runs</h4>
+            {loadingBackupPolicyRuns ? (
+              <p>{t("cmdb.actions.loading")}</p>
+            ) : (backupPolicyRuns as any[]).length === 0 ? (
+              <p>No run record yet.</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Run</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Trigger</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Hint</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(backupPolicyRuns as any[]).slice(0, 20).map((run) => (
+                      <tr key={`backup-run-row-${run.id}`}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          #{run.id} / policy #{run.policy_id} / {run.run_type}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {run.status}
+                          {run.error_message ? ` | ${run.error_message}` : ""}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {run.triggered_by}
+                          {run.triggered_by_scheduler ? " (scheduler)" : ""}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {run.remediation_hint ?? "-"}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {new Date(run.started_at).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Weekly operations digest</h3>
+              <div className="toolbar-row">
+                <button onClick={() => void loadWeeklyDigest()} disabled={loadingWeeklyDigest}>
+                  {loadingWeeklyDigest ? t("cmdb.actions.loading") : "Generate digest"}
+                </button>
+                <button onClick={() => void exportWeeklyDigest("csv")} disabled={exportingWeeklyDigest}>
+                  {exportingWeeklyDigest ? t("cmdb.actions.loading") : "Export CSV"}
+                </button>
+                <button onClick={() => void exportWeeklyDigest("json")} disabled={exportingWeeklyDigest}>
+                  {exportingWeeklyDigest ? t("cmdb.actions.loading") : "Export JSON"}
+                </button>
+              </div>
+            </div>
+            {weeklyDigestNotice && <p className="banner banner-success">{weeklyDigestNotice}</p>}
+            <div className="toolbar-row" style={{ marginBottom: "0.55rem" }}>
+              <label className="control-field" style={{ minWidth: "220px" }}>
+                <span>Week start (Monday)</span>
+                <input
+                  type="date"
+                  value={weeklyDigestWeekStart}
+                  onChange={(event) => setWeeklyDigestWeekStart(event.target.value)}
+                />
+              </label>
+            </div>
+
+            {!weeklyDigest ? (
+              <p>{loadingWeeklyDigest ? t("cmdb.actions.loading") : "No weekly digest generated yet."}</p>
+            ) : (
+              <>
+                <p className="section-note">
+                  digest_key={weeklyDigest.digest_key} | generated_at={new Date(weeklyDigest.generated_at).toLocaleString()} | week=
+                  {weeklyDigest.week_start}..{weeklyDigest.week_end}
+                </p>
+                <div className="detail-grid">
+                  <div className="detail-panel">
+                    <strong>Alert and ticket health</strong>
+                    <p className="inline-note">
+                      critical={weeklyDigest.metrics.open_critical_alerts} | warning={weeklyDigest.metrics.open_warning_alerts}
+                    </p>
+                    <p className="inline-note">
+                      suppressed_threads={weeklyDigest.metrics.suppressed_alert_threads} | stale_tickets={weeklyDigest.metrics.stale_open_tickets}
+                    </p>
+                  </div>
+                  <div className="detail-panel">
+                    <strong>Execution and continuity</strong>
+                    <p className="inline-note">
+                      workflow_approval={weeklyDigest.metrics.workflow_approval_backlog} | playbook_approval={weeklyDigest.metrics.playbook_approval_backlog}
+                    </p>
+                    <p className="inline-note">
+                      backup_failed={weeklyDigest.metrics.backup_failed_policies} | drill_failed={weeklyDigest.metrics.drill_failed_policies}
+                    </p>
+                  </div>
+                  <div className="detail-panel">
+                    <strong>Auth risk signals</strong>
+                    <p className="inline-note">
+                      locked_accounts={weeklyDigest.metrics.locked_local_accounts}
+                    </p>
+                    <p className="inline-note">
+                      local_without_mfa={weeklyDigest.metrics.local_accounts_without_mfa}
+                    </p>
+                  </div>
+                </div>
+                <div className="detail-grid" style={{ marginTop: "0.5rem" }}>
+                  <div className="detail-panel">
+                    <strong>Top risks</strong>
+                    <ul style={{ marginTop: "0.35rem", marginBottom: 0 }}>
+                      {(weeklyDigest.top_risks ?? []).map((item: string, idx: number) => (
+                        <li key={`weekly-risk-${idx}`}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="detail-panel">
+                    <strong>Unresolved items</strong>
+                    <ul style={{ marginTop: "0.35rem", marginBottom: 0 }}>
+                      {(weeklyDigest.unresolved_items ?? []).map((item: string, idx: number) => (
+                        <li key={`weekly-unresolved-${idx}`}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="detail-panel">
+                    <strong>Recommended next actions</strong>
+                    <ul style={{ marginTop: "0.35rem", marginBottom: 0 }}>
+                      {(weeklyDigest.recommended_actions ?? []).map((item: string, idx: number) => (
+                        <li key={`weekly-action-${idx}`}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
                 </div>
               </>
             )}

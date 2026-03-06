@@ -808,6 +808,122 @@ type OpsChecklistUpdateResponse = {
   exception_note: string | null;
 };
 
+type BackupPolicyRecord = {
+  id: number;
+  policy_key: string;
+  name: string;
+  frequency: "daily" | "weekly";
+  schedule_time_utc: string;
+  schedule_weekday: number | null;
+  retention_days: number;
+  destination_type: "s3" | "nfs" | "local";
+  destination_uri: string;
+  destination_validated: boolean;
+  drill_enabled: boolean;
+  drill_frequency: "weekly" | "monthly" | "quarterly";
+  drill_weekday: number | null;
+  drill_time_utc: string;
+  last_backup_status: string;
+  last_backup_at: string | null;
+  last_backup_error: string | null;
+  last_drill_status: string;
+  last_drill_at: string | null;
+  last_drill_error: string | null;
+  next_backup_at: string | null;
+  next_drill_at: string | null;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type BackupPolicyListResponse = {
+  generated_at: string;
+  total: number;
+  items: BackupPolicyRecord[];
+};
+
+type BackupPolicyRunRecord = {
+  id: number;
+  policy_id: number;
+  run_type: "backup" | "drill";
+  status: "succeeded" | "failed";
+  triggered_by: string;
+  triggered_by_scheduler: boolean;
+  note: string | null;
+  remediation_hint: string | null;
+  error_message: string | null;
+  started_at: string;
+  finished_at: string;
+  created_at: string;
+};
+
+type BackupPolicyRunsResponse = {
+  generated_at: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: BackupPolicyRunRecord[];
+};
+
+type BackupPolicyRunResult = {
+  policy: BackupPolicyRecord;
+  run: BackupPolicyRunRecord;
+  remediation_hints: string[];
+};
+
+type BackupSchedulerTickResponse = {
+  generated_at: string;
+  backup_runs: number;
+  drill_runs: number;
+  runs: BackupPolicyRunRecord[];
+};
+
+type WeeklyDigestResponse = {
+  generated_at: string;
+  digest_key: string;
+  week_start: string;
+  week_end: string;
+  metrics: {
+    open_critical_alerts: number;
+    open_warning_alerts: number;
+    suppressed_alert_threads: number;
+    stale_open_tickets: number;
+    workflow_approval_backlog: number;
+    playbook_approval_backlog: number;
+    backup_failed_policies: number;
+    drill_failed_policies: number;
+    locked_local_accounts: number;
+    local_accounts_without_mfa: number;
+  };
+  top_risks: string[];
+  unresolved_items: string[];
+  recommended_actions: string[];
+};
+
+type WeeklyDigestExportResponse = {
+  generated_at: string;
+  digest_key: string;
+  format: "csv" | "json";
+  content: string;
+};
+
+type BackupPolicyForm = {
+  policy_id: string;
+  policy_key: string;
+  name: string;
+  frequency: "daily" | "weekly";
+  schedule_time_utc: string;
+  schedule_weekday: string;
+  retention_days: string;
+  destination_type: "s3" | "nfs" | "local";
+  destination_uri: string;
+  drill_enabled: boolean;
+  drill_frequency: "weekly" | "monthly" | "quarterly";
+  drill_weekday: string;
+  drill_time_utc: string;
+  note: string;
+};
+
 type TicketListItem = {
   id: number;
   ticket_no: string;
@@ -1328,6 +1444,23 @@ const defaultAlertPolicyForm: AlertPolicyForm = {
   ticket_category: "incident"
 };
 
+const defaultBackupPolicyForm: BackupPolicyForm = {
+  policy_id: "",
+  policy_key: "",
+  name: "",
+  frequency: "daily",
+  schedule_time_utc: "01:30",
+  schedule_weekday: "1",
+  retention_days: "14",
+  destination_type: "local",
+  destination_uri: "file:///var/lib/cloudops/backups",
+  drill_enabled: true,
+  drill_frequency: "weekly",
+  drill_weekday: "3",
+  drill_time_utc: "02:30",
+  note: ""
+};
+
 const defaultWorkflowStepForm: NewWorkflowTemplateStepForm = {
   id: "",
   name: "",
@@ -1513,12 +1646,32 @@ export function App() {
   const [playbookNotice, setPlaybookNotice] = useState<string | null>(null);
   const [dailyCockpitQueue, setDailyCockpitQueue] = useState<DailyCockpitQueueResponse | null>(null);
   const [opsChecklist, setOpsChecklist] = useState<OpsChecklistResponse | null>(null);
+  const [backupPolicies, setBackupPolicies] = useState<BackupPolicyRecord[]>([]);
+  const [backupPolicyRuns, setBackupPolicyRuns] = useState<BackupPolicyRunRecord[]>([]);
+  const [backupPolicyDraft, setBackupPolicyDraft] = useState<BackupPolicyForm>(defaultBackupPolicyForm);
   const [loadingDailyCockpit, setLoadingDailyCockpit] = useState(false);
   const [loadingOpsChecklist, setLoadingOpsChecklist] = useState(false);
+  const [loadingBackupPolicies, setLoadingBackupPolicies] = useState(false);
+  const [loadingBackupPolicyRuns, setLoadingBackupPolicyRuns] = useState(false);
+  const [savingBackupPolicy, setSavingBackupPolicy] = useState(false);
+  const [runningBackupPolicyActionId, setRunningBackupPolicyActionId] = useState<string | null>(null);
+  const [tickingBackupScheduler, setTickingBackupScheduler] = useState(false);
+  const [weeklyDigest, setWeeklyDigest] = useState<WeeklyDigestResponse | null>(null);
+  const [loadingWeeklyDigest, setLoadingWeeklyDigest] = useState(false);
+  const [exportingWeeklyDigest, setExportingWeeklyDigest] = useState(false);
+  const [weeklyDigestWeekStart, setWeeklyDigestWeekStart] = useState(() => {
+    const now = new Date();
+    const weekday = now.getDay();
+    const offset = weekday === 0 ? -6 : 1 - weekday;
+    now.setDate(now.getDate() + offset);
+    return formatLocalDateKey(now);
+  });
   const [runningDailyCockpitActionKey, setRunningDailyCockpitActionKey] = useState<string | null>(null);
   const [runningOpsChecklistActionKey, setRunningOpsChecklistActionKey] = useState<string | null>(null);
   const [dailyCockpitNotice, setDailyCockpitNotice] = useState<string | null>(null);
   const [opsChecklistNotice, setOpsChecklistNotice] = useState<string | null>(null);
+  const [backupPolicyNotice, setBackupPolicyNotice] = useState<string | null>(null);
+  const [weeklyDigestNotice, setWeeklyDigestNotice] = useState<string | null>(null);
   const [dailyCockpitSiteFilter, setDailyCockpitSiteFilter] = useState("");
   const [dailyCockpitDepartmentFilter, setDailyCockpitDepartmentFilter] = useState("");
   const [opsChecklistDate, setOpsChecklistDate] = useState(() => formatLocalDateKey(new Date()));
@@ -2385,13 +2538,306 @@ export function App() {
     }
   }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter, opsChecklistDate]);
 
+  const loadBackupPolicies = useCallback(async () => {
+    setLoadingBackupPolicies(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/backup/policies`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupPolicyListResponse = await response.json();
+      setBackupPolicies(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setBackupPolicies([]);
+      return [];
+    } finally {
+      setLoadingBackupPolicies(false);
+    }
+  }, []);
+
+  const loadBackupPolicyRuns = useCallback(async () => {
+    setLoadingBackupPolicyRuns(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "40",
+        offset: "0"
+      });
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/backup/runs?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupPolicyRunsResponse = await response.json();
+      setBackupPolicyRuns(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setBackupPolicyRuns([]);
+      return [];
+    } finally {
+      setLoadingBackupPolicyRuns(false);
+    }
+  }, []);
+
+  const saveBackupPolicy = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const policyKey = backupPolicyDraft.policy_key.trim().toLowerCase();
+    const name = backupPolicyDraft.name.trim();
+    if (policyKey.length === 0 || name.length === 0) {
+      setError("Policy key and name are required.");
+      return null;
+    }
+
+    const retentionDays = Number.parseInt(backupPolicyDraft.retention_days.trim(), 10);
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+      setError("Retention days must be a positive integer.");
+      return null;
+    }
+
+    const scheduleWeekday = Number.parseInt(backupPolicyDraft.schedule_weekday.trim(), 10);
+    const drillWeekday = Number.parseInt(backupPolicyDraft.drill_weekday.trim(), 10);
+    const editingPolicyId = Number.parseInt(backupPolicyDraft.policy_id.trim(), 10);
+    const payload = {
+      policy_key: policyKey,
+      name,
+      frequency: backupPolicyDraft.frequency,
+      schedule_time_utc: backupPolicyDraft.schedule_time_utc.trim(),
+      schedule_weekday: backupPolicyDraft.frequency === "weekly" && Number.isFinite(scheduleWeekday)
+        ? scheduleWeekday
+        : null,
+      retention_days: retentionDays,
+      destination_type: backupPolicyDraft.destination_type,
+      destination_uri: backupPolicyDraft.destination_uri.trim(),
+      drill_enabled: backupPolicyDraft.drill_enabled,
+      drill_frequency: backupPolicyDraft.drill_frequency,
+      drill_weekday: backupPolicyDraft.drill_frequency === "weekly" && Number.isFinite(drillWeekday)
+        ? drillWeekday
+        : null,
+      drill_time_utc: backupPolicyDraft.drill_time_utc.trim(),
+      note: trimToNull(backupPolicyDraft.note)
+    };
+
+    setSavingBackupPolicy(true);
+    setBackupPolicyNotice(null);
+    setError(null);
+    try {
+      const isEdit = Number.isFinite(editingPolicyId) && editingPolicyId > 0;
+      const url = isEdit
+        ? `${API_BASE_URL}/api/v1/ops/cockpit/backup/policies/${editingPolicyId}`
+        : `${API_BASE_URL}/api/v1/ops/cockpit/backup/policies`;
+      const response = await apiFetch(url, {
+        method: isEdit ? "PATCH" : "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const item: BackupPolicyRecord = await response.json();
+      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns()]);
+      setBackupPolicyNotice(
+        isEdit
+          ? `Backup policy '${item.policy_key}' updated.`
+          : `Backup policy '${item.policy_key}' created.`
+      );
+      setBackupPolicyDraft({
+        ...defaultBackupPolicyForm,
+        policy_id: String(item.id),
+        policy_key: item.policy_key,
+        name: item.name,
+        frequency: item.frequency,
+        schedule_time_utc: item.schedule_time_utc,
+        schedule_weekday: String(item.schedule_weekday ?? 1),
+        retention_days: String(item.retention_days),
+        destination_type: item.destination_type,
+        destination_uri: item.destination_uri,
+        drill_enabled: item.drill_enabled,
+        drill_frequency: item.drill_frequency,
+        drill_weekday: String(item.drill_weekday ?? 3),
+        drill_time_utc: item.drill_time_utc,
+        note: ""
+      });
+      return item;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setSavingBackupPolicy(false);
+    }
+  }, [backupPolicyDraft, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, t]);
+
+  const runBackupPolicy = useCallback(async (
+    policyId: number,
+    runType: "backup" | "drill",
+    simulateFailure: boolean
+  ) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    if (!Number.isFinite(policyId) || policyId <= 0) {
+      return null;
+    }
+
+    const actionKey = `${policyId}:${runType}:${simulateFailure ? "fail" : "run"}`;
+    setRunningBackupPolicyActionId(actionKey);
+    setBackupPolicyNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/backup/policies/${policyId}/run`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          run_type: runType,
+          simulate_failure: simulateFailure,
+          note: trimToNull(backupPolicyDraft.note)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupPolicyRunResult = await response.json();
+      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns()]);
+      setBackupPolicyNotice(
+        `${runType} run #${payload.run.id} for policy '${payload.policy.policy_key}' finished with status '${payload.run.status}'.`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningBackupPolicyActionId(null);
+    }
+  }, [backupPolicyDraft.note, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, t]);
+
+  const runBackupSchedulerTick = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    setTickingBackupScheduler(true);
+    setBackupPolicyNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/backup/scheduler/tick`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          note: trimToNull(backupPolicyDraft.note)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupSchedulerTickResponse = await response.json();
+      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns()]);
+      setBackupPolicyNotice(
+        `Scheduler tick completed: backup_runs=${payload.backup_runs}, drill_runs=${payload.drill_runs}.`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setTickingBackupScheduler(false);
+    }
+  }, [backupPolicyDraft.note, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, t]);
+
+  const loadWeeklyDigest = useCallback(async () => {
+    setLoadingWeeklyDigest(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (weeklyDigestWeekStart.trim().length > 0) {
+        params.set("week_start", weeklyDigestWeekStart.trim());
+      }
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: WeeklyDigestResponse = await response.json();
+      setWeeklyDigest(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setWeeklyDigest(null);
+      return null;
+    } finally {
+      setLoadingWeeklyDigest(false);
+    }
+  }, [weeklyDigestWeekStart]);
+
+  const exportWeeklyDigest = useCallback(async (format: "csv" | "json") => {
+    setExportingWeeklyDigest(true);
+    setWeeklyDigestNotice(null);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        format
+      });
+      if (weeklyDigestWeekStart.trim().length > 0) {
+        params.set("week_start", weeklyDigestWeekStart.trim());
+      }
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest/export?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: WeeklyDigestExportResponse = await response.json();
+
+      if (typeof window !== "undefined") {
+        const blob = new Blob(
+          [payload.content],
+          { type: format === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8" }
+        );
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${payload.digest_key}.${format}`;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }
+
+      setWeeklyDigestNotice(`Weekly digest exported as ${payload.digest_key}.${format}.`);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setExportingWeeklyDigest(false);
+    }
+  }, [weeklyDigestWeekStart]);
+
   const loadDailyCockpitSnapshot = useCallback(async () => {
-    const [queue, checklist] = await Promise.all([
+    const [queue, checklist, policies, runs, digest] = await Promise.all([
       loadDailyCockpitQueue(),
-      loadOpsChecklist()
+      loadOpsChecklist(),
+      loadBackupPolicies(),
+      loadBackupPolicyRuns(),
+      loadWeeklyDigest()
     ]);
-    return { queue, checklist };
-  }, [loadDailyCockpitQueue, loadOpsChecklist]);
+    return { queue, checklist, policies, runs, digest };
+  }, [
+    loadBackupPolicies,
+    loadBackupPolicyRuns,
+    loadDailyCockpitQueue,
+    loadOpsChecklist,
+    loadWeeklyDigest
+  ]);
 
   const runDailyCockpitAction = useCallback(async (
     item: DailyCockpitQueueItem,
@@ -5013,6 +5459,41 @@ export function App() {
   }, [playbookApprovalRequests, selectedPlaybookApprovalId]);
 
   useEffect(() => {
+    if (backupPolicies.length === 0) {
+      setBackupPolicyDraft(defaultBackupPolicyForm);
+      return;
+    }
+
+    setBackupPolicyDraft((current) => {
+      const currentId = Number.parseInt(current.policy_id, 10);
+      const selected = Number.isFinite(currentId) && currentId > 0
+        ? backupPolicies.find((item) => item.id === currentId) ?? backupPolicies[0]
+        : backupPolicies[0];
+
+      if (selected.id === currentId) {
+        return current;
+      }
+
+      return {
+        ...current,
+        policy_id: String(selected.id),
+        policy_key: selected.policy_key,
+        name: selected.name,
+        frequency: selected.frequency,
+        schedule_time_utc: selected.schedule_time_utc,
+        schedule_weekday: String(selected.schedule_weekday ?? 1),
+        retention_days: String(selected.retention_days),
+        destination_type: selected.destination_type,
+        destination_uri: selected.destination_uri,
+        drill_enabled: selected.drill_enabled,
+        drill_frequency: selected.drill_frequency,
+        drill_weekday: String(selected.drill_weekday ?? 3),
+        drill_time_utc: selected.drill_time_utc,
+      };
+    });
+  }, [backupPolicies]);
+
+  useEffect(() => {
     if (tickets.length === 0) {
       setSelectedTicketId("");
       setTicketDetail(null);
@@ -6571,6 +7052,10 @@ export function App() {
     assetStatsStatusMax,
     assets,
     bucketBarWidth,
+    backupPolicies,
+    backupPolicyDraft,
+    backupPolicyNotice,
+    backupPolicyRuns,
     businessWorkspace,
     businessWorkspaceOptions,
     canAccessAdmin,
@@ -6583,6 +7068,11 @@ export function App() {
     dailyCockpitNotice,
     dailyCockpitQueue,
     dailyCockpitSiteFilter,
+    exportingWeeklyDigest,
+    exportWeeklyDigest,
+    loadBackupPolicies,
+    loadBackupPolicyRuns,
+    loadWeeklyDigest,
     completeOpsChecklistItem,
     departmentWorkspace,
     departmentWorkspaceOptions,
@@ -6592,8 +7082,14 @@ export function App() {
     loadAssets,
     loadAssetStats,
     loadFieldDefinitions,
+    runBackupPolicy,
+    runBackupSchedulerTick,
     loadingDailyCockpit,
     loadingOpsChecklist,
+    loadingBackupPolicies,
+    loadingBackupPolicyRuns,
+    loadingWeeklyDigest,
+    runningBackupPolicyActionId,
     loadingAssetStats,
     loadingAssets,
     loadingFields,
@@ -6611,15 +7107,23 @@ export function App() {
     selectedDepartmentAssetCount,
     runDailyCockpitAction,
     runningDailyCockpitActionKey,
+    saveBackupPolicy,
+    savingBackupPolicy,
     setBusinessWorkspace,
+    setBackupPolicyDraft,
     setDailyCockpitDepartmentFilter,
     setDailyCockpitSiteFilter,
     setDepartmentWorkspace,
     setFunctionWorkspace,
     setMenuAxis,
     setOpsChecklistDate,
+    setWeeklyDigestWeekStart,
     subSectionTitleStyle,
     t,
+    tickingBackupScheduler,
+    weeklyDigest,
+    weeklyDigestNotice,
+    weeklyDigestWeekStart,
     visibleSections
   };
 
