@@ -8,9 +8,21 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- LDAP live connector baseline for production mode (`AUTH_LDAP_MODE=live`) with bind/search + user-bind verification.
-- LDAP live configuration validation on API startup (URL/base DN/filter placeholder/TLS policy checks).
-- LDAP live environment controls:
+- None yet.
+
+### Changed
+
+- None yet.
+
+### Fixed
+
+- None yet.
+
+## [0.1.3] - 2026-03-06
+
+### Added
+
+- LDAP live connector production baseline with startup validation and environment controls:
   - `AUTH_LDAP_LIVE_URL`
   - `AUTH_LDAP_LIVE_BIND_DN`
   - `AUTH_LDAP_LIVE_BIND_PASSWORD`
@@ -21,22 +33,47 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - `AUTH_LDAP_LIVE_ATTR_GROUPS`
   - `AUTH_LDAP_LIVE_STARTTLS`
   - `AUTH_LDAP_LIVE_TLS_INSECURE_SKIP_VERIFY`
-- Argon2id local password hashing baseline with automatic legacy SHA256 migration on successful local login.
-- Local MFA recovery-code lifecycle baseline:
+- Argon2id local password hashing baseline with legacy hash migration on successful local login.
+- Local MFA recovery lifecycle:
   - migration: `202603060001_create_local_mfa_recovery_codes.sql`
   - endpoints:
     - `GET /api/v1/auth/local/mfa/recovery/status`
     - `POST /api/v1/auth/local/mfa/recovery/rotate`
     - `POST /api/v1/auth/local/mfa/recovery/admin-reset`
-  - one-time recovery-code login support via `POST /api/v1/auth/local/login` (`recovery_code` payload field)
+  - one-time recovery-code login via `POST /api/v1/auth/local/login` (`recovery_code` payload field)
+- No-code setup bootstrap templates for operator onboarding:
+  - migration: `202603060002_create_setup_bootstrap_templates.sql`
+  - endpoints:
+    - `GET /api/v1/setup/templates`
+    - `POST /api/v1/setup/templates/{key}/preview`
+    - `POST /api/v1/setup/templates/{key}/apply`
+- Alert remediation planning and execution linkage:
+  - `GET /api/v1/alerts/{id}/remediation`
+  - remediation timeline events persisted from playbook dry-run/execute/replay
+- Guided cockpit checklist tracking:
+  - migration: `202603060003_create_ops_checklist_tables.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/checklists`
+    - `POST /api/v1/ops/cockpit/checklists/{template_key}/complete`
+    - `POST /api/v1/ops/cockpit/checklists/{template_key}/exception`
+- Benchmark regression guard and baseline artifacts:
+  - `scripts/benchmark-regression-guard.sh`
+  - `scripts/benchmark-regression-policy.json`
+  - `benchmarks/baselines/scale-10k/{api-summary.csv,sse-summary.json}`
+- Capacity guidance document: `docs/24-v0.1.3-capacity-guidance.md`.
 
 ### Changed
 
-- Local auth hardening integration script now supports optional bearer-token auth mode and safer payload/temp-file handling.
-- Developer quickstart and security operations docs now include LDAP live-mode setup guidance.
-- Developer quickstart and security operations docs now include Argon2id migration and audit verification guidance.
-- Local MFA enrollment now returns recovery-code bundle and emits generation metadata in audit logs.
-- Added local MFA recovery lifecycle validation script: `scripts/test-local-mfa-recovery.sh`.
+- Web console alert center adds one-click mapped remediation with confirmation-token flow for high-risk playbooks.
+- Daily cockpit queue now includes latest alert remediation context and a guided checklist panel (summary, overdue/skipped highlighting, completion/exception actions).
+- Benchmark scripts now support `scale-10k` profile defaults:
+  - `scripts/benchmark-api-load.sh`
+  - `scripts/benchmark-sse-burst-smoke.sh`
+  - `scripts/benchmark-scale-profiles.sh`
+  - `scripts/benchmark-threshold-policy.json`
+- Profile runner now validates required benchmark artifacts before producing combined summary output.
+- CI benchmark workflow now runs profile-based benchmark suites and publishes profile/gate/trend/regression summaries as artifacts.
+- RBAC docs and integration checks now include cockpit checklist write permissions (`ops.cockpit.write`).
 
 ### Fixed
 
