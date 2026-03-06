@@ -1,0 +1,13 @@
+{
+  "api": {
+    "success_rate_avg_min_delta": -0.500,
+    "p95_ms_max_delta": 80.000,
+    "p99_ms_max_delta": 120.000
+  },
+  "sse": {
+    "lag_p95_ms_max_delta": 120.000,
+    "lag_p99_ms_max_delta": 180.000,
+    "lag_max_ms_max_delta": 300.000,
+    "stream_error_count_max_delta": 2.000
+  }
+}
