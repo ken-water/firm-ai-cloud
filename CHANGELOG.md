@@ -22,12 +22,21 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - `AUTH_LDAP_LIVE_STARTTLS`
   - `AUTH_LDAP_LIVE_TLS_INSECURE_SKIP_VERIFY`
 - Argon2id local password hashing baseline with automatic legacy SHA256 migration on successful local login.
+- Local MFA recovery-code lifecycle baseline:
+  - migration: `202603060001_create_local_mfa_recovery_codes.sql`
+  - endpoints:
+    - `GET /api/v1/auth/local/mfa/recovery/status`
+    - `POST /api/v1/auth/local/mfa/recovery/rotate`
+    - `POST /api/v1/auth/local/mfa/recovery/admin-reset`
+  - one-time recovery-code login support via `POST /api/v1/auth/local/login` (`recovery_code` payload field)
 
 ### Changed
 
 - Local auth hardening integration script now supports optional bearer-token auth mode and safer payload/temp-file handling.
 - Developer quickstart and security operations docs now include LDAP live-mode setup guidance.
 - Developer quickstart and security operations docs now include Argon2id migration and audit verification guidance.
+- Local MFA enrollment now returns recovery-code bundle and emits generation metadata in audit logs.
+- Added local MFA recovery lifecycle validation script: `scripts/test-local-mfa-recovery.sh`.
 
 ### Fixed
 

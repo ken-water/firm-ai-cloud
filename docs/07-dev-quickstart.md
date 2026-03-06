@@ -790,6 +790,24 @@ curl -X POST -H "$AUTH_HEADER" \
 curl -X POST -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"ChangeMe_12345","totp_code":"000000"}' \
   http://127.0.0.1:8080/api/v1/auth/local/login
+
+# local login with one-time recovery_code (if mfa_enabled=true)
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"ChangeMe_12345","recovery_code":"ABCD-1234-EF00"}' \
+  http://127.0.0.1:8080/api/v1/auth/local/login
+
+# view remaining/consumed/revoked recovery-code counters
+curl -H "$AUTH_HEADER" \
+  http://127.0.0.1:8080/api/v1/auth/local/mfa/recovery/status
+
+# rotate recovery-code bundle (invalidates all previous unused codes)
+curl -X POST -H "$AUTH_HEADER" \
+  http://127.0.0.1:8080/api/v1/auth/local/mfa/recovery/rotate
+
+# system-admin assisted reset (disable MFA + revoke active recovery codes)
+curl -X POST -H "$AUTH_HEADER" -H 'Content-Type: application/json' \
+  -d '{"username":"admin","reason":"helpdesk mfa recovery reset"}' \
+  http://127.0.0.1:8080/api/v1/auth/local/mfa/recovery/admin-reset
 ```
 
 Notes:
@@ -797,6 +815,14 @@ Notes:
 - LDAP login denies when no group-role mapping matches the user groups.
 - Mapping source is `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON`.
 - Local account password hashing uses Argon2id; legacy SHA256 credentials auto-migrate on successful local login.
+- Recovery codes are one-time credentials; used or rotated codes cannot be replayed.
+- Admin reset flow writes `auth.local.mfa_recovery.admin_reset` audit events with actor/target/reason metadata.
+
+Local MFA recovery API validation script:
+
+```bash
+bash scripts/test-local-mfa-recovery.sh
+```
 
 Break-glass fallback smoke checks:
 

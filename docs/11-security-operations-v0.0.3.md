@@ -222,6 +222,28 @@ Hardening checklist:
 7. Confirm non-mapped LDAP groups are denied before rollout.
 8. Local credential storage should remain on Argon2id; verify migration audit event `auth.local.password_hash.migrated` appears for legacy accounts.
 
+### 3.7 Local MFA Recovery Governance
+
+Recovery-code lifecycle endpoints:
+
+- `POST /api/v1/auth/local/mfa/enroll` (returns initial `recovery_codes[]`)
+- `GET /api/v1/auth/local/mfa/recovery/status`
+- `POST /api/v1/auth/local/mfa/recovery/rotate`
+- `POST /api/v1/auth/local/mfa/recovery/admin-reset` (requires `system.admin`)
+
+Operational requirements:
+
+1. Recovery codes are one-time use; replay must fail.
+2. Rotation must revoke all previous unused codes.
+3. Admin reset must disable MFA and revoke active recovery codes for the target account.
+4. Helpdesk/SecOps must provide explicit reset reason text for traceability.
+
+Audit verification events:
+
+- `auth.local.mfa_recovery.consume`
+- `auth.local.mfa_recovery.rotate`
+- `auth.local.mfa_recovery.admin_reset` (message stores reset reason; metadata includes target username and revoked code count)
+
 ## 4. Deployment Security Notes
 
 ### 4.1 Online/Connected Environments

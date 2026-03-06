@@ -27,6 +27,7 @@ use crate::{
 
 const OIDC_AUTH_SOURCE: &str = "oidc";
 const LDAP_AUTH_SOURCE: &str = "ldap";
+const LOCAL_MFA_RECOVERY_CODE_COUNT: usize = 8;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -35,6 +36,18 @@ pub fn routes() -> Router<AppState> {
         .route("/local/login", post(login_local_user))
         .route("/local/password", post(set_local_password))
         .route("/local/mfa/enroll", post(enroll_local_mfa))
+        .route(
+            "/local/mfa/recovery/status",
+            get(get_local_mfa_recovery_status),
+        )
+        .route(
+            "/local/mfa/recovery/rotate",
+            post(rotate_local_mfa_recovery_codes),
+        )
+        .route(
+            "/local/mfa/recovery/admin-reset",
+            post(admin_reset_local_mfa_recovery),
+        )
         .route("/ldap/login", post(login_ldap_user))
         .route("/me", get(get_current_identity))
         .route("/logout", post(logout_current_session))
@@ -111,6 +124,7 @@ struct LocalLoginRequest {
     username: String,
     password: String,
     totp_code: Option<String>,
+    recovery_code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -140,8 +154,38 @@ struct LocalMfaEnrollResponse {
     username: String,
     mfa_enabled: bool,
     totp_secret: String,
+    recovery_codes: Vec<String>,
     period_seconds: u32,
     digits: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalMfaRecoveryStatusResponse {
+    username: String,
+    remaining_codes: i64,
+    consumed_codes: i64,
+    revoked_codes: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalMfaRecoveryRotateResponse {
+    username: String,
+    generated_codes: usize,
+    recovery_codes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LocalMfaRecoveryAdminResetRequest {
+    username: String,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalMfaRecoveryAdminResetResponse {
+    actor: String,
+    target_username: String,
+    mfa_enabled: bool,
+    revoked_codes: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -214,6 +258,13 @@ struct LocalCredentialRow {
     failed_attempts: i32,
     last_failed_at: Option<DateTime<Utc>>,
     locked_until: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, FromRow)]
+struct LocalMfaRecoveryStatusRow {
+    remaining_codes: i64,
+    consumed_codes: i64,
+    revoked_codes: i64,
 }
 
 enum LocalPasswordCheckResult {
@@ -557,6 +608,8 @@ async fn enroll_local_mfa(
     .bind(&totp_secret)
     .execute(&state.db)
     .await?;
+    let recovery_codes =
+        issue_local_mfa_recovery_codes(&state, user.id, LOCAL_MFA_RECOVERY_CODE_COUNT).await?;
 
     write_audit_log_best_effort(
         &state.db,
@@ -570,7 +623,8 @@ async fn enroll_local_mfa(
             metadata: json!({
                 "username": user.username,
                 "period_seconds": 30,
-                "digits": 6
+                "digits": 6,
+                "recovery_codes_generated": recovery_codes.len()
             }),
         },
     )
@@ -580,8 +634,113 @@ async fn enroll_local_mfa(
         username: actor,
         mfa_enabled: true,
         totp_secret,
+        recovery_codes,
         period_seconds: 30,
         digits: 6,
+    }))
+}
+
+async fn get_local_mfa_recovery_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<LocalMfaRecoveryStatusResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let user = load_user_by_username(&state, &actor).await?;
+    ensure_local_credential_exists(&state, user.id).await?;
+
+    let status = load_local_mfa_recovery_status(&state, user.id).await?;
+    Ok(Json(LocalMfaRecoveryStatusResponse {
+        username: user.username,
+        remaining_codes: status.remaining_codes,
+        consumed_codes: status.consumed_codes,
+        revoked_codes: status.revoked_codes,
+    }))
+}
+
+async fn rotate_local_mfa_recovery_codes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<LocalMfaRecoveryRotateResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let user = load_user_by_username(&state, &actor).await?;
+    ensure_local_credential_exists(&state, user.id).await?;
+
+    let recovery_codes =
+        issue_local_mfa_recovery_codes(&state, user.id, LOCAL_MFA_RECOVERY_CODE_COUNT).await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "auth.local.mfa_recovery.rotate".to_string(),
+            target_type: "auth_local_recovery_codes".to_string(),
+            target_id: Some(user.id.to_string()),
+            result: "success".to_string(),
+            message: None,
+            metadata: json!({
+                "username": user.username,
+                "generated_codes": recovery_codes.len()
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(LocalMfaRecoveryRotateResponse {
+        username: user.username,
+        generated_codes: recovery_codes.len(),
+        recovery_codes,
+    }))
+}
+
+async fn admin_reset_local_mfa_recovery(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LocalMfaRecoveryAdminResetRequest>,
+) -> AppResult<Json<LocalMfaRecoveryAdminResetResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    ensure_system_admin_actor(&state, actor.as_str()).await?;
+
+    let target_username = required_trimmed("username", payload.username)?.to_ascii_lowercase();
+    let reason = required_trimmed("reason", payload.reason)?;
+    let target_user = load_user_by_username(&state, &target_username).await?;
+    ensure_local_credential_exists(&state, target_user.id).await?;
+
+    sqlx::query(
+        "UPDATE auth_local_credentials
+         SET mfa_enabled = FALSE,
+             totp_secret = NULL,
+             totp_enrolled_at = NULL,
+             updated_at = NOW()
+         WHERE user_id = $1",
+    )
+    .bind(target_user.id)
+    .execute(&state.db)
+    .await?;
+
+    let revoked_codes = revoke_local_mfa_recovery_codes(&state, target_user.id).await?;
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "auth.local.mfa_recovery.admin_reset".to_string(),
+            target_type: "auth_local_credentials".to_string(),
+            target_id: Some(target_user.id.to_string()),
+            result: "success".to_string(),
+            message: Some(reason),
+            metadata: json!({
+                "target_username": target_user.username,
+                "revoked_codes": revoked_codes,
+                "mfa_enabled": false
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(LocalMfaRecoveryAdminResetResponse {
+        actor,
+        target_username: target_user.username,
+        mfa_enabled: false,
+        revoked_codes,
     }))
 }
 
@@ -592,6 +751,7 @@ async fn login_local_user(
     let username = required_trimmed("username", payload.username)?.to_ascii_lowercase();
     let password = required_trimmed("password", payload.password)?;
     let totp_code = payload.totp_code.map(|item| item.trim().to_string());
+    let recovery_code = payload.recovery_code.map(|item| item.trim().to_string());
 
     let (fallback_allowed, fallback_reason) = evaluate_local_fallback_policy(
         state.local_auth.fallback_mode.as_str(),
@@ -705,16 +865,44 @@ async fn login_local_user(
     }
 
     if credential.mfa_enabled {
-        let provided_code = totp_code
-            .as_deref()
-            .filter(|item| !item.is_empty())
-            .ok_or_else(|| {
-                AppError::Forbidden("totp_code is required for MFA-enabled user".to_string())
+        let mut mfa_passed = false;
+
+        if let Some(provided_code) = totp_code.as_deref().filter(|item| !item.is_empty()) {
+            let secret = credential.totp_secret.clone().ok_or_else(|| {
+                AppError::Validation("mfa_enabled=true but totp_secret is missing".to_string())
             })?;
-        let secret = credential.totp_secret.clone().ok_or_else(|| {
-            AppError::Validation("mfa_enabled=true but totp_secret is missing".to_string())
-        })?;
-        if !verify_totp_code(secret.as_str(), provided_code, Utc::now()) {
+            if verify_totp_code(secret.as_str(), provided_code, Utc::now()) {
+                mfa_passed = true;
+            }
+        }
+
+        if !mfa_passed {
+            if let Some(provided_recovery_code) =
+                recovery_code.as_deref().filter(|item| !item.is_empty())
+            {
+                let consumed =
+                    consume_local_mfa_recovery_code(&state, user.id, provided_recovery_code)
+                        .await?;
+                if consumed {
+                    mfa_passed = true;
+                    write_audit_log_best_effort(
+                        &state.db,
+                        AuditLogWriteInput {
+                            actor: username.clone(),
+                            action: "auth.local.mfa_recovery.consume".to_string(),
+                            target_type: "auth_local_recovery_codes".to_string(),
+                            target_id: Some(user.id.to_string()),
+                            result: "success".to_string(),
+                            message: None,
+                            metadata: json!({}),
+                        },
+                    )
+                    .await;
+                }
+            }
+        }
+
+        if !mfa_passed {
             let lockout_started_at = register_local_login_failure(&state, &credential).await?;
             write_audit_log_best_effort(
                 &state.db,
@@ -724,8 +912,11 @@ async fn login_local_user(
                     target_type: "auth_local_credentials".to_string(),
                     target_id: Some(user.id.to_string()),
                     result: "failed".to_string(),
-                    message: Some("invalid totp_code".to_string()),
-                    metadata: json!({}),
+                    message: Some("invalid mfa verification".to_string()),
+                    metadata: json!({
+                        "totp_provided": totp_code.as_deref().is_some_and(|item| !item.is_empty()),
+                        "recovery_code_provided": recovery_code.as_deref().is_some_and(|item| !item.is_empty())
+                    }),
                 },
             )
             .await;
@@ -748,7 +939,7 @@ async fn login_local_user(
                 .await;
             }
             return Err(AppError::Forbidden(
-                "local authentication failed: invalid totp_code".to_string(),
+                "local authentication failed: invalid totp_code or recovery_code".to_string(),
             ));
         }
     }
@@ -1754,6 +1945,149 @@ async fn ensure_local_credential_exists(state: &AppState, user_id: i64) -> AppRe
     Ok(())
 }
 
+async fn ensure_system_admin_actor(state: &AppState, actor: &str) -> AppResult<()> {
+    let allowed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM iam_users u
+            INNER JOIN iam_user_roles ur ON ur.user_id = u.id
+            INNER JOIN iam_role_permissions rp ON rp.role_id = ur.role_id
+            INNER JOIN iam_permissions p ON p.id = rp.permission_id
+            WHERE u.username = $1
+              AND u.is_enabled = TRUE
+              AND p.permission_key = 'system.admin'
+        )",
+    )
+    .bind(actor)
+    .fetch_one(&state.db)
+    .await?;
+    if !allowed {
+        return Err(AppError::Forbidden(
+            "system.admin permission is required for admin reset".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn issue_local_mfa_recovery_codes(
+    state: &AppState,
+    user_id: i64,
+    count: usize,
+) -> AppResult<Vec<String>> {
+    if count == 0 {
+        return Err(AppError::Validation(
+            "recovery code count must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut tx = state.db.begin().await?;
+    sqlx::query(
+        "UPDATE auth_local_recovery_codes
+         SET revoked_at = NOW()
+         WHERE user_id = $1
+           AND consumed_at IS NULL
+           AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let mut issued_codes = Vec::with_capacity(count);
+    let mut attempt_codes = BTreeSet::new();
+    while issued_codes.len() < count {
+        let code = build_local_mfa_recovery_code();
+        if !attempt_codes.insert(code.clone()) {
+            continue;
+        }
+        let code_hash = hash_local_mfa_recovery_code(code.as_str());
+        let inserted = sqlx::query(
+            "INSERT INTO auth_local_recovery_codes (user_id, code_hash)
+             VALUES ($1, $2)
+             ON CONFLICT (user_id, code_hash) DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(code_hash)
+        .execute(&mut *tx)
+        .await?;
+        if inserted.rows_affected() == 1 {
+            issued_codes.push(code);
+        }
+    }
+    tx.commit().await?;
+
+    Ok(issued_codes)
+}
+
+async fn revoke_local_mfa_recovery_codes(state: &AppState, user_id: i64) -> AppResult<i64> {
+    let result = sqlx::query(
+        "UPDATE auth_local_recovery_codes
+         SET revoked_at = NOW()
+         WHERE user_id = $1
+           AND consumed_at IS NULL
+           AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(&state.db)
+    .await?;
+    Ok(result.rows_affected() as i64)
+}
+
+async fn consume_local_mfa_recovery_code(
+    state: &AppState,
+    user_id: i64,
+    recovery_code: &str,
+) -> AppResult<bool> {
+    let code_hash = hash_local_mfa_recovery_code(recovery_code);
+    let result = sqlx::query(
+        "UPDATE auth_local_recovery_codes
+         SET consumed_at = NOW()
+         WHERE user_id = $1
+           AND code_hash = $2
+           AND consumed_at IS NULL
+           AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(code_hash)
+    .execute(&state.db)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+async fn load_local_mfa_recovery_status(
+    state: &AppState,
+    user_id: i64,
+) -> AppResult<LocalMfaRecoveryStatusRow> {
+    let row: LocalMfaRecoveryStatusRow = sqlx::query_as(
+        "SELECT
+            COUNT(*) FILTER (WHERE consumed_at IS NULL AND revoked_at IS NULL) AS remaining_codes,
+            COUNT(*) FILTER (WHERE consumed_at IS NOT NULL) AS consumed_codes,
+            COUNT(*) FILTER (WHERE revoked_at IS NOT NULL) AS revoked_codes
+         FROM auth_local_recovery_codes
+         WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(row)
+}
+
+fn build_local_mfa_recovery_code() -> String {
+    let token = Uuid::new_v4().simple().to_string();
+    format!(
+        "{}-{}-{}",
+        token[0..4].to_ascii_uppercase(),
+        token[4..8].to_ascii_uppercase(),
+        token[8..12].to_ascii_uppercase()
+    )
+}
+
+fn hash_local_mfa_recovery_code(code: &str) -> String {
+    let normalized = code.trim().to_ascii_uppercase();
+    let mut hasher = Sha256::new();
+    hasher.update(normalized.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 fn evaluate_local_fallback_policy(
     mode: &str,
     break_glass_users: &[String],
@@ -2172,14 +2506,15 @@ fn normalize_email(value: Option<String>) -> Option<String> {
 mod tests {
     use super::{
         LocalCredentialRow, LocalPasswordCheckResult, authenticate_ldap_dev_user,
-        build_ldap_live_user_filter, choose_base_username, compute_totp_code_for_counter,
-        hash_local_password_argon2, hash_local_password_sha256_legacy, local_session_revoke_count,
-        normalize_ldap_group_value, parse_ldap_group_role_mapping, resolve_ldap_role_keys,
-        validate_ldap_live_config, verify_local_password, verify_totp_code,
+        build_ldap_live_user_filter, build_local_mfa_recovery_code, choose_base_username,
+        compute_totp_code_for_counter, hash_local_mfa_recovery_code, hash_local_password_argon2,
+        hash_local_password_sha256_legacy, local_session_revoke_count, normalize_ldap_group_value,
+        parse_ldap_group_role_mapping, resolve_ldap_role_keys, validate_ldap_live_config,
+        verify_local_password, verify_totp_code,
     };
     use crate::{error::AppError, state::LdapSettings};
     use chrono::{TimeZone, Utc};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     fn sample_live_ldap_settings() -> LdapSettings {
         LdapSettings {
@@ -2431,5 +2766,34 @@ mod tests {
             }
             _ => panic!("legacy hash should require migration"),
         }
+    }
+
+    #[test]
+    fn builds_unique_mfa_recovery_codes_with_expected_format() {
+        let mut unique = BTreeSet::new();
+        while unique.len() < 8 {
+            unique.insert(build_local_mfa_recovery_code());
+        }
+        let codes: Vec<String> = unique.into_iter().collect();
+        assert_eq!(codes.len(), 8);
+
+        for code in codes {
+            let parts: Vec<&str> = code.split('-').collect();
+            assert_eq!(parts.len(), 3);
+            for part in parts {
+                assert_eq!(part.len(), 4);
+                assert!(
+                    part.chars()
+                        .all(|ch| ch.is_ascii_digit() || ('A'..='F').contains(&ch))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hashes_mfa_recovery_code_with_case_and_whitespace_normalization() {
+        let hashed = hash_local_mfa_recovery_code(" abcd-1234-ef00 ");
+        let normalized = hash_local_mfa_recovery_code("ABCD-1234-EF00");
+        assert_eq!(hashed, normalized);
     }
 }
