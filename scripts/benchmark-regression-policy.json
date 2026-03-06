@@ -1,0 +1,60 @@
+{
+  "profiles": {
+    "smoke": {
+      "api": {
+        "success_rate_min_delta": -0.2,
+        "p95_ms_max_delta": 150.0,
+        "p99_ms_max_delta": 250.0
+      },
+      "sse": {
+        "lag_p95_ms_max_delta": 2000.0,
+        "lag_p99_ms_max_delta": 3000.0,
+        "lag_max_ms_max_delta": 4500.0,
+        "alert_monitoring_sync_count_min_delta": -1.0,
+        "stream_error_count_max_delta": 0.0
+      }
+    },
+    "scale-1k": {
+      "api": {
+        "success_rate_min_delta": -0.3,
+        "p95_ms_max_delta": 250.0,
+        "p99_ms_max_delta": 400.0
+      },
+      "sse": {
+        "lag_p95_ms_max_delta": 2500.0,
+        "lag_p99_ms_max_delta": 3500.0,
+        "lag_max_ms_max_delta": 5000.0,
+        "alert_monitoring_sync_count_min_delta": -1.0,
+        "stream_error_count_max_delta": 0.0
+      }
+    },
+    "scale-5k": {
+      "api": {
+        "success_rate_min_delta": -0.5,
+        "p95_ms_max_delta": 350.0,
+        "p99_ms_max_delta": 550.0
+      },
+      "sse": {
+        "lag_p95_ms_max_delta": 3000.0,
+        "lag_p99_ms_max_delta": 4500.0,
+        "lag_max_ms_max_delta": 6500.0,
+        "alert_monitoring_sync_count_min_delta": -1.0,
+        "stream_error_count_max_delta": 0.0
+      }
+    },
+    "scale-10k": {
+      "api": {
+        "success_rate_min_delta": -0.7,
+        "p95_ms_max_delta": 450.0,
+        "p99_ms_max_delta": 700.0
+      },
+      "sse": {
+        "lag_p95_ms_max_delta": 4000.0,
+        "lag_p99_ms_max_delta": 6000.0,
+        "lag_max_ms_max_delta": 9000.0,
+        "alert_monitoring_sync_count_min_delta": -2.0,
+        "stream_error_count_max_delta": 0.0
+      }
+    }
+  }
+}

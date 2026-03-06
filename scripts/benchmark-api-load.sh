@@ -41,7 +41,7 @@ Usage:
   bash scripts/benchmark-api-load.sh [options]
 
 Options:
-  --profile <label>        Benchmark profile: smoke, scale-1k, scale-5k
+  --profile <label>        Benchmark profile: smoke, scale-1k, scale-5k, scale-10k
   --concurrency <num>      Override concurrent in-flight requests
   --requests <num>         Override requests per endpoint
   --warmup <num>           Override warmup requests per endpoint
@@ -87,8 +87,18 @@ apply_profile_defaults() {
       MONITORING_LAYER_LIMIT=200
       WORKFLOW_REQUESTS_LIMIT=120
       ;;
+    scale-10k)
+      REQUESTS_PER_ENDPOINT=420
+      WARMUP_REQUESTS=40
+      REQUEST_TIMEOUT_SECONDS=20
+      CONCURRENCY=24
+      PROFILE_SCALE_HINT_ASSETS=10000
+      CMDB_ASSETS_LIMIT=500
+      MONITORING_LAYER_LIMIT=320
+      WORKFLOW_REQUESTS_LIMIT=180
+      ;;
     *)
-      fatal "unsupported profile: ${profile} (supported: smoke, scale-1k, scale-5k)"
+      fatal "unsupported profile: ${profile} (supported: smoke, scale-1k, scale-5k, scale-10k)"
       ;;
   esac
 }

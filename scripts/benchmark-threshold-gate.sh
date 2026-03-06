@@ -35,7 +35,7 @@ Options:
   --sse-summary <path>     SSE benchmark summary json
   --policy <path>          Threshold policy json (default: scripts/benchmark-threshold-policy.json)
   --output-dir <path>      Output directory for gate summary artifacts
-  --profile <label>        Profile label (for example: smoke, scale-1k, scale-5k)
+  --profile <label>        Profile label (for example: smoke, scale-1k, scale-5k, scale-10k)
   -h, --help               Show this help
 USAGE
 }

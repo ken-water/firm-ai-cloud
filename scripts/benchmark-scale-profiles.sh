@@ -29,7 +29,7 @@ Usage:
   bash scripts/benchmark-scale-profiles.sh [options]
 
 Options:
-  --profile <label>        Profile label: smoke, scale-1k, scale-5k (default: scale-1k)
+  --profile <label>        Profile label: smoke, scale-1k, scale-5k, scale-10k (default: scale-1k)
   --api-base-url <url>     API base URL
   --auth-user <username>   Auth user header value
   --output-dir <path>      Output directory root
@@ -47,11 +47,17 @@ require_cmd() {
 
 validate_profile() {
   case "${PROFILE_LABEL}" in
-    smoke|scale-1k|scale-5k) ;;
+    smoke|scale-1k|scale-5k|scale-10k) ;;
     *)
-      fatal "unsupported profile: ${PROFILE_LABEL} (supported: smoke, scale-1k, scale-5k)"
+      fatal "unsupported profile: ${PROFILE_LABEL} (supported: smoke, scale-1k, scale-5k, scale-10k)"
       ;;
   esac
+}
+
+require_file() {
+  local file_path="$1"
+  local label="$2"
+  [[ -f "${file_path}" ]] || fatal "missing required artifact (${label}): ${file_path}"
 }
 
 main() {
@@ -113,6 +119,12 @@ main() {
   if [[ -n "${BASELINE_SSE_SUMMARY}" && -z "${BASELINE_API_SUMMARY}" ]]; then
     fatal "--baseline-sse-summary requires --baseline-api-summary"
   fi
+  if [[ -n "${BASELINE_API_SUMMARY}" ]]; then
+    [[ -f "${BASELINE_API_SUMMARY}" ]] || fatal "baseline API summary not found: ${BASELINE_API_SUMMARY}"
+  fi
+  if [[ -n "${BASELINE_SSE_SUMMARY}" ]]; then
+    [[ -f "${BASELINE_SSE_SUMMARY}" ]] || fatal "baseline SSE summary not found: ${BASELINE_SSE_SUMMARY}"
+  fi
 
   local api_dir="${OUTPUT_DIR}/api"
   local sse_dir="${OUTPUT_DIR}/sse"
@@ -129,6 +141,9 @@ main() {
     OUTPUT_DIR="${api_dir}" \
     BENCHMARK_PROFILE="${PROFILE_LABEL}" \
     bash scripts/benchmark-api-load.sh --profile "${PROFILE_LABEL}"
+  require_file "${api_dir}/summary.csv" "api_summary_csv"
+  require_file "${api_dir}/summary.md" "api_summary_md"
+  require_file "${api_dir}/profile.json" "api_profile_metadata"
 
   log "Running SSE benchmark profile=${PROFILE_LABEL}"
   API_BASE_URL="${API_BASE_URL}" \
@@ -137,6 +152,9 @@ main() {
     OUTPUT_DIR="${sse_dir}" \
     BENCHMARK_PROFILE="${PROFILE_LABEL}" \
     bash scripts/benchmark-sse-burst-smoke.sh --profile "${PROFILE_LABEL}"
+  require_file "${sse_dir}/summary.json" "sse_summary_json"
+  require_file "${sse_dir}/summary.md" "sse_summary_md"
+  require_file "${sse_dir}/profile.json" "sse_profile_metadata"
 
   if (( SKIP_GATE == 0 )); then
     log "Running benchmark threshold gate profile=${PROFILE_LABEL}"
@@ -146,6 +164,8 @@ main() {
         --api-summary "${api_dir}/summary.csv" \
         --sse-summary "${sse_dir}/summary.json" \
         --output-dir "${gate_dir}"
+    require_file "${gate_dir}/gate-summary.json" "gate_summary_json"
+    require_file "${gate_dir}/gate-summary.md" "gate_summary_md"
   else
     log "Skipping threshold gate by request (--skip-gate)"
   fi
@@ -169,6 +189,8 @@ main() {
           --baseline-api-summary "${BASELINE_API_SUMMARY}" \
           --output-dir "${trend_dir}"
     fi
+    require_file "${trend_dir}/summary.json" "trend_summary_json"
+    require_file "${trend_dir}/summary.md" "trend_summary_md"
     trend_enabled=1
   fi
 

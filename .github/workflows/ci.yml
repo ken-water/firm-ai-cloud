@@ -4,19 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       run_bench:
-        description: "Run optional benchmark threshold gate"
+        description: "Run optional benchmark profile + gate + trend regression guard"
         required: false
         default: false
         type: boolean
-      bench_api_concurrency:
-        description: "API benchmark concurrency for optional bench job"
+      bench_profile:
+        description: "Benchmark profile for optional bench job"
         required: false
-        default: "10"
+        default: "scale-10k"
         type: string
-      bench_burst_count:
-        description: "SSE benchmark burst count for optional bench job"
+      bench_baseline_api:
+        description: "Baseline API summary csv used by trend/regression guard"
         required: false
-        default: "300"
+        default: "benchmarks/baselines/scale-10k/api-summary.csv"
+        type: string
+      bench_baseline_sse:
+        description: "Baseline SSE summary json used by trend/regression guard"
+        required: false
+        default: "benchmarks/baselines/scale-10k/sse-summary.json"
         type: string
 
 jobs:
@@ -189,32 +194,62 @@ jobs:
       - name: Run benchmark suites
         run: |
           RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
-          API_SEQ_DIR=".run/benchmarks/api-sequential-${RUN_ID}"
-          API_CONC_DIR=".run/benchmarks/api-concurrency-${RUN_ID}"
-          SSE_DIR=".run/benchmarks/sse-${RUN_ID}"
-          GATE_DIR=".run/benchmarks/gate-${RUN_ID}"
+          PROFILE_DIR=".run/benchmarks/profile-${{ inputs.bench_profile }}-${RUN_ID}"
+          REGRESSION_DIR=".run/benchmarks/regression-${{ inputs.bench_profile }}-${RUN_ID}"
 
-          OUTPUT_DIR="${API_SEQ_DIR}" bash scripts/benchmark-api-load.sh --concurrency 1
-          OUTPUT_DIR="${API_CONC_DIR}" bash scripts/benchmark-api-load.sh --concurrency "${{ inputs.bench_api_concurrency }}"
-          OUTPUT_DIR="${SSE_DIR}" bash scripts/benchmark-sse-burst-smoke.sh --burst-count "${{ inputs.bench_burst_count }}"
-          bash scripts/benchmark-threshold-gate.sh \
-            --api-summary "${API_SEQ_DIR}/summary.csv" \
-            --api-summary "${API_CONC_DIR}/summary.csv" \
-            --sse-summary "${SSE_DIR}/summary.json" \
-            --profile "ci-mixed" \
-            --output-dir "${GATE_DIR}"
+          bash scripts/benchmark-scale-profiles.sh \
+            --profile "${{ inputs.bench_profile }}" \
+            --output-dir "${PROFILE_DIR}" \
+            --run-id "${RUN_ID}" \
+            --baseline-api-summary "${{ inputs.bench_baseline_api }}" \
+            --baseline-sse-summary "${{ inputs.bench_baseline_sse }}"
+
+          bash scripts/benchmark-regression-guard.sh \
+            --trend-summary "${PROFILE_DIR}/trend-delta/summary.json" \
+            --profile "${{ inputs.bench_profile }}" \
+            --output-dir "${REGRESSION_DIR}"
 
           echo "RUN_ID=${RUN_ID}" >>"${GITHUB_ENV}"
-          echo "GATE_SUMMARY_MD=${GATE_DIR}/gate-summary.md" >>"${GITHUB_ENV}"
+          echo "PROFILE_DIR=${PROFILE_DIR}" >>"${GITHUB_ENV}"
+          echo "REGRESSION_DIR=${REGRESSION_DIR}" >>"${GITHUB_ENV}"
+          echo "PROFILE_SUMMARY_MD=${PROFILE_DIR}/summary.md" >>"${GITHUB_ENV}"
+          echo "GATE_SUMMARY_MD=${PROFILE_DIR}/gate/gate-summary.md" >>"${GITHUB_ENV}"
+          echo "TREND_SUMMARY_MD=${PROFILE_DIR}/trend-delta/summary.md" >>"${GITHUB_ENV}"
+          echo "REGRESSION_SUMMARY_MD=${REGRESSION_DIR}/summary.md" >>"${GITHUB_ENV}"
 
-      - name: Publish gate summary
+      - name: Publish benchmark summaries
         if: always()
         run: |
-          if [[ -f "${GATE_SUMMARY_MD}" ]]; then
-            cat "${GATE_SUMMARY_MD}" >>"${GITHUB_STEP_SUMMARY}"
-          else
-            echo "benchmark gate summary not generated" >>"${GITHUB_STEP_SUMMARY}"
-          fi
+          {
+            echo "## Benchmark Evidence"
+            echo
+            if [[ -f "${PROFILE_SUMMARY_MD}" ]]; then
+              cat "${PROFILE_SUMMARY_MD}"
+              echo
+            else
+              echo "- profile summary missing: \`${PROFILE_SUMMARY_MD}\`"
+              echo
+            fi
+            if [[ -f "${GATE_SUMMARY_MD}" ]]; then
+              cat "${GATE_SUMMARY_MD}"
+              echo
+            else
+              echo "- gate summary missing: \`${GATE_SUMMARY_MD}\`"
+              echo
+            fi
+            if [[ -f "${TREND_SUMMARY_MD}" ]]; then
+              cat "${TREND_SUMMARY_MD}"
+              echo
+            else
+              echo "- trend summary missing: \`${TREND_SUMMARY_MD}\`"
+              echo
+            fi
+            if [[ -f "${REGRESSION_SUMMARY_MD}" ]]; then
+              cat "${REGRESSION_SUMMARY_MD}"
+            else
+              echo "- regression summary missing: \`${REGRESSION_SUMMARY_MD}\`"
+            fi
+          } >>"${GITHUB_STEP_SUMMARY}"
 
       - name: Upload benchmark artifacts
         if: always()
@@ -222,10 +257,8 @@ jobs:
         with:
           name: benchmark-gate-${{ env.RUN_ID }}
           path: |
-            .run/benchmarks/api-sequential-${{ env.RUN_ID }}
-            .run/benchmarks/api-concurrency-${{ env.RUN_ID }}
-            .run/benchmarks/sse-${{ env.RUN_ID }}
-            .run/benchmarks/gate-${{ env.RUN_ID }}
+            ${{ env.PROFILE_DIR }}
+            ${{ env.REGRESSION_DIR }}
           if-no-files-found: warn
 
       - name: Dump API logs on failure

@@ -43,7 +43,7 @@ Usage:
   bash scripts/benchmark-sse-burst-smoke.sh [options]
 
 Options:
-  --profile <label>        Benchmark profile: smoke, scale-1k, scale-5k
+  --profile <label>        Benchmark profile: smoke, scale-1k, scale-5k, scale-10k
   --burst-count <num>      Override burst event count
   --burst-interval-ms <n>  Override burst interval milliseconds
   --stream-duration <sec>  Override stream capture duration
@@ -76,8 +76,14 @@ apply_profile_defaults() {
       STREAM_DURATION_SECONDS=95
       PROFILE_SCALE_HINT_ASSETS=5000
       ;;
+    scale-10k)
+      BURST_EVENTS=520
+      BURST_INTERVAL_MS=50
+      STREAM_DURATION_SECONDS=130
+      PROFILE_SCALE_HINT_ASSETS=10000
+      ;;
     *)
-      fatal "unsupported profile: ${profile} (supported: smoke, scale-1k, scale-5k)"
+      fatal "unsupported profile: ${profile} (supported: smoke, scale-1k, scale-5k, scale-10k)"
       ;;
   esac
 }

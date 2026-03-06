@@ -1,0 +1,36 @@
+{
+  "run_id": "baseline-scale-10k",
+  "profile": "scale-10k",
+  "scale_hint_assets": 10000,
+  "api_base_url": "http://127.0.0.1:8080",
+  "auth_user": "admin",
+  "stream_duration_seconds": 130,
+  "burst_events": 520,
+  "burst_interval_ms": 50,
+  "asset_id": 10000,
+  "stream_exit_code": 124,
+  "burst_result": {
+    "success": 520,
+    "failed": 0
+  },
+  "stream_events": {
+    "total": 64,
+    "stream_connected": 1,
+    "stream_heartbeat": 18,
+    "alert_test": 1,
+    "alert_monitoring_sync": 9,
+    "stream_stale": 1,
+    "stream_recovered": 1,
+    "stream_error": 0
+  },
+  "lag_ms": {
+    "samples": 9,
+    "min": 640,
+    "avg": 12440.0,
+    "p50": 11830.0,
+    "p95": 25000.0,
+    "p99": 33000.0,
+    "max": 47000.0
+  },
+  "pass": true
+}

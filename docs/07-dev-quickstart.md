@@ -229,6 +229,9 @@ curl -H "$AUTH_HEADER" "http://127.0.0.1:8080/api/v1/alerts?status=open&severity
 # alert detail with timeline and linked tickets
 curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/alerts/1
 
+# get mapped remediation plan (playbook + prefilled params)
+curl -H "$AUTH_HEADER" http://127.0.0.1:8080/api/v1/alerts/1/remediation
+
 # acknowledge/close one alert
 curl -X POST http://127.0.0.1:8080/api/v1/alerts/1/ack \
   -H "$AUTH_HEADER" \
@@ -1038,10 +1041,11 @@ Run API benchmark baseline:
 bash scripts/benchmark-api-load.sh
 ```
 
-Run scale profile API benchmark (`scale-1k` / `scale-5k`):
+Run scale profile API benchmark (`scale-1k` / `scale-5k` / `scale-10k`):
 
 ```bash
 bash scripts/benchmark-api-load.sh --profile scale-1k
+bash scripts/benchmark-api-load.sh --profile scale-10k
 ```
 
 Run SSE burst stability smoke:
@@ -1054,12 +1058,14 @@ Run scale profile SSE burst benchmark:
 
 ```bash
 bash scripts/benchmark-sse-burst-smoke.sh --profile scale-5k
+bash scripts/benchmark-sse-burst-smoke.sh --profile scale-10k
 ```
 
 Run one-command profile orchestration (API + SSE + gate):
 
 ```bash
 bash scripts/benchmark-scale-profiles.sh --profile scale-1k
+bash scripts/benchmark-scale-profiles.sh --profile scale-10k
 ```
 
 Run threshold gate against benchmark artifacts:
@@ -1080,6 +1086,43 @@ bash scripts/benchmark-trend-delta.sh \
   --baseline-api-summary .run/benchmarks/profile-scale-1k-<baseline-run-id>/api/summary.csv \
   --current-sse-summary .run/benchmarks/profile-scale-1k-<current-run-id>/sse/summary.json \
   --baseline-sse-summary .run/benchmarks/profile-scale-1k-<baseline-run-id>/sse/summary.json
+```
+
+Evaluate trend deltas with regression guard policy:
+
+```bash
+bash scripts/benchmark-regression-guard.sh \
+  --trend-summary .run/benchmarks/profile-scale-10k-<current-run-id>/trend-delta/summary.json \
+  --profile scale-10k
+```
+
+Use committed baseline artifacts for `scale-10k` reproducibility:
+
+```bash
+bash scripts/benchmark-scale-profiles.sh \
+  --profile scale-10k \
+  --baseline-api-summary benchmarks/baselines/scale-10k/api-summary.csv \
+  --baseline-sse-summary benchmarks/baselines/scale-10k/sse-summary.json
+```
+
+Prepare 10k fixture data (example guidance):
+
+```bash
+# generate 10k assets directly in PostgreSQL test/staging database
+docker compose exec -T postgres psql -U cloudops -d cloudops <<'SQL'
+INSERT INTO assets (asset_class, name, hostname, status, site, department, owner, custom_fields)
+SELECT
+  'server',
+  format('scale10k-%s', g),
+  format('scale10k-%s.local', g),
+  'active',
+  CASE WHEN g % 2 = 0 THEN 'dc-a' ELSE 'dc-b' END,
+  CASE WHEN g % 3 = 0 THEN 'platform' ELSE 'business' END,
+  'benchmark',
+  jsonb_build_object('fixture_profile', 'scale-10k', 'fixture_id', g)
+FROM generate_series(1, 10000) AS g
+ON CONFLICT DO NOTHING;
+SQL
 ```
 
 Run quarterly DR drill automation:
@@ -1112,6 +1155,24 @@ Daily operations cockpit queue:
 
 ```bash
 curl -H 'x-auth-user: admin' "http://127.0.0.1:8080/api/v1/ops/cockpit/queue?limit=20"
+```
+
+Guided daily checklist state:
+
+```bash
+# read checklist (scope is optional; date defaults to today)
+curl -H 'x-auth-user: admin' \
+  "http://127.0.0.1:8080/api/v1/ops/cockpit/checklists?date=2026-03-06&site=dc-a&department=platform"
+
+# mark one checklist item completed
+curl -X POST -H 'x-auth-user: admin' -H 'Content-Type: application/json' \
+  -d '{"date":"2026-03-06","site":"dc-a","department":"platform","note":"queue reviewed"}' \
+  "http://127.0.0.1:8080/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete"
+
+# record exception (note required; defaults to skipped=true)
+curl -X POST -H 'x-auth-user: admin' -H 'Content-Type: application/json' \
+  -d '{"date":"2026-03-06","site":"dc-a","department":"platform","note":"maintenance window deferred"}' \
+  "http://127.0.0.1:8080/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception"
 ```
 
 Topology edge diagnostics context:

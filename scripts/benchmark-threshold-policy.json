@@ -155,6 +155,58 @@
         "heartbeat_min": 2,
         "connected_min": 1
       }
+    },
+    "scale-10k": {
+      "api": {
+        "default": {
+          "success_rate_min": 96.0,
+          "p95_ms_max": 2800.0,
+          "p99_ms_max": 4200.0
+        },
+        "endpoints": {
+          "health": {
+            "success_rate_min": 100.0,
+            "p95_ms_max": 420.0,
+            "p99_ms_max": 650.0
+          },
+          "cmdb_assets": {
+            "success_rate_min": 96.0,
+            "p95_ms_max": 2400.0,
+            "p99_ms_max": 3800.0
+          },
+          "cmdb_asset_stats": {
+            "success_rate_min": 96.0,
+            "p95_ms_max": 2500.0,
+            "p99_ms_max": 3900.0
+          },
+          "monitoring_overview": {
+            "success_rate_min": 96.0,
+            "p95_ms_max": 2500.0,
+            "p99_ms_max": 3900.0
+          },
+          "monitoring_layer_hardware": {
+            "success_rate_min": 96.0,
+            "p95_ms_max": 2600.0,
+            "p99_ms_max": 4000.0
+          },
+          "workflow_requests": {
+            "success_rate_min": 96.0,
+            "p95_ms_max": 2500.0,
+            "p99_ms_max": 3900.0
+          }
+        }
+      },
+      "sse": {
+        "lag_ms": {
+          "p95_ms_max": 28000.0,
+          "p99_ms_max": 36000.0,
+          "max_ms_max": 52000.0
+        },
+        "stream_error_max": 0,
+        "alert_sync_min": 1,
+        "heartbeat_min": 2,
+        "connected_min": 1
+      }
     }
   }
 }

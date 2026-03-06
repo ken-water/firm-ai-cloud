@@ -92,6 +92,7 @@ Before publishing, confirm all items:
 - [ ] Version number is consistent across tag, changelog, and release note filename.
 - [ ] Upgrade instructions were tested.
 - [ ] Known issues are explicitly listed (or `None`).
+- [ ] If benchmark scope changed, release note includes CI benchmark artifact references (`profile`, `gate`, `trend`, `regression` summaries).
 
 ## 8. Responsibility
 

@@ -1,0 +1,7 @@
+endpoint,method,path,total,success,failed,success_rate,avg_ms,p50_ms,p90_ms,p95_ms,p99_ms,success_rps
+health,GET,/health,420,420,0,100.00,1.420,1.210,1.860,2.320,3.110,240.00
+cmdb_assets,GET,/api/v1/cmdb/assets?limit=500&offset=0,420,413,7,98.33,682.210,510.100,1620.500,2100.000,3300.000,18.20
+cmdb_asset_stats,GET,/api/v1/cmdb/assets/stats,420,414,6,98.57,604.740,452.770,1680.000,2200.000,3400.000,19.40
+monitoring_overview,GET,/api/v1/monitoring/overview,420,413,7,98.33,631.820,470.300,1640.000,2150.000,3350.000,18.90
+monitoring_layer_hardware,GET,/api/v1/monitoring/layers/hardware?limit=320&offset=0,420,411,9,97.86,710.230,530.440,1760.000,2250.000,3500.000,17.60
+workflow_requests,GET,/api/v1/workflow/requests?limit=180,420,414,6,98.57,580.940,430.500,1580.000,2050.000,3200.000,20.10
