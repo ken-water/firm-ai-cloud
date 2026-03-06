@@ -220,6 +220,7 @@ Hardening checklist:
 5. Keep `AUTH_LDAP_LIVE_TLS_INSECURE_SKIP_VERIFY=false`; unsafe bypass is rejected in live mode.
 6. Validate LDAP login audit events include mapping source and resolved groups/roles.
 7. Confirm non-mapped LDAP groups are denied before rollout.
+8. Local credential storage should remain on Argon2id; verify migration audit event `auth.local.password_hash.migrated` appears for legacy accounts.
 
 ## 4. Deployment Security Notes
 

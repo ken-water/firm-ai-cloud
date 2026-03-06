@@ -1,3 +1,7 @@
+use argon2::{
+    Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
+    password_hash::{SaltString, rand_core::OsRng},
+};
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -210,6 +214,12 @@ struct LocalCredentialRow {
     failed_attempts: i32,
     last_failed_at: Option<DateTime<Utc>>,
     locked_until: Option<DateTime<Utc>>,
+}
+
+enum LocalPasswordCheckResult {
+    Verified,
+    VerifiedLegacyNeedsMigration { new_salt: String, new_hash: String },
+    Invalid,
 }
 
 async fn start_oidc_login(
@@ -483,8 +493,7 @@ async fn set_local_password(
     validate_local_password_strength(password.as_str())?;
 
     let user = load_user_by_username(&state, &actor).await?;
-    let password_salt = build_local_password_salt();
-    let password_hash = hash_local_password(password_salt.as_str(), password.as_str());
+    let (password_salt, password_hash) = hash_local_password_argon2(password.as_str())?;
 
     sqlx::query(
         "INSERT INTO auth_local_credentials
@@ -650,43 +659,49 @@ async fn login_local_user(
         }
     }
 
-    let expected_hash = hash_local_password(credential.password_salt.as_str(), password.as_str());
-    if expected_hash != credential.password_hash {
-        let lockout_started_at = register_local_login_failure(&state, &credential).await?;
-        write_audit_log_best_effort(
-            &state.db,
-            AuditLogWriteInput {
-                actor: username.clone(),
-                action: "auth.local.login".to_string(),
-                target_type: "auth_local_credentials".to_string(),
-                target_id: Some(user.id.to_string()),
-                result: "failed".to_string(),
-                message: Some("invalid local password".to_string()),
-                metadata: json!({}),
-            },
-        )
-        .await;
-        if let Some(locked_until) = lockout_started_at {
+    let mut legacy_password_migration: Option<(String, String)> = None;
+    match verify_local_password(&credential, password.as_str())? {
+        LocalPasswordCheckResult::Verified => {}
+        LocalPasswordCheckResult::VerifiedLegacyNeedsMigration { new_salt, new_hash } => {
+            legacy_password_migration = Some((new_salt, new_hash));
+        }
+        LocalPasswordCheckResult::Invalid => {
+            let lockout_started_at = register_local_login_failure(&state, &credential).await?;
             write_audit_log_best_effort(
                 &state.db,
                 AuditLogWriteInput {
                     actor: username.clone(),
-                    action: "auth.local.lockout.start".to_string(),
+                    action: "auth.local.login".to_string(),
                     target_type: "auth_local_credentials".to_string(),
                     target_id: Some(user.id.to_string()),
-                    result: "success".to_string(),
-                    message: Some(format!(
-                        "lockout started until {}",
-                        locked_until.to_rfc3339()
-                    )),
+                    result: "failed".to_string(),
+                    message: Some("invalid local password".to_string()),
                     metadata: json!({}),
                 },
             )
             .await;
+            if let Some(locked_until) = lockout_started_at {
+                write_audit_log_best_effort(
+                    &state.db,
+                    AuditLogWriteInput {
+                        actor: username.clone(),
+                        action: "auth.local.lockout.start".to_string(),
+                        target_type: "auth_local_credentials".to_string(),
+                        target_id: Some(user.id.to_string()),
+                        result: "success".to_string(),
+                        message: Some(format!(
+                            "lockout started until {}",
+                            locked_until.to_rfc3339()
+                        )),
+                        metadata: json!({}),
+                    },
+                )
+                .await;
+            }
+            return Err(AppError::Forbidden(
+                "local authentication failed: invalid credentials".to_string(),
+            ));
         }
-        return Err(AppError::Forbidden(
-            "local authentication failed: invalid credentials".to_string(),
-        ));
     }
 
     if credential.mfa_enabled {
@@ -736,6 +751,38 @@ async fn login_local_user(
                 "local authentication failed: invalid totp_code".to_string(),
             ));
         }
+    }
+
+    if let Some((new_salt, new_hash)) = legacy_password_migration {
+        sqlx::query(
+            "UPDATE auth_local_credentials
+             SET password_salt = $2,
+                 password_hash = $3,
+                 updated_at = NOW()
+             WHERE user_id = $1",
+        )
+        .bind(user.id)
+        .bind(new_salt)
+        .bind(new_hash)
+        .execute(&state.db)
+        .await?;
+
+        write_audit_log_best_effort(
+            &state.db,
+            AuditLogWriteInput {
+                actor: username.clone(),
+                action: "auth.local.password_hash.migrated".to_string(),
+                target_type: "auth_local_credentials".to_string(),
+                target_id: Some(user.id.to_string()),
+                result: "success".to_string(),
+                message: Some("migrated legacy local password hash to Argon2id".to_string()),
+                metadata: json!({
+                    "from": "sha256",
+                    "to": "argon2id"
+                }),
+            },
+        )
+        .await;
     }
 
     let was_locked = clear_local_login_failures(&state, user.id).await?;
@@ -1754,20 +1801,66 @@ fn validate_local_password_strength(password: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn build_local_password_salt() -> String {
-    Uuid::new_v4().simple().to_string()
-}
-
 fn build_local_totp_secret() -> String {
     Uuid::new_v4().simple().to_string()
 }
 
-fn hash_local_password(salt: &str, password: &str) -> String {
+fn hash_local_password_sha256_legacy(salt: &str, password: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(salt.as_bytes());
     hasher.update(b":");
     hasher.update(password.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn hash_local_password_argon2(password: &str) -> AppResult<(String, String)> {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|_| {
+            AppError::Validation("failed to hash local password with Argon2id".to_string())
+        })?
+        .to_string();
+    Ok((salt.to_string(), password_hash))
+}
+
+fn verify_argon2_password(password_hash: &str, password: &str) -> bool {
+    let parsed = match PasswordHash::new(password_hash) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok()
+}
+
+fn is_argon2_password_hash(password_hash: &str) -> bool {
+    password_hash
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("$argon2")
+}
+
+fn verify_local_password(
+    credential: &LocalCredentialRow,
+    password: &str,
+) -> AppResult<LocalPasswordCheckResult> {
+    if is_argon2_password_hash(credential.password_hash.as_str()) {
+        if verify_argon2_password(credential.password_hash.as_str(), password) {
+            return Ok(LocalPasswordCheckResult::Verified);
+        }
+        return Ok(LocalPasswordCheckResult::Invalid);
+    }
+
+    let expected_hash =
+        hash_local_password_sha256_legacy(credential.password_salt.as_str(), password);
+    if expected_hash != credential.password_hash {
+        return Ok(LocalPasswordCheckResult::Invalid);
+    }
+
+    let (new_salt, new_hash) = hash_local_password_argon2(password)?;
+    Ok(LocalPasswordCheckResult::VerifiedLegacyNeedsMigration { new_salt, new_hash })
 }
 
 async fn register_local_login_failure(
@@ -2078,10 +2171,11 @@ fn normalize_email(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        authenticate_ldap_dev_user, build_ldap_live_user_filter, choose_base_username,
-        compute_totp_code_for_counter, local_session_revoke_count, normalize_ldap_group_value,
-        parse_ldap_group_role_mapping, resolve_ldap_role_keys, validate_ldap_live_config,
-        verify_totp_code,
+        LocalCredentialRow, LocalPasswordCheckResult, authenticate_ldap_dev_user,
+        build_ldap_live_user_filter, choose_base_username, compute_totp_code_for_counter,
+        hash_local_password_argon2, hash_local_password_sha256_legacy, local_session_revoke_count,
+        normalize_ldap_group_value, parse_ldap_group_role_mapping, resolve_ldap_role_keys,
+        validate_ldap_live_config, verify_local_password, verify_totp_code,
     };
     use crate::{error::AppError, state::LdapSettings};
     use chrono::{TimeZone, Utc};
@@ -2290,5 +2384,52 @@ mod tests {
 
         let plain = normalize_ldap_group_value("platform-oncall");
         assert_eq!(plain, "platform-oncall");
+    }
+
+    #[test]
+    fn verifies_argon2_local_password() {
+        let (salt, hash) = hash_local_password_argon2("ChangeMe_12345").expect("hash must work");
+        let credential = LocalCredentialRow {
+            user_id: 1,
+            password_salt: salt,
+            password_hash: hash,
+            mfa_enabled: false,
+            totp_secret: None,
+            failed_attempts: 0,
+            last_failed_at: None,
+            locked_until: None,
+        };
+
+        let ok = verify_local_password(&credential, "ChangeMe_12345").expect("verify should work");
+        assert!(matches!(ok, LocalPasswordCheckResult::Verified));
+
+        let wrong = verify_local_password(&credential, "wrong-pass").expect("verify should work");
+        assert!(matches!(wrong, LocalPasswordCheckResult::Invalid));
+    }
+
+    #[test]
+    fn verifies_legacy_password_and_requests_migration() {
+        let salt = "legacy-salt-1".to_string();
+        let hash = hash_local_password_sha256_legacy(salt.as_str(), "ChangeMe_12345");
+        let credential = LocalCredentialRow {
+            user_id: 1,
+            password_salt: salt,
+            password_hash: hash,
+            mfa_enabled: false,
+            totp_secret: None,
+            failed_attempts: 0,
+            last_failed_at: None,
+            locked_until: None,
+        };
+
+        let result =
+            verify_local_password(&credential, "ChangeMe_12345").expect("verify should work");
+        match result {
+            LocalPasswordCheckResult::VerifiedLegacyNeedsMigration { new_salt, new_hash } => {
+                assert!(!new_salt.is_empty());
+                assert!(new_hash.starts_with("$argon2"));
+            }
+            _ => panic!("legacy hash should require migration"),
+        }
     }
 }

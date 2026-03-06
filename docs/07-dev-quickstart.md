@@ -796,6 +796,7 @@ Notes:
 
 - LDAP login denies when no group-role mapping matches the user groups.
 - Mapping source is `AUTH_LDAP_GROUP_ROLE_MAPPING_JSON`.
+- Local account password hashing uses Argon2id; legacy SHA256 credentials auto-migrate on successful local login.
 
 Break-glass fallback smoke checks:
 

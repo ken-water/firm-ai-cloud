@@ -21,11 +21,13 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
   - `AUTH_LDAP_LIVE_ATTR_GROUPS`
   - `AUTH_LDAP_LIVE_STARTTLS`
   - `AUTH_LDAP_LIVE_TLS_INSECURE_SKIP_VERIFY`
+- Argon2id local password hashing baseline with automatic legacy SHA256 migration on successful local login.
 
 ### Changed
 
 - Local auth hardening integration script now supports optional bearer-token auth mode and safer payload/temp-file handling.
 - Developer quickstart and security operations docs now include LDAP live-mode setup guidance.
+- Developer quickstart and security operations docs now include Argon2id migration and audit verification guidance.
 
 ### Fixed
 
