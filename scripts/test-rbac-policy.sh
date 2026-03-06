@@ -141,6 +141,9 @@ assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/monitoring/sources
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/alerts"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/alerts/policies"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks/policy"
+assert_code 200 "$OPERATOR_USER" PUT "${API_BASE_URL}/api/v1/workflow/playbooks/policy" \
+  "{\"timezone_name\":\"UTC\",\"change_freeze_enabled\":false,\"override_requires_reason\":true,\"maintenance_windows\":[{\"day_of_week\":1,\"start\":\"00:00\",\"end\":\"23:59\"},{\"day_of_week\":2,\"start\":\"00:00\",\"end\":\"23:59\"},{\"day_of_week\":3,\"start\":\"00:00\",\"end\":\"23:59\"},{\"day_of_week\":4,\"start\":\"00:00\",\"end\":\"23:59\"},{\"day_of_week\":5,\"start\":\"00:00\",\"end\":\"23:59\"},{\"day_of_week\":6,\"start\":\"00:00\",\"end\":\"23:59\"},{\"day_of_week\":7,\"start\":\"00:00\",\"end\":\"23:59\"}],\"note\":\"rbac policy update\"}"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/workflow/playbooks/restart-service-safe/dry-run" \
   "{\"asset_ref\":\"rbac-op-asset-${STAMP}\",\"params\":{\"asset_ref\":\"rbac-op-asset-${STAMP}\",\"service_name\":\"nginx\",\"grace_seconds\":30}}"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/alerts/policies" \
@@ -184,6 +187,9 @@ assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/discovery/notif
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/alerts"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/alerts/policies"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks/policy"
+assert_code 403 "$VIEWER_USER" PUT "${API_BASE_URL}/api/v1/workflow/playbooks/policy" \
+  "{\"timezone_name\":\"UTC\"}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/workflow/playbooks/restart-service-safe/dry-run" \
   "{\"asset_ref\":\"rbac-viewer-asset-${STAMP}\",\"params\":{\"asset_ref\":\"rbac-viewer-asset-${STAMP}\",\"service_name\":\"nginx\",\"grace_seconds\":30}}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/alerts/policies" \

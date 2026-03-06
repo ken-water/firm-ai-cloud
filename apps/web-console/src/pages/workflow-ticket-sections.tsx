@@ -29,12 +29,16 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   loadTicketDetail,
   loadTickets,
   loadPlaybookCatalog,
+  loadPlaybookApprovalRequests,
+  loadPlaybookExecutionPolicy,
   loadPlaybookExecutions,
   loadWorkflowLogs,
   loadWorkflowRequests,
   loadWorkflowTemplates,
   loadingPlaybookCatalog,
+  loadingPlaybookApprovals,
   loadingPlaybookExecutions,
+  loadingPlaybookPolicy,
   loadingTicketDetail,
   loadingTickets,
   loadingWorkflowLogs,
@@ -51,20 +55,34 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   playbookCatalog,
   playbookCategoryFilter,
   playbookCategoryOptions,
+  playbookApprovalDecisionNote,
+  playbookApprovalRequestNote,
+  playbookApprovalRequests,
+  playbookApprovalToken,
   playbookConfirmationToken,
   playbookDryRunResponse,
+  playbookExecutionPolicy,
   playbookExecutionResult,
+  approvePlaybookApprovalRequest,
+  approvingPlaybookApprovalId,
   playbookExecutions,
+  playbookMaintenanceOverrideConfirmed,
+  playbookMaintenanceOverrideReason,
   playbookNotice,
   playbookParamsDraft,
   playbookQuery,
+  rejectPlaybookApprovalRequest,
   rejectWorkflowRequest,
+  rejectingPlaybookApprovalId,
   rejectingWorkflowRequestId,
   removeWorkflowStepFromDraft,
+  requestPlaybookApproval,
   runPlaybookDryRun,
   runPlaybookExecute,
+  requestingPlaybookApproval,
   runningPlaybookDryRun,
   runningPlaybookExecute,
+  selectedPlaybookApprovalId,
   selectedPlaybook,
   selectedPlaybookKey,
   selectedPlaybookParamFields,
@@ -72,10 +90,16 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   selectedTicketSummary,
   selectedWorkflowRequest,
   setPlaybookAssetRef,
+  setPlaybookApprovalDecisionNote,
+  setPlaybookApprovalRequestNote,
+  setPlaybookApprovalToken,
   setPlaybookCategoryFilter,
   setPlaybookConfirmationToken,
+  setPlaybookMaintenanceOverrideConfirmed,
+  setPlaybookMaintenanceOverrideReason,
   setPlaybookParamsDraft,
   setPlaybookQuery,
+  setSelectedPlaybookApprovalId,
   setSelectedPlaybookKey,
   setNewTicket,
   setNewWorkflowRequest,
@@ -138,6 +162,23 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   workflowTemplateUsageMax,
   workflowTemplates,
   } = rawProps as any;
+
+  const requiresPlaybookApproval = Boolean(
+    selectedPlaybook
+    && (
+      selectedPlaybook.requires_confirmation
+      || selectedPlaybook.risk_level === "high"
+      || selectedPlaybook.risk_level === "critical"
+    )
+  );
+  const selectedDryRunId = playbookDryRunResponse?.execution?.id ?? null;
+  const approvalRows = (playbookApprovalRequests as any[]).filter((item) => {
+    if (!selectedPlaybookKey) {
+      return true;
+    }
+    return item.playbook_key === selectedPlaybookKey;
+  });
+  const selectedApproval = approvalRows.find((item) => String(item.id) === selectedPlaybookApprovalId) ?? null;
 
   return (
     <>
@@ -687,6 +728,9 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
               <button onClick={() => void loadPlaybookExecutions()} disabled={loadingPlaybookExecutions}>
                 {loadingPlaybookExecutions ? t("cmdb.actions.loading") : t("cmdb.playbooks.actions.refreshExecutions")}
               </button>
+              <button onClick={() => void loadPlaybookApprovalRequests()} disabled={loadingPlaybookApprovals}>
+                {loadingPlaybookApprovals ? t("cmdb.actions.loading") : "Refresh approvals"}
+              </button>
             </div>
           )}
         >
@@ -699,6 +743,78 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
             })}
           </p>
           {!canWriteCmdb && <p className="inline-note">{t("cmdb.playbooks.messages.readOnlyHint")}</p>}
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <strong>Execution policy</strong>
+              <button onClick={() => void loadPlaybookExecutionPolicy()} disabled={loadingPlaybookPolicy}>
+                {loadingPlaybookPolicy ? t("cmdb.actions.loading") : "Refresh policy"}
+              </button>
+            </div>
+            {!playbookExecutionPolicy ? (
+              <p style={{ marginTop: "0.5rem", marginBottom: 0 }}>Policy not loaded.</p>
+            ) : (
+              <>
+                <p className="section-note" style={{ marginTop: "0.4rem", marginBottom: "0.3rem" }}>
+                  timezone={playbookExecutionPolicy.policy.timezone_name} | now=
+                  {new Date(playbookExecutionPolicy.runtime.timezone_now).toLocaleString()} | freeze=
+                  {playbookExecutionPolicy.policy.change_freeze_enabled ? "on" : "off"} | in_window=
+                  {playbookExecutionPolicy.runtime.in_maintenance_window ? "yes" : "no"}
+                </p>
+                {playbookExecutionPolicy.runtime.blocked_reason && (
+                  <p className="inline-note" style={{ marginTop: 0 }}>
+                    blocked_reason={playbookExecutionPolicy.runtime.blocked_reason}
+                    {playbookExecutionPolicy.runtime.next_allowed_at
+                      ? ` | next_allowed_at=${new Date(playbookExecutionPolicy.runtime.next_allowed_at).toLocaleString()}`
+                      : ""}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <strong>High-risk approval queue</strong>
+              <button onClick={() => void loadPlaybookApprovalRequests()} disabled={loadingPlaybookApprovals}>
+                {loadingPlaybookApprovals ? t("cmdb.actions.loading") : "Refresh queue"}
+              </button>
+            </div>
+            {approvalRows.length === 0 ? (
+              <p style={{ marginTop: "0.5rem", marginBottom: 0 }}>No approval request.</p>
+            ) : (
+              <div style={{ overflowX: "auto", marginTop: "0.5rem" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "860px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={cellStyle}>ID</th>
+                      <th style={cellStyle}>Dry-run</th>
+                      <th style={cellStyle}>Status</th>
+                      <th style={cellStyle}>Requester</th>
+                      <th style={cellStyle}>Approver</th>
+                      <th style={cellStyle}>Expires</th>
+                      <th style={cellStyle}>Used</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {approvalRows.slice(0, 20).map((item: any) => (
+                      <tr key={`playbook-approval-row-${item.id}`}>
+                        <td style={cellStyle}>#{item.id}</td>
+                        <td style={cellStyle}>#{item.dry_run_execution_id}</td>
+                        <td style={cellStyle}>
+                          <span className={statusChipClass(item.status)}>{item.status}</span>
+                        </td>
+                        <td style={cellStyle}>{item.requester}</td>
+                        <td style={cellStyle}>{item.approver ?? "-"}</td>
+                        <td style={cellStyle}>{new Date(item.expires_at).toLocaleString()}</td>
+                        <td style={cellStyle}>{item.used_at ? new Date(item.used_at).toLocaleString() : "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
 
           <div className="filter-grid" style={{ marginBottom: "0.75rem" }}>
             <label className="control-field">
@@ -833,17 +949,133 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
                   </div>
                 )}
 
-                {(selectedPlaybook.requires_confirmation
-                  || selectedPlaybook.risk_level === "high"
-                  || selectedPlaybook.risk_level === "critical") && (
-                  <label className="control-field" style={{ marginTop: "0.75rem" }}>
-                    <span>{t("cmdb.playbooks.form.confirmationToken")}</span>
-                    <input
-                      value={playbookConfirmationToken}
-                      onChange={(event) => setPlaybookConfirmationToken(event.target.value)}
-                      placeholder="PBK-XXXXXXX"
-                    />
-                  </label>
+                {requiresPlaybookApproval && (
+                  <>
+                    <div className="detail-panel" style={{ marginTop: "0.75rem" }}>
+                      <strong>Approval flow</strong>
+                      <p className="section-note" style={{ marginTop: "0.45rem", marginBottom: "0.35rem" }}>
+                        Dry-run {selectedDryRunId ? `#${selectedDryRunId}` : "not ready"}.
+                      </p>
+                      <label className="control-field" style={{ marginTop: "0.45rem" }}>
+                        <span>Approval request note</span>
+                        <input
+                          value={playbookApprovalRequestNote}
+                          onChange={(event) => setPlaybookApprovalRequestNote(event.target.value)}
+                          placeholder="Why this high-risk execution is needed"
+                        />
+                      </label>
+                      <div className="toolbar-row" style={{ marginTop: "0.45rem" }}>
+                        <button
+                          onClick={() => void requestPlaybookApproval()}
+                          disabled={!canWriteCmdb || requestingPlaybookApproval || !selectedDryRunId}
+                        >
+                          {requestingPlaybookApproval ? t("cmdb.actions.loading") : "Request approval"}
+                        </button>
+                      </div>
+                      <label className="control-field" style={{ marginTop: "0.45rem" }}>
+                        <span>Select approval request</span>
+                        <select
+                          value={selectedPlaybookApprovalId}
+                          onChange={(event) => {
+                            const nextId = event.target.value;
+                            setSelectedPlaybookApprovalId(nextId);
+                            const next = approvalRows.find((item: any) => String(item.id) === nextId);
+                            setPlaybookApprovalToken(next?.approval_token ?? "");
+                          }}
+                        >
+                          <option value="">Select request</option>
+                          {approvalRows.map((item: any) => (
+                            <option key={`playbook-approval-option-${item.id}`} value={String(item.id)}>
+                              #{item.id} | dry-run #{item.dry_run_execution_id} | {item.status}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="control-field" style={{ marginTop: "0.45rem" }}>
+                        <span>Approval decision note</span>
+                        <input
+                          value={playbookApprovalDecisionNote}
+                          onChange={(event) => setPlaybookApprovalDecisionNote(event.target.value)}
+                          placeholder="Approval/rejection rationale"
+                        />
+                      </label>
+                      <div className="toolbar-row" style={{ marginTop: "0.45rem" }}>
+                        <button
+                          onClick={() => selectedApproval && void approvePlaybookApprovalRequest(selectedApproval.id)}
+                          disabled={
+                            !canWriteCmdb
+                            || !selectedApproval
+                            || selectedApproval.status !== "pending"
+                            || approvingPlaybookApprovalId === selectedApproval.id
+                          }
+                        >
+                          {selectedApproval && approvingPlaybookApprovalId === selectedApproval.id
+                            ? t("cmdb.actions.loading")
+                            : "Approve"}
+                        </button>
+                        <button
+                          onClick={() => selectedApproval && void rejectPlaybookApprovalRequest(selectedApproval.id)}
+                          disabled={
+                            !canWriteCmdb
+                            || !selectedApproval
+                            || selectedApproval.status !== "pending"
+                            || rejectingPlaybookApprovalId === selectedApproval.id
+                          }
+                        >
+                          {selectedApproval && rejectingPlaybookApprovalId === selectedApproval.id
+                            ? t("cmdb.actions.loading")
+                            : "Reject"}
+                        </button>
+                      </div>
+                      {selectedApproval && (
+                        <p className="inline-note" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
+                          status={selectedApproval.status}
+                          {selectedApproval.approver ? ` | approver=${selectedApproval.approver}` : ""}
+                          {selectedApproval.approved_at
+                            ? ` | approved_at=${new Date(selectedApproval.approved_at).toLocaleString()}`
+                            : ""}
+                          {selectedApproval.expires_at
+                            ? ` | expires_at=${new Date(selectedApproval.expires_at).toLocaleString()}`
+                            : ""}
+                        </p>
+                      )}
+                    </div>
+
+                    <label className="control-field" style={{ marginTop: "0.75rem" }}>
+                      <span>{t("cmdb.playbooks.form.confirmationToken")}</span>
+                      <input
+                        value={playbookConfirmationToken}
+                        onChange={(event) => setPlaybookConfirmationToken(event.target.value)}
+                        placeholder="PBK-XXXXXXX"
+                      />
+                    </label>
+                    <label className="control-field" style={{ marginTop: "0.45rem" }}>
+                      <span>Approval token</span>
+                      <input
+                        value={playbookApprovalToken}
+                        onChange={(event) => setPlaybookApprovalToken(event.target.value)}
+                        placeholder="approval token from approver"
+                      />
+                    </label>
+                    <label className="control-field" style={{ marginTop: "0.45rem" }}>
+                      <span>Maintenance override reason (required only when blocked)</span>
+                      <input
+                        value={playbookMaintenanceOverrideReason}
+                        onChange={(event) => setPlaybookMaintenanceOverrideReason(event.target.value)}
+                        placeholder="Emergency reason and risk acceptance"
+                      />
+                    </label>
+                    <label className="control-field" style={{ marginTop: "0.45rem" }}>
+                      <span>Maintenance override confirmation</span>
+                      <select
+                        value={playbookMaintenanceOverrideConfirmed ? "true" : "false"}
+                        onChange={(event) => setPlaybookMaintenanceOverrideConfirmed(event.target.value === "true")}
+                      >
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                  </>
                 )}
 
                 <div className="toolbar-row" style={{ marginTop: "0.75rem" }}>

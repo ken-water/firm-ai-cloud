@@ -6,7 +6,8 @@ use axum::{
     http::HeaderMap,
     routing::get,
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, LocalResult, NaiveTime, TimeZone, Timelike, Utc};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value, json};
 use sqlx::{FromRow, Postgres, QueryBuilder};
@@ -34,15 +35,39 @@ const MAX_STEP_TEXT_LEN: usize = 256;
 const MAX_EXECUTION_LIMIT: u32 = 200;
 const DEFAULT_EXECUTION_LIMIT: u32 = 50;
 const CONFIRMATION_TTL_MINUTES: i64 = 120;
+const MAX_POLICY_TIMEZONE_LEN: usize = 64;
+const MAX_POLICY_NOTE_LEN: usize = 1024;
+const MAX_WINDOW_LABEL_LEN: usize = 128;
+const MAX_OVERRIDE_REASON_LEN: usize = 1024;
+const MAX_APPROVAL_NOTE_LEN: usize = 1024;
+const PLAYBOOK_POLICY_DEFAULT_KEY: &str = "global";
+const APPROVAL_TTL_MINUTES: i64 = 120;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/playbooks", get(list_playbooks))
+        .route(
+            "/playbooks/policy",
+            get(get_playbook_execution_policy).put(update_playbook_execution_policy),
+        )
+        .route("/playbooks/approvals", get(list_playbook_approval_requests))
+        .route(
+            "/playbooks/approvals/{id}/approve",
+            axum::routing::post(approve_playbook_approval_request),
+        )
+        .route(
+            "/playbooks/approvals/{id}/reject",
+            axum::routing::post(reject_playbook_approval_request),
+        )
         .route("/playbooks/executions", get(list_playbook_executions))
         .route("/playbooks/executions/{id}", get(get_playbook_execution))
         .route(
             "/playbooks/executions/{id}/replay",
             axum::routing::post(replay_playbook_execution),
+        )
+        .route(
+            "/playbooks/{key}/approval-request",
+            axum::routing::post(request_playbook_approval),
         )
         .route("/playbooks/{key}", get(get_playbook_detail))
         .route(
@@ -182,6 +207,75 @@ struct ReplayExecutionResponse {
     note: String,
 }
 
+#[derive(Debug, Serialize, FromRow)]
+struct PlaybookApprovalRequestRecord {
+    id: i64,
+    dry_run_execution_id: i64,
+    playbook_id: i64,
+    playbook_key: String,
+    requester: String,
+    request_note: Option<String>,
+    status: String,
+    approver: Option<String>,
+    approver_note: Option<String>,
+    approval_token: Option<String>,
+    approved_at: Option<DateTime<Utc>>,
+    expires_at: DateTime<Utc>,
+    used_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListPlaybookApprovalRequestsResponse {
+    items: Vec<PlaybookApprovalRequestRecord>,
+    total: i64,
+    limit: u32,
+    offset: u32,
+}
+
+#[derive(Debug, Serialize, Clone, Deserialize)]
+struct PlaybookMaintenanceWindow {
+    day_of_week: u8,
+    start: String,
+    end: String,
+    label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PlaybookExecutionPolicyView {
+    policy_key: String,
+    timezone_name: String,
+    maintenance_windows: Vec<PlaybookMaintenanceWindow>,
+    change_freeze_enabled: bool,
+    override_requires_reason: bool,
+    updated_by: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct PlaybookExecutionPolicyRuntime {
+    timezone_now: String,
+    in_maintenance_window: bool,
+    next_allowed_at: Option<String>,
+    blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PlaybookExecutionPolicyResponse {
+    policy: PlaybookExecutionPolicyView,
+    runtime: PlaybookExecutionPolicyRuntime,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdatePlaybookExecutionPolicyRequest {
+    timezone_name: Option<String>,
+    maintenance_windows: Option<Vec<PlaybookMaintenanceWindow>>,
+    change_freeze_enabled: Option<bool>,
+    override_requires_reason: Option<bool>,
+    note: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Default)]
 struct ListPlaybooksQuery {
     category: Option<String>,
@@ -203,6 +297,16 @@ struct PlaybookExecutionListQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct PlaybookApprovalRequestListQuery {
+    playbook_key: Option<String>,
+    status: Option<String>,
+    requester: Option<String>,
+    approver: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
 #[derive(Debug, Deserialize)]
 struct PlaybookRunRequest {
     params: Option<Value>,
@@ -217,8 +321,23 @@ struct PlaybookExecuteRequest {
     asset_ref: Option<String>,
     dry_run_id: Option<i64>,
     confirmation_token: Option<String>,
+    approval_id: Option<i64>,
+    approval_token: Option<String>,
+    maintenance_override_reason: Option<String>,
+    maintenance_override_confirmed: Option<bool>,
     related_ticket_id: Option<i64>,
     related_alert_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaybookApprovalRequestInput {
+    dry_run_id: i64,
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaybookApprovalDecisionRequest {
+    note: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,6 +345,10 @@ struct ReplayExecutionRequest {
     mode: Option<String>,
     dry_run_id: Option<i64>,
     confirmation_token: Option<String>,
+    approval_id: Option<i64>,
+    approval_token: Option<String>,
+    maintenance_override_reason: Option<String>,
+    maintenance_override_confirmed: Option<bool>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -256,6 +379,59 @@ struct DryRunConfirmationRecord {
     expires_at: Option<DateTime<Utc>>,
     mode: String,
     status: String,
+}
+
+#[derive(Debug, FromRow)]
+struct DryRunApprovalSourceRecord {
+    id: i64,
+    playbook_id: i64,
+    playbook_key: String,
+    actor: String,
+    mode: String,
+    status: String,
+    confirmation_required: bool,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, FromRow)]
+struct ApprovalConsumeRecord {
+    id: i64,
+    dry_run_execution_id: i64,
+    playbook_id: i64,
+    requester: String,
+    status: String,
+    approver: Option<String>,
+    approval_token: Option<String>,
+    expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct PlaybookExecutionPolicyRow {
+    policy_key: String,
+    timezone_name: String,
+    maintenance_windows: Value,
+    change_freeze_enabled: bool,
+    override_requires_reason: bool,
+    updated_by: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct PlaybookExecutionPolicy {
+    policy_key: String,
+    timezone_name: String,
+    timezone: Tz,
+    maintenance_windows: Vec<PlaybookMaintenanceWindow>,
+    change_freeze_enabled: bool,
+    override_requires_reason: bool,
+    updated_by: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct MaintenanceOverrideInput {
+    reason: Option<String>,
+    confirmed: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -391,6 +567,407 @@ async fn get_playbook_detail(
         created_at: playbook.created_at,
         updated_at: playbook.updated_at,
     }))
+}
+
+async fn get_playbook_execution_policy(
+    State(state): State<AppState>,
+) -> AppResult<Json<PlaybookExecutionPolicyResponse>> {
+    let policy = load_or_init_playbook_execution_policy(&state.db).await?;
+    Ok(Json(build_policy_response(&policy, Utc::now())))
+}
+
+async fn update_playbook_execution_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdatePlaybookExecutionPolicyRequest>,
+) -> AppResult<Json<PlaybookExecutionPolicyResponse>> {
+    let actor = resolve_actor(&headers);
+    let current = load_or_init_playbook_execution_policy(&state.db).await?;
+
+    let timezone_name = payload
+        .timezone_name
+        .map(normalize_timezone_name)
+        .transpose()?
+        .unwrap_or_else(|| current.timezone_name.clone());
+    let timezone = parse_timezone(timezone_name.as_str())?;
+
+    let maintenance_windows = payload
+        .maintenance_windows
+        .map(normalize_maintenance_windows)
+        .transpose()?
+        .unwrap_or_else(|| current.maintenance_windows.clone());
+    let change_freeze_enabled = payload
+        .change_freeze_enabled
+        .unwrap_or(current.change_freeze_enabled);
+    let override_requires_reason = payload
+        .override_requires_reason
+        .unwrap_or(current.override_requires_reason);
+    let note = trim_optional(payload.note, MAX_POLICY_NOTE_LEN);
+
+    let updated_row: PlaybookExecutionPolicyRow = sqlx::query_as(
+        "UPDATE workflow_playbook_execution_policies
+         SET timezone_name = $2,
+             maintenance_windows = $3,
+             change_freeze_enabled = $4,
+             override_requires_reason = $5,
+             updated_by = $6,
+             updated_at = NOW()
+         WHERE policy_key = $1
+         RETURNING policy_key, timezone_name, maintenance_windows, change_freeze_enabled,
+                   override_requires_reason, updated_by, updated_at",
+    )
+    .bind(PLAYBOOK_POLICY_DEFAULT_KEY)
+    .bind(&timezone_name)
+    .bind(serde_json::to_value(&maintenance_windows).map_err(|err| {
+        AppError::Validation(format!(
+            "failed to serialize maintenance_windows policy update: {err}"
+        ))
+    })?)
+    .bind(change_freeze_enabled)
+    .bind(override_requires_reason)
+    .bind(&actor)
+    .fetch_one(&state.db)
+    .await?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "workflow.playbook.policy.update",
+        "workflow_playbook_policy",
+        Some(updated_row.policy_key.clone()),
+        "success",
+        note.clone(),
+        json!({
+            "timezone_name": timezone_name,
+            "maintenance_window_count": maintenance_windows.len(),
+            "change_freeze_enabled": change_freeze_enabled,
+            "override_requires_reason": override_requires_reason,
+        }),
+    )
+    .await;
+
+    let updated = parse_playbook_execution_policy_row(updated_row, Some(timezone))?;
+    Ok(Json(build_policy_response(&updated, Utc::now())))
+}
+
+async fn list_playbook_approval_requests(
+    State(state): State<AppState>,
+    Query(query): Query<PlaybookApprovalRequestListQuery>,
+) -> AppResult<Json<ListPlaybookApprovalRequestsResponse>> {
+    let playbook_key = query.playbook_key.map(normalize_playbook_key).transpose()?;
+    let status = normalize_optional_approval_status(query.status)?;
+    let requester = trim_optional(query.requester, MAX_ACTOR_LEN);
+    let approver = trim_optional(query.approver, MAX_ACTOR_LEN);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_EXECUTION_LIMIT)
+        .clamp(1, MAX_EXECUTION_LIMIT) as i64;
+    let offset = query.offset.unwrap_or(0) as i64;
+
+    let mut count_builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT COUNT(*) FROM workflow_playbook_approval_requests a WHERE 1=1");
+    append_approval_filters(
+        &mut count_builder,
+        playbook_key.clone(),
+        status.clone(),
+        requester.clone(),
+        approver.clone(),
+    );
+    let total: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, dry_run_execution_id, playbook_id, playbook_key, requester, request_note,
+                status, approver, approver_note, approval_token, approved_at, expires_at, used_at,
+                created_at, updated_at
+         FROM workflow_playbook_approval_requests a
+         WHERE 1=1",
+    );
+    append_approval_filters(
+        &mut list_builder,
+        playbook_key,
+        status,
+        requester,
+        approver,
+    );
+    list_builder
+        .push(" ORDER BY a.created_at DESC, a.id DESC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+
+    let items: Vec<PlaybookApprovalRequestRecord> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
+
+    Ok(Json(ListPlaybookApprovalRequestsResponse {
+        items,
+        total,
+        limit: limit as u32,
+        offset: offset as u32,
+    }))
+}
+
+async fn request_playbook_approval(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+    Json(payload): Json<PlaybookApprovalRequestInput>,
+) -> AppResult<Json<PlaybookApprovalRequestRecord>> {
+    let actor = resolve_actor(&headers);
+    let normalized_key = normalize_playbook_key(key)?;
+    let playbook = load_playbook_by_key(&state.db, &normalized_key).await?;
+    ensure_playbook_enabled(&playbook)?;
+    if !playbook_requires_confirmation(&playbook) {
+        return Err(AppError::Validation(
+            "approval request is only required for high-risk playbooks".to_string(),
+        ));
+    }
+
+    if payload.dry_run_id <= 0 {
+        return Err(AppError::Validation(
+            "dry_run_id must be a positive integer".to_string(),
+        ));
+    }
+
+    let dry_run: Option<DryRunApprovalSourceRecord> = sqlx::query_as(
+        "SELECT id, playbook_id, playbook_key, actor, mode, status, confirmation_required, expires_at
+         FROM workflow_playbook_executions
+         WHERE id = $1",
+    )
+    .bind(payload.dry_run_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let dry_run = dry_run.ok_or_else(|| {
+        AppError::Validation(format!(
+            "dry-run execution {} not found",
+            payload.dry_run_id
+        ))
+    })?;
+
+    if dry_run.mode != "dry_run" {
+        return Err(AppError::Validation(format!(
+            "execution {} is not a dry-run record",
+            dry_run.id
+        )));
+    }
+    if dry_run.playbook_id != playbook.id || dry_run.playbook_key != playbook.key {
+        return Err(AppError::Validation(
+            "dry-run execution belongs to another playbook".to_string(),
+        ));
+    }
+    if !dry_run.actor.eq_ignore_ascii_case(actor.as_str()) {
+        return Err(AppError::Forbidden(
+            "only the dry-run requester can open approval request".to_string(),
+        ));
+    }
+    if !dry_run.confirmation_required {
+        return Err(AppError::Validation(
+            "dry-run does not require high-risk approval".to_string(),
+        ));
+    }
+    if !matches!(dry_run.status.as_str(), "planned" | "succeeded") {
+        return Err(AppError::Validation(format!(
+            "dry-run status '{}' cannot open approval request",
+            dry_run.status
+        )));
+    }
+
+    let now = Utc::now();
+    let dry_run_expires_at = dry_run.expires_at.unwrap_or(now + Duration::minutes(APPROVAL_TTL_MINUTES));
+    if dry_run_expires_at <= now {
+        return Err(AppError::Validation(
+            "dry-run has expired; create a new dry-run before requesting approval".to_string(),
+        ));
+    }
+
+    if let Some(active) = load_active_playbook_approval_by_dry_run(&state.db, dry_run.id).await? {
+        if active.expires_at <= now {
+            expire_playbook_approval_request(&state.db, active.id).await?;
+        } else {
+            return Ok(Json(active));
+        }
+    }
+
+    let note = trim_optional(payload.note, MAX_APPROVAL_NOTE_LEN);
+    let expires_at = std::cmp::min(dry_run_expires_at, now + Duration::minutes(APPROVAL_TTL_MINUTES));
+    let item: PlaybookApprovalRequestRecord = sqlx::query_as(
+        "INSERT INTO workflow_playbook_approval_requests (
+            dry_run_execution_id, playbook_id, playbook_key, requester, request_note, status, expires_at
+         )
+         VALUES ($1, $2, $3, $4, $5, 'pending', $6)
+         RETURNING id, dry_run_execution_id, playbook_id, playbook_key, requester, request_note,
+                   status, approver, approver_note, approval_token, approved_at, expires_at, used_at,
+                   created_at, updated_at",
+    )
+    .bind(dry_run.id)
+    .bind(playbook.id)
+    .bind(playbook.key.clone())
+    .bind(actor.clone())
+    .bind(note.clone())
+    .bind(expires_at)
+    .fetch_one(&state.db)
+    .await?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "workflow.playbook.approval.request",
+        "workflow_playbook_approval_request",
+        Some(item.id.to_string()),
+        "success",
+        note,
+        json!({
+            "playbook_key": playbook.key,
+            "dry_run_execution_id": dry_run.id,
+            "expires_at": expires_at.to_rfc3339(),
+        }),
+    )
+    .await;
+
+    Ok(Json(item))
+}
+
+async fn approve_playbook_approval_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(payload): Json<PlaybookApprovalDecisionRequest>,
+) -> AppResult<Json<PlaybookApprovalRequestRecord>> {
+    let actor = resolve_actor(&headers);
+    let note = trim_optional(payload.note, MAX_APPROVAL_NOTE_LEN);
+    let current = load_playbook_approval_request(&state.db, id).await?;
+
+    if current.requester.eq_ignore_ascii_case(actor.as_str()) {
+        write_from_headers_best_effort(
+            &state.db,
+            &headers,
+            "workflow.playbook.approval.approve",
+            "workflow_playbook_approval_request",
+            Some(id.to_string()),
+            "failed",
+            Some("self-approval is not allowed".to_string()),
+            json!({
+                "requester": current.requester,
+                "actor": actor,
+                "reason": "self_approval_forbidden",
+            }),
+        )
+        .await;
+        return Err(AppError::Forbidden(
+            "self-approval is not allowed for high-risk playbook execution".to_string(),
+        ));
+    }
+    if current.status != "pending" {
+        return Err(AppError::Validation(format!(
+            "approval request {} status '{}' cannot be approved",
+            id, current.status
+        )));
+    }
+    if current.expires_at <= Utc::now() {
+        expire_playbook_approval_request(&state.db, id).await?;
+        return Err(AppError::Validation(
+            "approval request has expired and cannot be approved".to_string(),
+        ));
+    }
+
+    let token = generate_approval_token();
+    let updated: PlaybookApprovalRequestRecord = sqlx::query_as(
+        "UPDATE workflow_playbook_approval_requests
+         SET status = 'approved',
+             approver = $2,
+             approver_note = $3,
+             approval_token = $4,
+             approved_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, dry_run_execution_id, playbook_id, playbook_key, requester, request_note,
+                   status, approver, approver_note, approval_token, approved_at, expires_at, used_at,
+                   created_at, updated_at",
+    )
+    .bind(id)
+    .bind(actor.clone())
+    .bind(note.clone())
+    .bind(token)
+    .fetch_one(&state.db)
+    .await?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "workflow.playbook.approval.approve",
+        "workflow_playbook_approval_request",
+        Some(id.to_string()),
+        "success",
+        note,
+        json!({
+            "requester": current.requester,
+            "dry_run_execution_id": current.dry_run_execution_id,
+        }),
+    )
+    .await;
+
+    Ok(Json(updated))
+}
+
+async fn reject_playbook_approval_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(payload): Json<PlaybookApprovalDecisionRequest>,
+) -> AppResult<Json<PlaybookApprovalRequestRecord>> {
+    let actor = resolve_actor(&headers);
+    let note = trim_optional(payload.note, MAX_APPROVAL_NOTE_LEN);
+    let current = load_playbook_approval_request(&state.db, id).await?;
+    if current.status != "pending" {
+        return Err(AppError::Validation(format!(
+            "approval request {} status '{}' cannot be rejected",
+            id, current.status
+        )));
+    }
+    if current.expires_at <= Utc::now() {
+        expire_playbook_approval_request(&state.db, id).await?;
+        return Err(AppError::Validation(
+            "approval request has expired and cannot be rejected".to_string(),
+        ));
+    }
+
+    let updated: PlaybookApprovalRequestRecord = sqlx::query_as(
+        "UPDATE workflow_playbook_approval_requests
+         SET status = 'rejected',
+             approver = $2,
+             approver_note = $3,
+             approval_token = NULL,
+             approved_at = NULL,
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, dry_run_execution_id, playbook_id, playbook_key, requester, request_note,
+                   status, approver, approver_note, approval_token, approved_at, expires_at, used_at,
+                   created_at, updated_at",
+    )
+    .bind(id)
+    .bind(actor.clone())
+    .bind(note.clone())
+    .fetch_one(&state.db)
+    .await?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "workflow.playbook.approval.reject",
+        "workflow_playbook_approval_request",
+        Some(id.to_string()),
+        "success",
+        note,
+        json!({
+            "requester": current.requester,
+            "dry_run_execution_id": current.dry_run_execution_id,
+        }),
+    )
+    .await;
+
+    Ok(Json(updated))
 }
 
 async fn dry_run_playbook(
@@ -537,8 +1114,31 @@ async fn execute_playbook(
         normalize_optional_positive_id(payload.related_alert_id, "related_alert_id")?;
     let planned_steps = parse_execution_plan_steps(playbook.execution_plan.clone())?;
 
+    let override_input = MaintenanceOverrideInput {
+        reason: trim_optional(payload.maintenance_override_reason, MAX_OVERRIDE_REASON_LEN),
+        confirmed: payload.maintenance_override_confirmed.unwrap_or(false),
+    };
+    enforce_playbook_execution_policy(&state, &headers, &playbook, actor.as_str(), override_input)
+        .await?;
+
     let confirmation_required = playbook_requires_confirmation(&playbook);
     if confirmation_required {
+        let approval_id = payload.approval_id.ok_or_else(|| {
+            AppError::Validation(
+                "approval_id is required for high-risk playbook execution".to_string(),
+            )
+        })?;
+        let approval_token = required_trimmed_approval_token(payload.approval_token)?;
+        verify_and_consume_approval(
+            &state.db,
+            approval_id,
+            payload.dry_run_id,
+            playbook.id,
+            &actor,
+            &approval_token,
+        )
+        .await?;
+
         let dry_run_id = payload.dry_run_id.ok_or_else(|| {
             AppError::Validation(
                 "dry_run_id is required for high-risk playbook execution".to_string(),
@@ -754,6 +1354,10 @@ async fn replay_playbook_execution(
                 asset_ref: source.asset_ref.clone(),
                 dry_run_id: payload.dry_run_id,
                 confirmation_token: payload.confirmation_token,
+                approval_id: payload.approval_id,
+                approval_token: payload.approval_token,
+                maintenance_override_reason: payload.maintenance_override_reason,
+                maintenance_override_confirmed: payload.maintenance_override_confirmed,
                 related_ticket_id: source.related_ticket_id,
                 related_alert_id: source.related_alert_id,
             };
@@ -892,8 +1496,31 @@ async fn run_replay_execute(
         normalize_optional_positive_id(payload.related_alert_id, "related_alert_id")?;
     let planned_steps = parse_execution_plan_steps(playbook.execution_plan.clone())?;
 
+    let override_input = MaintenanceOverrideInput {
+        reason: trim_optional(payload.maintenance_override_reason, MAX_OVERRIDE_REASON_LEN),
+        confirmed: payload.maintenance_override_confirmed.unwrap_or(false),
+    };
+    enforce_playbook_execution_policy(state, headers, playbook, actor.as_str(), override_input)
+        .await?;
+
     let confirmation_required = playbook_requires_confirmation(playbook);
     if confirmation_required {
+        let approval_id = payload.approval_id.ok_or_else(|| {
+            AppError::Validation(
+                "approval_id is required for high-risk playbook replay execution".to_string(),
+            )
+        })?;
+        let approval_token = required_trimmed_approval_token(payload.approval_token)?;
+        verify_and_consume_approval(
+            &state.db,
+            approval_id,
+            payload.dry_run_id,
+            playbook.id,
+            &actor,
+            &approval_token,
+        )
+        .await?;
+
         let dry_run_id = payload.dry_run_id.ok_or_else(|| {
             AppError::Validation(
                 "dry_run_id is required for high-risk playbook replay execution".to_string(),
@@ -1038,6 +1665,417 @@ async fn load_playbook_execution_detail(
     item.ok_or_else(|| AppError::NotFound(format!("playbook execution {id} not found")))
 }
 
+async fn load_playbook_approval_request(
+    db: &sqlx::PgPool,
+    id: i64,
+) -> AppResult<PlaybookApprovalRequestRecord> {
+    let item: Option<PlaybookApprovalRequestRecord> = sqlx::query_as(
+        "SELECT id, dry_run_execution_id, playbook_id, playbook_key, requester, request_note,
+                status, approver, approver_note, approval_token, approved_at, expires_at, used_at,
+                created_at, updated_at
+         FROM workflow_playbook_approval_requests
+         WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+
+    item.ok_or_else(|| AppError::NotFound(format!("approval request {id} not found")))
+}
+
+async fn load_active_playbook_approval_by_dry_run(
+    db: &sqlx::PgPool,
+    dry_run_id: i64,
+) -> AppResult<Option<PlaybookApprovalRequestRecord>> {
+    sqlx::query_as(
+        "SELECT id, dry_run_execution_id, playbook_id, playbook_key, requester, request_note,
+                status, approver, approver_note, approval_token, approved_at, expires_at, used_at,
+                created_at, updated_at
+         FROM workflow_playbook_approval_requests
+         WHERE dry_run_execution_id = $1
+           AND status IN ('pending', 'approved')
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(dry_run_id)
+    .fetch_optional(db)
+    .await
+    .map_err(AppError::from)
+}
+
+async fn expire_playbook_approval_request(db: &sqlx::PgPool, id: i64) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE workflow_playbook_approval_requests
+         SET status = 'expired',
+             updated_at = NOW()
+         WHERE id = $1
+           AND status IN ('pending', 'approved')",
+    )
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+fn build_policy_response(
+    policy: &PlaybookExecutionPolicy,
+    now_utc: DateTime<Utc>,
+) -> PlaybookExecutionPolicyResponse {
+    let runtime = evaluate_policy_runtime(policy, now_utc);
+    PlaybookExecutionPolicyResponse {
+        policy: PlaybookExecutionPolicyView {
+            policy_key: policy.policy_key.clone(),
+            timezone_name: policy.timezone_name.clone(),
+            maintenance_windows: policy.maintenance_windows.clone(),
+            change_freeze_enabled: policy.change_freeze_enabled,
+            override_requires_reason: policy.override_requires_reason,
+            updated_by: policy.updated_by.clone(),
+            updated_at: policy.updated_at,
+        },
+        runtime,
+    }
+}
+
+async fn load_or_init_playbook_execution_policy(
+    db: &sqlx::PgPool,
+) -> AppResult<PlaybookExecutionPolicy> {
+    let existing: Option<PlaybookExecutionPolicyRow> = sqlx::query_as(
+        "SELECT policy_key,
+                timezone_name,
+                maintenance_windows,
+                change_freeze_enabled,
+                override_requires_reason,
+                updated_by,
+                updated_at
+         FROM workflow_playbook_execution_policies
+         WHERE policy_key = $1
+         LIMIT 1",
+    )
+    .bind(PLAYBOOK_POLICY_DEFAULT_KEY)
+    .fetch_optional(db)
+    .await?;
+
+    if let Some(row) = existing {
+        return parse_playbook_execution_policy_row(row, None);
+    }
+
+    let default_windows = default_maintenance_windows();
+    let inserted: PlaybookExecutionPolicyRow = sqlx::query_as(
+        "INSERT INTO workflow_playbook_execution_policies (
+            policy_key,
+            timezone_name,
+            maintenance_windows,
+            change_freeze_enabled,
+            override_requires_reason,
+            updated_by
+         )
+         VALUES ($1, 'UTC', $2, FALSE, TRUE, 'system')
+         RETURNING policy_key, timezone_name, maintenance_windows, change_freeze_enabled,
+                   override_requires_reason, updated_by, updated_at",
+    )
+    .bind(PLAYBOOK_POLICY_DEFAULT_KEY)
+    .bind(serde_json::to_value(&default_windows).map_err(|err| {
+        AppError::Validation(format!(
+            "failed to serialize default maintenance windows: {err}"
+        ))
+    })?)
+    .fetch_one(db)
+    .await?;
+
+    parse_playbook_execution_policy_row(inserted, None)
+}
+
+fn parse_playbook_execution_policy_row(
+    row: PlaybookExecutionPolicyRow,
+    timezone_override: Option<Tz>,
+) -> AppResult<PlaybookExecutionPolicy> {
+    let timezone_name = normalize_timezone_name(row.timezone_name)?;
+    let timezone = if let Some(value) = timezone_override {
+        value
+    } else {
+        parse_timezone(timezone_name.as_str())?
+    };
+    let maintenance_windows = parse_maintenance_windows_value(row.maintenance_windows)?;
+
+    Ok(PlaybookExecutionPolicy {
+        policy_key: row.policy_key,
+        timezone_name,
+        timezone,
+        maintenance_windows,
+        change_freeze_enabled: row.change_freeze_enabled,
+        override_requires_reason: row.override_requires_reason,
+        updated_by: row.updated_by,
+        updated_at: row.updated_at,
+    })
+}
+
+fn default_maintenance_windows() -> Vec<PlaybookMaintenanceWindow> {
+    (1u8..=7u8)
+        .map(|day| PlaybookMaintenanceWindow {
+            day_of_week: day,
+            start: "00:00".to_string(),
+            end: "23:59".to_string(),
+            label: Some("full-day".to_string()),
+        })
+        .collect()
+}
+
+fn parse_timezone(value: &str) -> AppResult<Tz> {
+    value.parse::<Tz>().map_err(|_| {
+        AppError::Validation(format!(
+            "timezone_name '{value}' is invalid (example: UTC, Asia/Shanghai, America/New_York)"
+        ))
+    })
+}
+
+fn normalize_timezone_name(value: String) -> AppResult<String> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(AppError::Validation(
+            "timezone_name cannot be empty".to_string(),
+        ));
+    }
+    if normalized.chars().count() > MAX_POLICY_TIMEZONE_LEN {
+        return Err(AppError::Validation(format!(
+            "timezone_name length must be <= {MAX_POLICY_TIMEZONE_LEN}"
+        )));
+    }
+    Ok(normalized.to_string())
+}
+
+fn parse_maintenance_windows_value(value: Value) -> AppResult<Vec<PlaybookMaintenanceWindow>> {
+    let windows: Vec<PlaybookMaintenanceWindow> = serde_json::from_value(value).map_err(|err| {
+        AppError::Validation(format!("maintenance_windows is invalid JSON structure: {err}"))
+    })?;
+    normalize_maintenance_windows(windows)
+}
+
+fn normalize_maintenance_windows(
+    windows: Vec<PlaybookMaintenanceWindow>,
+) -> AppResult<Vec<PlaybookMaintenanceWindow>> {
+    if windows.is_empty() {
+        return Err(AppError::Validation(
+            "maintenance_windows must include at least one window".to_string(),
+        ));
+    }
+    if windows.len() > 84 {
+        return Err(AppError::Validation(
+            "maintenance_windows count must be <= 84".to_string(),
+        ));
+    }
+
+    let mut normalized = Vec::with_capacity(windows.len());
+    for window in windows {
+        if !(1..=7).contains(&window.day_of_week) {
+            return Err(AppError::Validation(
+                "maintenance window day_of_week must be in [1,7] where Monday=1".to_string(),
+            ));
+        }
+
+        let start = normalize_hhmm(window.start.as_str(), "start")?;
+        let end = normalize_hhmm(window.end.as_str(), "end")?;
+        let start_time = parse_hhmm(start.as_str()).map_err(|_| {
+            AppError::Validation("maintenance window start must use HH:MM format".to_string())
+        })?;
+        let end_time = parse_hhmm(end.as_str()).map_err(|_| {
+            AppError::Validation("maintenance window end must use HH:MM format".to_string())
+        })?;
+        if start_time >= end_time {
+            return Err(AppError::Validation(format!(
+                "maintenance window start '{}' must be earlier than end '{}'",
+                start, end
+            )));
+        }
+
+        let label = window
+            .label
+            .and_then(|value| trim_optional(Some(value), MAX_WINDOW_LABEL_LEN));
+        normalized.push(PlaybookMaintenanceWindow {
+            day_of_week: window.day_of_week,
+            start,
+            end,
+            label,
+        });
+    }
+
+    normalized.sort_by(|left, right| {
+        left.day_of_week
+            .cmp(&right.day_of_week)
+            .then_with(|| left.start.cmp(&right.start))
+            .then_with(|| left.end.cmp(&right.end))
+    });
+    Ok(normalized)
+}
+
+fn normalize_hhmm(value: &str, field: &str) -> AppResult<String> {
+    let trimmed = value.trim();
+    let parsed = parse_hhmm(trimmed).map_err(|_| {
+        AppError::Validation(format!(
+            "maintenance window {field} must use HH:MM 24h format"
+        ))
+    })?;
+    Ok(format!(
+        "{:02}:{:02}",
+        parsed.hour(),
+        parsed.minute()
+    ))
+}
+
+fn parse_hhmm(value: &str) -> Result<NaiveTime, chrono::ParseError> {
+    NaiveTime::parse_from_str(value, "%H:%M")
+}
+
+fn evaluate_policy_runtime(
+    policy: &PlaybookExecutionPolicy,
+    now_utc: DateTime<Utc>,
+) -> PlaybookExecutionPolicyRuntime {
+    let now_local = now_utc.with_timezone(&policy.timezone);
+    let in_maintenance_window = is_in_maintenance_window(policy, now_utc);
+    let next_allowed_at = next_allowed_at_utc(policy, now_utc).map(|value| value.to_rfc3339());
+
+    let blocked_reason = if policy.change_freeze_enabled {
+        Some("change-freeze is enabled".to_string())
+    } else if !in_maintenance_window {
+        Some("outside configured maintenance windows".to_string())
+    } else {
+        None
+    };
+
+    PlaybookExecutionPolicyRuntime {
+        timezone_now: now_local.to_rfc3339(),
+        in_maintenance_window,
+        next_allowed_at,
+        blocked_reason,
+    }
+}
+
+fn is_in_maintenance_window(policy: &PlaybookExecutionPolicy, now_utc: DateTime<Utc>) -> bool {
+    if policy.maintenance_windows.is_empty() {
+        return false;
+    }
+
+    let now_local = now_utc.with_timezone(&policy.timezone);
+    let day_of_week = now_local.weekday().number_from_monday() as u8;
+    let current_time = now_local.time();
+
+    policy.maintenance_windows.iter().any(|window| {
+        if window.day_of_week != day_of_week {
+            return false;
+        }
+
+        let start = match parse_hhmm(window.start.as_str()) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        let end = match parse_hhmm(window.end.as_str()) {
+            Ok(value) => value,
+            Err(_) => return false,
+        };
+        current_time >= start && current_time < end
+    })
+}
+
+fn next_allowed_at_utc(policy: &PlaybookExecutionPolicy, now_utc: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    if policy.maintenance_windows.is_empty() {
+        return None;
+    }
+
+    let now_local = now_utc.with_timezone(&policy.timezone);
+    let now_naive = now_local.naive_local();
+
+    for day_offset in 0i64..14i64 {
+        let candidate_date = now_naive.date() + Duration::days(day_offset);
+        let weekday = candidate_date.weekday().number_from_monday() as u8;
+
+        for window in policy
+            .maintenance_windows
+            .iter()
+            .filter(|item| item.day_of_week == weekday)
+        {
+            let start = match parse_hhmm(window.start.as_str()) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let candidate_naive = candidate_date.and_time(start);
+            if day_offset == 0 && candidate_naive <= now_naive {
+                continue;
+            }
+
+            let candidate_local = match policy.timezone.from_local_datetime(&candidate_naive) {
+                LocalResult::Single(value) => value,
+                LocalResult::Ambiguous(earliest, _) => earliest,
+                LocalResult::None => continue,
+            };
+            return Some(candidate_local.with_timezone(&Utc));
+        }
+    }
+
+    None
+}
+
+async fn enforce_playbook_execution_policy(
+    state: &AppState,
+    headers: &HeaderMap,
+    playbook: &PlaybookRecord,
+    actor: &str,
+    override_input: MaintenanceOverrideInput,
+) -> AppResult<()> {
+    if !playbook_requires_confirmation(playbook) {
+        return Ok(());
+    }
+
+    let policy = load_or_init_playbook_execution_policy(&state.db).await?;
+    let runtime = evaluate_policy_runtime(&policy, Utc::now());
+
+    if runtime.blocked_reason.is_none() {
+        return Ok(());
+    }
+
+    if override_input.confirmed {
+        let reason = override_input
+            .reason
+            .clone()
+            .filter(|value| !value.trim().is_empty());
+        if policy.override_requires_reason && reason.is_none() {
+            return Err(AppError::Validation(
+                "maintenance_override_reason is required when override is requested".to_string(),
+            ));
+        }
+
+        write_from_headers_best_effort(
+            &state.db,
+            headers,
+            "workflow.playbook.policy.override",
+            "workflow_playbook",
+            Some(playbook.key.clone()),
+            "success",
+            reason.clone(),
+            json!({
+                "playbook_key": playbook.key,
+                "actor": actor,
+                "change_freeze_enabled": policy.change_freeze_enabled,
+                "override_requires_reason": policy.override_requires_reason,
+                "blocked_reason": runtime.blocked_reason,
+                "next_allowed_at": runtime.next_allowed_at,
+            }),
+        )
+        .await;
+
+        return Ok(());
+    }
+
+    let next_hint = runtime
+        .next_allowed_at
+        .map(|value| format!(" next_allowed_at={value}"))
+        .unwrap_or_default();
+    let blocked_reason = runtime
+        .blocked_reason
+        .unwrap_or_else(|| "blocked by execution policy".to_string());
+    Err(AppError::Validation(format!(
+        "playbook execution blocked by policy: {blocked_reason}.{next_hint} To override, set maintenance_override_confirmed=true and provide maintenance_override_reason."
+    )))
+}
+
 fn append_playbook_filters(
     builder: &mut QueryBuilder<Postgres>,
     category: Option<String>,
@@ -1099,6 +2137,33 @@ fn append_execution_filters(
     }
 }
 
+fn append_approval_filters(
+    builder: &mut QueryBuilder<Postgres>,
+    playbook_key: Option<String>,
+    status: Option<String>,
+    requester: Option<String>,
+    approver: Option<String>,
+) {
+    if let Some(playbook_key) = playbook_key {
+        builder
+            .push(" AND a.playbook_key = ")
+            .push_bind(playbook_key);
+    }
+    if let Some(status) = status {
+        builder.push(" AND a.status = ").push_bind(status);
+    }
+    if let Some(requester) = requester {
+        builder
+            .push(" AND a.requester ILIKE ")
+            .push_bind(format!("%{requester}%"));
+    }
+    if let Some(approver) = approver {
+        builder
+            .push(" AND COALESCE(a.approver, '') ILIKE ")
+            .push_bind(format!("%{approver}%"));
+    }
+}
+
 async fn verify_and_consume_confirmation(
     db: &sqlx::PgPool,
     dry_run_id: i64,
@@ -1155,6 +2220,109 @@ async fn verify_and_consume_confirmation(
          SET confirmation_verified = TRUE,
              confirmed_at = NOW(),
              status = 'succeeded',
+             updated_at = NOW()
+         WHERE id = $1",
+    )
+    .bind(record.id)
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
+async fn verify_and_consume_approval(
+    db: &sqlx::PgPool,
+    approval_id: i64,
+    dry_run_id: Option<i64>,
+    playbook_id: i64,
+    actor: &str,
+    approval_token: &str,
+) -> AppResult<()> {
+    if approval_id <= 0 {
+        return Err(AppError::Validation(
+            "approval_id must be a positive integer".to_string(),
+        ));
+    }
+
+    let record: Option<ApprovalConsumeRecord> = sqlx::query_as(
+        "SELECT id, dry_run_execution_id, playbook_id, requester, status, approver, approval_token, expires_at
+         FROM workflow_playbook_approval_requests
+         WHERE id = $1",
+    )
+    .bind(approval_id)
+    .fetch_optional(db)
+    .await?;
+    let record = record.ok_or_else(|| {
+        AppError::Validation(format!("approval request {} not found", approval_id))
+    })?;
+
+    if record.playbook_id != playbook_id {
+        return Err(AppError::Validation(
+            "approval request belongs to another playbook".to_string(),
+        ));
+    }
+    if let Some(dry_run_id) = dry_run_id {
+        if dry_run_id != record.dry_run_execution_id {
+            return Err(AppError::Validation(
+                "approval request is not bound to provided dry_run_id".to_string(),
+            ));
+        }
+    }
+    if !record.requester.eq_ignore_ascii_case(actor) {
+        return Err(AppError::Forbidden(
+            "only the original requester can consume approval token".to_string(),
+        ));
+    }
+    if record
+        .approver
+        .as_deref()
+        .is_some_and(|value| value.eq_ignore_ascii_case(actor))
+    {
+        return Err(AppError::Forbidden(
+            "self-approval cannot be used for execution".to_string(),
+        ));
+    }
+    if record.status == "used" {
+        return Err(AppError::Validation(
+            "approval request token has already been used".to_string(),
+        ));
+    }
+    if record.status == "rejected" {
+        return Err(AppError::Validation(
+            "approval request was rejected and cannot be consumed".to_string(),
+        ));
+    }
+    if record.status == "expired" {
+        return Err(AppError::Validation(
+            "approval request has expired".to_string(),
+        ));
+    }
+    if record.status != "approved" {
+        return Err(AppError::Validation(format!(
+            "approval request status '{}' is not consumable",
+            record.status
+        )));
+    }
+    if record.expires_at <= Utc::now() {
+        expire_playbook_approval_request(db, record.id).await?;
+        return Err(AppError::Validation(
+            "approval request has expired".to_string(),
+        ));
+    }
+    let expected_token = record
+        .approval_token
+        .as_deref()
+        .ok_or_else(|| AppError::Validation("approval token is missing".to_string()))?;
+    if expected_token != approval_token {
+        return Err(AppError::Validation(
+            "approval_token does not match approval request".to_string(),
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE workflow_playbook_approval_requests
+         SET status = 'used',
+             used_at = NOW(),
              updated_at = NOW()
          WHERE id = $1",
     )
@@ -1731,6 +2899,21 @@ fn normalize_optional_execution_status(value: Option<String>) -> AppResult<Optio
         .transpose()
 }
 
+fn normalize_optional_approval_status(value: Option<String>) -> AppResult<Option<String>> {
+    value
+        .map(|raw| {
+            let normalized = raw.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "pending" | "approved" | "rejected" | "expired" | "used" => Ok(normalized),
+                _ => Err(AppError::Validation(
+                    "approval status must be one of: pending, approved, rejected, expired, used"
+                        .to_string(),
+                )),
+            }
+        })
+        .transpose()
+}
+
 fn normalize_optional_positive_id(value: Option<i64>, field: &str) -> AppResult<Option<i64>> {
     match value {
         Some(value) if value <= 0 => Err(AppError::Validation(format!("{field} must be positive"))),
@@ -1765,6 +2948,25 @@ fn required_trimmed_token(value: Option<String>) -> AppResult<String> {
     if token.len() > 128 {
         return Err(AppError::Validation(
             "confirmation_token length must be <= 128".to_string(),
+        ));
+    }
+
+    Ok(token)
+}
+
+fn required_trimmed_approval_token(value: Option<String>) -> AppResult<String> {
+    let token = value
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+        .ok_or_else(|| {
+            AppError::Validation(
+                "approval_token is required for high-risk playbook execution".to_string(),
+            )
+        })?;
+
+    if token.len() > 128 {
+        return Err(AppError::Validation(
+            "approval_token length must be <= 128".to_string(),
         ));
     }
 
@@ -1819,6 +3021,11 @@ fn generate_confirmation_token() -> String {
     format!("PBK-{}", &uuid[..8])
 }
 
+fn generate_approval_token() -> String {
+    let uuid = Uuid::new_v4().simple().to_string().to_ascii_uppercase();
+    format!("APR-{}", &uuid[..10])
+}
+
 fn ensure_playbook_enabled(playbook: &PlaybookRecord) -> AppResult<()> {
     if !playbook.is_enabled {
         return Err(AppError::Validation(format!(
@@ -1857,13 +3064,16 @@ fn trim_to_len(value: &str, max_len: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, Utc};
+    use chrono::{Duration, TimeZone, Utc};
+    use chrono_tz::Tz;
     use serde_json::json;
 
     use super::{
-        ConfirmationDecision, DryRunConfirmationRecord, PlaybookParameterSchema,
-        dry_run_risk_summary_text, normalize_field_type, normalize_playbook_key,
-        normalize_playbook_params, parse_parameter_schema, validate_confirmation_transition,
+        ConfirmationDecision, DryRunConfirmationRecord, PlaybookExecutionPolicy,
+        PlaybookMaintenanceWindow, PlaybookParameterSchema, dry_run_risk_summary_text,
+        evaluate_policy_runtime, normalize_field_type, normalize_optional_approval_status,
+        normalize_playbook_key, normalize_playbook_params, parse_parameter_schema,
+        required_trimmed_approval_token, validate_confirmation_transition,
     };
 
     fn sample_schema() -> PlaybookParameterSchema {
@@ -1994,5 +3204,107 @@ mod tests {
         let expired =
             validate_confirmation_transition(&expired_record, 9, "operator-a", "PBK-ABC12345", now);
         assert!(matches!(expired, Ok(ConfirmationDecision::Expired)));
+    }
+
+    #[test]
+    fn policy_runtime_blocks_when_outside_window() {
+        let policy = PlaybookExecutionPolicy {
+            policy_key: "global".to_string(),
+            timezone_name: "UTC".to_string(),
+            timezone: "UTC".parse::<Tz>().expect("timezone"),
+            maintenance_windows: vec![PlaybookMaintenanceWindow {
+                day_of_week: 1,
+                start: "09:00".to_string(),
+                end: "10:00".to_string(),
+                label: Some("monday morning".to_string()),
+            }],
+            change_freeze_enabled: false,
+            override_requires_reason: true,
+            updated_by: "system".to_string(),
+            updated_at: Utc::now(),
+        };
+
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 3, 3, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let runtime = evaluate_policy_runtime(&policy, now);
+        assert!(!runtime.in_maintenance_window);
+        assert!(runtime.blocked_reason.is_some());
+        assert!(runtime.next_allowed_at.is_some());
+    }
+
+    #[test]
+    fn policy_runtime_blocks_when_change_freeze_enabled() {
+        let policy = PlaybookExecutionPolicy {
+            policy_key: "global".to_string(),
+            timezone_name: "UTC".to_string(),
+            timezone: "UTC".parse::<Tz>().expect("timezone"),
+            maintenance_windows: vec![PlaybookMaintenanceWindow {
+                day_of_week: 2,
+                start: "00:00".to_string(),
+                end: "23:59".to_string(),
+                label: None,
+            }],
+            change_freeze_enabled: true,
+            override_requires_reason: true,
+            updated_by: "system".to_string(),
+            updated_at: Utc::now(),
+        };
+
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 3, 6, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let runtime = evaluate_policy_runtime(&policy, now);
+        assert!(runtime.blocked_reason.is_some());
+        assert!(runtime
+            .blocked_reason
+            .expect("blocked reason")
+            .contains("change-freeze"));
+    }
+
+    #[test]
+    fn policy_runtime_allows_inside_window_when_not_frozen() {
+        let policy = PlaybookExecutionPolicy {
+            policy_key: "global".to_string(),
+            timezone_name: "UTC".to_string(),
+            timezone: "UTC".parse::<Tz>().expect("timezone"),
+            maintenance_windows: vec![PlaybookMaintenanceWindow {
+                day_of_week: 2,
+                start: "00:00".to_string(),
+                end: "23:59".to_string(),
+                label: Some("all day".to_string()),
+            }],
+            change_freeze_enabled: false,
+            override_requires_reason: true,
+            updated_by: "system".to_string(),
+            updated_at: Utc::now(),
+        };
+
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 3, 6, 0, 0)
+            .single()
+            .expect("valid datetime");
+        let runtime = evaluate_policy_runtime(&policy, now);
+        assert!(runtime.in_maintenance_window);
+        assert!(runtime.blocked_reason.is_none());
+    }
+
+    #[test]
+    fn normalizes_approval_status_filter() {
+        assert_eq!(
+            normalize_optional_approval_status(Some(" PENDING ".to_string())).expect("status"),
+            Some("pending".to_string())
+        );
+        assert!(normalize_optional_approval_status(Some("bad".to_string())).is_err());
+    }
+
+    #[test]
+    fn validates_required_approval_token() {
+        let token = required_trimmed_approval_token(Some("  token-1  ".to_string())).expect("token");
+        assert_eq!(token, "token-1");
+        assert!(required_trimmed_approval_token(Some("".to_string())).is_err());
+        assert!(required_trimmed_approval_token(Some("x".repeat(129))).is_err());
     }
 }

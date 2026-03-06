@@ -671,6 +671,60 @@ type PlaybookDryRunResponse = {
   } | null;
 };
 
+type PlaybookMaintenanceWindow = {
+  day_of_week: number;
+  start: string;
+  end: string;
+  label: string | null;
+};
+
+type PlaybookExecutionPolicyRuntime = {
+  timezone_now: string;
+  in_maintenance_window: boolean;
+  next_allowed_at: string | null;
+  blocked_reason: string | null;
+};
+
+type PlaybookExecutionPolicyResponse = {
+  policy: {
+    policy_key: string;
+    timezone_name: string;
+    maintenance_windows: PlaybookMaintenanceWindow[];
+    change_freeze_enabled: boolean;
+    override_requires_reason: boolean;
+    updated_by: string;
+    updated_at: string;
+  };
+  runtime: PlaybookExecutionPolicyRuntime;
+};
+
+type PlaybookApprovalRequestStatus = "pending" | "approved" | "rejected" | "expired" | "used";
+
+type PlaybookApprovalRequestRecord = {
+  id: number;
+  dry_run_execution_id: number;
+  playbook_id: number;
+  playbook_key: string;
+  requester: string;
+  request_note: string | null;
+  status: PlaybookApprovalRequestStatus;
+  approver: string | null;
+  approver_note: string | null;
+  approval_token: string | null;
+  approved_at: string | null;
+  expires_at: string;
+  used_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type PlaybookApprovalRequestListResponse = {
+  items: PlaybookApprovalRequestRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 type DailyCockpitAction = {
   key: string;
   label: string;
@@ -1352,16 +1406,29 @@ export function App() {
   const [workflowReportRequesterFilter, setWorkflowReportRequesterFilter] = useState("");
   const [playbookCatalog, setPlaybookCatalog] = useState<PlaybookCatalogItem[]>([]);
   const [playbookExecutions, setPlaybookExecutions] = useState<PlaybookExecutionListItem[]>([]);
+  const [playbookExecutionPolicy, setPlaybookExecutionPolicy] = useState<PlaybookExecutionPolicyResponse | null>(null);
+  const [playbookApprovalRequests, setPlaybookApprovalRequests] = useState<PlaybookApprovalRequestRecord[]>([]);
   const [loadingPlaybookCatalog, setLoadingPlaybookCatalog] = useState(false);
   const [loadingPlaybookExecutions, setLoadingPlaybookExecutions] = useState(false);
+  const [loadingPlaybookPolicy, setLoadingPlaybookPolicy] = useState(false);
+  const [loadingPlaybookApprovals, setLoadingPlaybookApprovals] = useState(false);
   const [runningPlaybookDryRun, setRunningPlaybookDryRun] = useState(false);
   const [runningPlaybookExecute, setRunningPlaybookExecute] = useState(false);
+  const [requestingPlaybookApproval, setRequestingPlaybookApproval] = useState(false);
+  const [approvingPlaybookApprovalId, setApprovingPlaybookApprovalId] = useState<number | null>(null);
+  const [rejectingPlaybookApprovalId, setRejectingPlaybookApprovalId] = useState<number | null>(null);
   const [selectedPlaybookKey, setSelectedPlaybookKey] = useState("");
   const [playbookCategoryFilter, setPlaybookCategoryFilter] = useState("all");
   const [playbookQuery, setPlaybookQuery] = useState("");
   const [playbookAssetRef, setPlaybookAssetRef] = useState("");
   const [playbookParamsDraft, setPlaybookParamsDraft] = useState<Record<string, string>>({});
   const [playbookConfirmationToken, setPlaybookConfirmationToken] = useState("");
+  const [selectedPlaybookApprovalId, setSelectedPlaybookApprovalId] = useState("");
+  const [playbookApprovalToken, setPlaybookApprovalToken] = useState("");
+  const [playbookApprovalRequestNote, setPlaybookApprovalRequestNote] = useState("");
+  const [playbookApprovalDecisionNote, setPlaybookApprovalDecisionNote] = useState("");
+  const [playbookMaintenanceOverrideReason, setPlaybookMaintenanceOverrideReason] = useState("");
+  const [playbookMaintenanceOverrideConfirmed, setPlaybookMaintenanceOverrideConfirmed] = useState(false);
   const [playbookDryRunResponse, setPlaybookDryRunResponse] = useState<PlaybookDryRunResponse | null>(null);
   const [playbookExecutionResult, setPlaybookExecutionResult] = useState<PlaybookExecutionDetail | null>(null);
   const [playbookNotice, setPlaybookNotice] = useState<string | null>(null);
@@ -2078,6 +2145,54 @@ export function App() {
       setLoadingPlaybookCatalog(false);
     }
   }, [playbookCategoryFilter, playbookQuery]);
+
+  const loadPlaybookExecutionPolicy = useCallback(async () => {
+    setLoadingPlaybookPolicy(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/playbooks/policy`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: PlaybookExecutionPolicyResponse = await response.json();
+      setPlaybookExecutionPolicy(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setPlaybookExecutionPolicy(null);
+      return null;
+    } finally {
+      setLoadingPlaybookPolicy(false);
+    }
+  }, []);
+
+  const loadPlaybookApprovalRequests = useCallback(async () => {
+    setLoadingPlaybookApprovals(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "120",
+        offset: "0"
+      });
+      if (selectedPlaybookKey.trim().length > 0) {
+        params.set("playbook_key", selectedPlaybookKey.trim());
+      }
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/playbooks/approvals?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: PlaybookApprovalRequestListResponse = await response.json();
+      setPlaybookApprovalRequests(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setPlaybookApprovalRequests([]);
+      return [];
+    } finally {
+      setLoadingPlaybookApprovals(false);
+    }
+  }, [selectedPlaybookKey]);
 
   const loadPlaybookExecutions = useCallback(async () => {
     setLoadingPlaybookExecutions(true);
@@ -2873,31 +2988,41 @@ export function App() {
       };
 
       if (dryRunPayload.risk_summary.requires_confirmation) {
-        const challenge = dryRunPayload.confirmation;
-        if (!challenge) {
-          throw new Error(t("alertsCenter.messages.remediationMissingChallenge"));
+        const approvalResponse = await apiFetch(
+          `${API_BASE_URL}/api/v1/workflow/playbooks/${encodeURIComponent(remediationPlan.playbook_key)}/approval-request`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              dry_run_id: dryRunPayload.execution.id,
+              note: `requested from alert remediation #${alertId}`
+            })
+          }
+        );
+        if (!approvalResponse.ok) {
+          throw new Error(await readErrorMessage(approvalResponse));
         }
-        const inputToken = typeof window !== "undefined"
-          ? window.prompt(
-            t("alertsCenter.messages.remediationConfirmPrompt", {
-              token: challenge.token,
-              expiresAt: new Date(challenge.expires_at).toLocaleString()
-            }),
-            ""
-          )
-          : null;
-        if (inputToken === null) {
-          setAlertNotice(t("alertsCenter.messages.remediationCancelled"));
-          return;
-        }
-        if (inputToken.trim() !== challenge.token) {
-          throw new Error(t("alertsCenter.messages.remediationTokenMismatch"));
-        }
-        executePayload = {
-          ...executePayload,
-          dry_run_id: dryRunPayload.execution.id,
-          confirmation_token: inputToken.trim()
-        };
+        const approvalPayload: PlaybookApprovalRequestRecord = await approvalResponse.json();
+
+        setSelectedPlaybookKey(remediationPlan.playbook_key);
+        setPlaybookDryRunResponse(dryRunPayload);
+        setPlaybookConfirmationToken(dryRunPayload.confirmation?.token ?? "");
+        setSelectedPlaybookApprovalId(String(approvalPayload.id));
+        setPlaybookApprovalToken(approvalPayload.approval_token ?? "");
+
+        setSelectedAlertId(String(alertId));
+        await Promise.all([
+          loadAlerts(),
+          loadAlertDetail(alertId),
+          loadDailyCockpitSnapshot(),
+          loadPlaybookApprovalRequests()
+        ]);
+        setAlertNotice(
+          `High-risk remediation requires two-person approval. Request #${approvalPayload.id} is pending in playbook queue.`
+        );
+        return;
       }
 
       const executeResponse = await apiFetch(
@@ -2932,7 +3057,14 @@ export function App() {
     } finally {
       setAlertActionRunningId(null);
     }
-  }, [canWriteCmdb, loadAlertDetail, loadAlerts, loadDailyCockpitSnapshot, t]);
+  }, [
+    canWriteCmdb,
+    loadAlertDetail,
+    loadAlerts,
+    loadDailyCockpitSnapshot,
+    loadPlaybookApprovalRequests,
+    t
+  ]);
 
   const runBulkAlertAction = useCallback(
     async (action: "ack" | "close") => {
@@ -3975,7 +4107,10 @@ export function App() {
       setPlaybookDryRunResponse(payload);
       setPlaybookExecutionResult(null);
       setPlaybookConfirmationToken(payload.confirmation?.token ?? "");
+      setSelectedPlaybookApprovalId("");
+      setPlaybookApprovalToken("");
       await loadPlaybookExecutions();
+      await loadPlaybookApprovalRequests();
       setPlaybookNotice(
         t("cmdb.playbooks.messages.dryRunReady", {
           key: selectedPlaybook.key,
@@ -3989,6 +4124,7 @@ export function App() {
     }
   }, [
     canWriteCmdb,
+    loadPlaybookApprovalRequests,
     loadPlaybookExecutions,
     playbookAssetRef,
     playbookCatalog,
@@ -4026,6 +4162,15 @@ export function App() {
       setError(t("cmdb.playbooks.messages.confirmationRequired"));
       return;
     }
+    const approvalId = Number.parseInt(selectedPlaybookApprovalId, 10);
+    if (requiresConfirmation && (!Number.isFinite(approvalId) || approvalId <= 0)) {
+      setError("Approved request is required for high-risk playbook execution.");
+      return;
+    }
+    if (requiresConfirmation && !playbookApprovalToken.trim()) {
+      setError("Approval token is required for high-risk playbook execution.");
+      return;
+    }
 
     setRunningPlaybookExecute(true);
     setPlaybookNotice(null);
@@ -4042,7 +4187,11 @@ export function App() {
             params: params.value,
             asset_ref: trimToNull(playbookAssetRef),
             dry_run_id: dryRunId,
-            confirmation_token: trimToNull(playbookConfirmationToken)
+            confirmation_token: trimToNull(playbookConfirmationToken),
+            approval_id: requiresConfirmation ? approvalId : null,
+            approval_token: requiresConfirmation ? trimToNull(playbookApprovalToken) : null,
+            maintenance_override_reason: trimToNull(playbookMaintenanceOverrideReason),
+            maintenance_override_confirmed: playbookMaintenanceOverrideConfirmed
           })
         }
       );
@@ -4051,7 +4200,11 @@ export function App() {
       }
       const payload: PlaybookExecutionDetail = await response.json();
       setPlaybookExecutionResult(payload);
+      setPlaybookMaintenanceOverrideReason("");
+      setPlaybookMaintenanceOverrideConfirmed(false);
+      setPlaybookApprovalToken("");
       await loadPlaybookExecutions();
+      await loadPlaybookApprovalRequests();
       setPlaybookNotice(
         t("cmdb.playbooks.messages.executionSucceeded", {
           key: selectedPlaybook.key,
@@ -4065,15 +4218,163 @@ export function App() {
     }
   }, [
     canWriteCmdb,
+    loadPlaybookApprovalRequests,
     loadPlaybookExecutions,
     playbookAssetRef,
+    playbookApprovalToken,
     playbookCatalog,
     playbookConfirmationToken,
     playbookDryRunResponse?.execution.id,
+    playbookMaintenanceOverrideConfirmed,
+    playbookMaintenanceOverrideReason,
     playbookParamsDraft,
+    selectedPlaybookApprovalId,
     selectedPlaybookKey,
     t
   ]);
+
+  const requestPlaybookApproval = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+
+    const selectedPlaybook = playbookCatalog.find((item) => item.key === selectedPlaybookKey) ?? null;
+    if (!selectedPlaybook) {
+      setError(t("cmdb.playbooks.messages.selectPlaybook"));
+      return;
+    }
+
+    const requiresConfirmation = selectedPlaybook.requires_confirmation
+      || selectedPlaybook.risk_level === "high"
+      || selectedPlaybook.risk_level === "critical";
+    if (!requiresConfirmation) {
+      setError("Approval request is only required for high-risk playbooks.");
+      return;
+    }
+
+    const dryRunId = playbookDryRunResponse?.execution.id ?? null;
+    if (!dryRunId) {
+      setError("Run dry-run first, then request approval.");
+      return;
+    }
+
+    setRequestingPlaybookApproval(true);
+    setPlaybookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/workflow/playbooks/${encodeURIComponent(selectedPlaybook.key)}/approval-request`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            dry_run_id: dryRunId,
+            note: trimToNull(playbookApprovalRequestNote)
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: PlaybookApprovalRequestRecord = await response.json();
+      setSelectedPlaybookApprovalId(String(payload.id));
+      setPlaybookApprovalToken(payload.approval_token ?? "");
+      setPlaybookApprovalRequestNote("");
+      await loadPlaybookApprovalRequests();
+      setPlaybookNotice(`Approval request #${payload.id} submitted.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setRequestingPlaybookApproval(false);
+    }
+  }, [
+    canWriteCmdb,
+    loadPlaybookApprovalRequests,
+    playbookApprovalRequestNote,
+    playbookCatalog,
+    playbookDryRunResponse?.execution.id,
+    selectedPlaybookKey,
+    t
+  ]);
+
+  const approvePlaybookApprovalRequest = useCallback(async (requestId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+    if (!Number.isFinite(requestId) || requestId <= 0) {
+      return;
+    }
+
+    setApprovingPlaybookApprovalId(requestId);
+    setPlaybookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/playbooks/approvals/${requestId}/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          note: trimToNull(playbookApprovalDecisionNote)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: PlaybookApprovalRequestRecord = await response.json();
+      setSelectedPlaybookApprovalId(String(payload.id));
+      setPlaybookApprovalToken(payload.approval_token ?? "");
+      setPlaybookApprovalDecisionNote("");
+      await loadPlaybookApprovalRequests();
+      setPlaybookNotice(`Approval request #${requestId} approved.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setApprovingPlaybookApprovalId(null);
+    }
+  }, [canWriteCmdb, loadPlaybookApprovalRequests, playbookApprovalDecisionNote, t]);
+
+  const rejectPlaybookApprovalRequest = useCallback(async (requestId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return;
+    }
+    if (!Number.isFinite(requestId) || requestId <= 0) {
+      return;
+    }
+
+    setRejectingPlaybookApprovalId(requestId);
+    setPlaybookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/workflow/playbooks/approvals/${requestId}/reject`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          note: trimToNull(playbookApprovalDecisionNote)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      setPlaybookApprovalDecisionNote("");
+      if (selectedPlaybookApprovalId === String(requestId)) {
+        setPlaybookApprovalToken("");
+      }
+      await loadPlaybookApprovalRequests();
+      setPlaybookNotice(`Approval request #${requestId} rejected.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+    } finally {
+      setRejectingPlaybookApprovalId(null);
+    }
+  }, [canWriteCmdb, loadPlaybookApprovalRequests, playbookApprovalDecisionNote, selectedPlaybookApprovalId, t]);
 
   const createTicket = useCallback(async () => {
     if (!canWriteCmdb) {
@@ -4375,6 +4676,12 @@ export function App() {
       setPlaybookDryRunResponse(null);
       setPlaybookExecutionResult(null);
       setPlaybookConfirmationToken("");
+      setSelectedPlaybookApprovalId("");
+      setPlaybookApprovalToken("");
+      setPlaybookApprovalRequestNote("");
+      setPlaybookApprovalDecisionNote("");
+      setPlaybookMaintenanceOverrideReason("");
+      setPlaybookMaintenanceOverrideConfirmed(false);
       return;
     }
 
@@ -4413,7 +4720,50 @@ export function App() {
     setPlaybookDryRunResponse(null);
     setPlaybookExecutionResult(null);
     setPlaybookConfirmationToken("");
+    setSelectedPlaybookApprovalId("");
+    setPlaybookApprovalToken("");
+    setPlaybookApprovalRequestNote("");
+    setPlaybookApprovalDecisionNote("");
+    setPlaybookMaintenanceOverrideReason("");
+    setPlaybookMaintenanceOverrideConfirmed(false);
   }, [playbookCatalog, selectedPlaybookKey]);
+
+  useEffect(() => {
+    if (playbookApprovalRequests.length === 0) {
+      setSelectedPlaybookApprovalId("");
+      setPlaybookApprovalToken("");
+      return;
+    }
+
+    const currentId = Number.parseInt(selectedPlaybookApprovalId, 10);
+    if (Number.isFinite(currentId) && currentId > 0 && playbookApprovalRequests.some((item) => item.id === currentId)) {
+      return;
+    }
+
+    const dryRunId = playbookDryRunResponse?.execution.id ?? null;
+    if (dryRunId) {
+      const preferred = playbookApprovalRequests.find((item) => item.dry_run_execution_id === dryRunId);
+      if (preferred) {
+        setSelectedPlaybookApprovalId(String(preferred.id));
+        return;
+      }
+    }
+
+    const approved = playbookApprovalRequests.find((item) => item.status === "approved");
+    setSelectedPlaybookApprovalId(String((approved ?? playbookApprovalRequests[0]).id));
+  }, [playbookApprovalRequests, playbookDryRunResponse?.execution.id, selectedPlaybookApprovalId]);
+
+  useEffect(() => {
+    const approvalId = Number.parseInt(selectedPlaybookApprovalId, 10);
+    if (!Number.isFinite(approvalId) || approvalId <= 0) {
+      return;
+    }
+    const item = playbookApprovalRequests.find((candidate) => candidate.id === approvalId);
+    if (!item) {
+      return;
+    }
+    setPlaybookApprovalToken(item.approval_token ?? "");
+  }, [playbookApprovalRequests, selectedPlaybookApprovalId]);
 
   useEffect(() => {
     if (tickets.length === 0) {
@@ -5241,13 +5591,21 @@ export function App() {
     if (!authIdentity || !visibleSections.has("section-playbook-library")) {
       return;
     }
-    void Promise.all([loadPlaybookCatalog(), loadPlaybookExecutions()]);
+    void Promise.all([
+      loadPlaybookCatalog(),
+      loadPlaybookExecutions(),
+      loadPlaybookExecutionPolicy(),
+      loadPlaybookApprovalRequests()
+    ]);
   }, [
     authIdentity,
+    loadPlaybookApprovalRequests,
     loadPlaybookCatalog,
+    loadPlaybookExecutionPolicy,
     loadPlaybookExecutions,
     playbookCategoryFilter,
     playbookQuery,
+    selectedPlaybookKey,
     visibleSections
   ]);
   useEffect(() => {
@@ -5512,6 +5870,8 @@ export function App() {
     loadTicketDetail,
     loadTickets,
     loadPlaybookCatalog,
+    loadPlaybookApprovalRequests,
+    loadPlaybookExecutionPolicy,
     loadPlaybookExecutions,
     loadWorkflowLogs,
     loadWorkflowRequests,
@@ -5529,15 +5889,31 @@ export function App() {
     newWorkflowTemplateName,
     newWorkflowTemplateSteps,
     loadingPlaybookCatalog,
+    loadingPlaybookApprovals,
     loadingPlaybookExecutions,
+    loadingPlaybookPolicy,
     playbookAssetRef,
     playbookCatalog,
     playbookCategoryFilter,
     playbookCategoryOptions,
     playbookConfirmationToken,
+    playbookApprovalDecisionNote,
+    playbookApprovalRequestNote,
+    playbookApprovalRequests,
+    playbookApprovalToken,
     playbookDryRunResponse,
+    playbookExecutionPolicy,
     playbookExecutionResult,
+    approvePlaybookApprovalRequest,
+    approvingPlaybookApprovalId,
     playbookExecutions,
+    playbookMaintenanceOverrideConfirmed,
+    playbookMaintenanceOverrideReason,
+    rejectPlaybookApprovalRequest,
+    rejectingPlaybookApprovalId,
+    requestPlaybookApproval,
+    requestingPlaybookApproval,
+    selectedPlaybookApprovalId,
     playbookNotice,
     playbookParamsDraft,
     playbookQuery,
@@ -5557,8 +5933,14 @@ export function App() {
     setPlaybookAssetRef,
     setPlaybookCategoryFilter,
     setPlaybookConfirmationToken,
+    setPlaybookApprovalDecisionNote,
+    setPlaybookApprovalRequestNote,
+    setPlaybookApprovalToken,
+    setPlaybookMaintenanceOverrideConfirmed,
+    setPlaybookMaintenanceOverrideReason,
     setPlaybookParamsDraft,
     setPlaybookQuery,
+    setSelectedPlaybookApprovalId,
     setSelectedPlaybookKey,
     setNewTicket,
     setNewWorkflowRequest,
