@@ -8,11 +8,12 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- None yet.
+- v0.1.5 planning document: `docs/29-v0.1.5-operator-autonomy-plan.md`.
+- v0.1.5 issue baseline: GitHub issues `#127` to `#135` (incident command flow, escalation policy, change calendar, handover digest, restore evidence, simulation drill, validation, release closure).
 
 ### Changed
 
-- None yet.
+- v0.1.x planning document now includes v0.1.5 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
 
 ### Fixed
 
