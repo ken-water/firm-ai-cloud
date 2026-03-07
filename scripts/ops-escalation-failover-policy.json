@@ -1,0 +1,83 @@
+{
+  "version": "v0.1.5",
+  "baseline": {
+    "escalation_backlog": 6,
+    "near_breach_tickets": 2,
+    "breached_tickets": 1,
+    "failover_rto_minutes": 18,
+    "failover_error_rate": 0.8
+  },
+  "budgets": {
+    "escalation": {
+      "backlog_max": 12,
+      "near_breach_max": 6,
+      "breached_max": 2
+    },
+    "failover": {
+      "rto_minutes_max": 30,
+      "error_rate_max": 2.0
+    }
+  },
+  "scenarios": [
+    {
+      "key": "steady-state",
+      "description": "Normal shift with expected ticket flow and no regional impairment.",
+      "escalation": {
+        "backlog_multiplier": 1.0,
+        "backlog_additive": 0,
+        "near_breach_multiplier": 1.0,
+        "near_breach_additive": 0,
+        "breached_multiplier": 1.0,
+        "breached_additive": 0
+      },
+      "failover": {
+        "rto_penalty_minutes": 0,
+        "error_penalty": 0
+      },
+      "hints": {
+        "escalation": "Keep current on-call coverage and preserve SLA policy defaults.",
+        "failover": "No failover-specific action required."
+      }
+    },
+    {
+      "key": "escalation-surge",
+      "description": "Alert storm drives ticket influx and queue contention.",
+      "escalation": {
+        "backlog_multiplier": 1.8,
+        "backlog_additive": 4,
+        "near_breach_multiplier": 2.2,
+        "near_breach_additive": 1,
+        "breached_multiplier": 2.0,
+        "breached_additive": 1
+      },
+      "failover": {
+        "rto_penalty_minutes": 2,
+        "error_penalty": 0.2
+      },
+      "hints": {
+        "escalation": "Run escalation policy immediately and rebalance queue owners.",
+        "failover": "Keep failover target warm while queue is unstable."
+      }
+    },
+    {
+      "key": "regional-failover",
+      "description": "Primary region degrades and workload shifts to secondary region.",
+      "escalation": {
+        "backlog_multiplier": 1.3,
+        "backlog_additive": 1,
+        "near_breach_multiplier": 1.4,
+        "near_breach_additive": 1,
+        "breached_multiplier": 1.5,
+        "breached_additive": 1
+      },
+      "failover": {
+        "rto_penalty_minutes": 14,
+        "error_penalty": 1.4
+      },
+      "hints": {
+        "escalation": "Pre-stage queue guardrails before maintenance window starts.",
+        "failover": "Review runbook rollback and traffic shaping for failover path."
+      }
+    }
+  ]
+}
