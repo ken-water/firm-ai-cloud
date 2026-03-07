@@ -8,6 +8,7 @@ mod cockpit;
 mod discovery_scheduler_worker;
 mod error;
 mod iam;
+mod incident_command;
 mod monitoring;
 mod monitoring_sync_worker;
 mod ops_digest;
@@ -234,6 +235,7 @@ fn build_router(state: AppState) -> Router {
     }
 
     let mut ops_routes = cockpit::routes()
+        .merge(incident_command::routes())
         .merge(backup_dr::routes())
         .merge(ops_digest::routes());
     if state.rbac_enabled {

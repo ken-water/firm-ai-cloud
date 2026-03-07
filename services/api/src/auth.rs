@@ -722,6 +722,21 @@ mod tests {
             "/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception",
             "ops.cockpit.write",
         );
+        assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/incidents",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/incidents/1",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/ops/cockpit/incidents/1/command",
+            "ops.cockpit.write",
+        );
         assert_permission(Method::GET, "/cockpit/queue", "ops.cockpit.read");
         assert_permission(Method::GET, "/cockpit/checklists", "ops.cockpit.read");
     }
@@ -955,6 +970,16 @@ mod tests {
             (
                 Method::POST,
                 "/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception",
+                "ops.cockpit.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/incidents",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/incidents/1/command",
                 "ops.cockpit.write",
             ),
             (Method::GET, "/api/v1/tickets", "tickets.read"),

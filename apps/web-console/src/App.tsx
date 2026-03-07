@@ -907,6 +907,65 @@ type WeeklyDigestExportResponse = {
   content: string;
 };
 
+type IncidentCommandStatus = "triage" | "in_progress" | "blocked" | "mitigated" | "postmortem";
+
+type IncidentCommandRecord = {
+  alert_id: number;
+  alert_source: string;
+  alert_key: string;
+  title: string;
+  severity: string;
+  alert_status: string;
+  site: string | null;
+  department: string | null;
+  command_status: IncidentCommandStatus;
+  command_owner: string;
+  eta_at: string | null;
+  blocker: string | null;
+  summary: string | null;
+  updated_by: string;
+  updated_at: string;
+};
+
+type IncidentCommandEvent = {
+  id: number;
+  alert_id: number;
+  event_type: "created" | "status_transition" | "command_updated";
+  from_status: IncidentCommandStatus | null;
+  to_status: IncidentCommandStatus;
+  command_owner: string;
+  eta_at: string | null;
+  blocker: string | null;
+  summary: string | null;
+  note: string | null;
+  actor: string;
+  created_at: string;
+};
+
+type IncidentCommandListResponse = {
+  generated_at: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: IncidentCommandRecord[];
+};
+
+type IncidentCommandDetailResponse = {
+  generated_at: string;
+  item: IncidentCommandRecord;
+  timeline: IncidentCommandEvent[];
+};
+
+type IncidentCommandDraft = {
+  alert_id: string;
+  status: IncidentCommandStatus;
+  owner: string;
+  eta_at: string;
+  blocker: string;
+  summary: string;
+  note: string;
+};
+
 type BackupPolicyForm = {
   policy_id: string;
   policy_key: string;
@@ -1461,6 +1520,16 @@ const defaultBackupPolicyForm: BackupPolicyForm = {
   note: ""
 };
 
+const defaultIncidentCommandDraft: IncidentCommandDraft = {
+  alert_id: "",
+  status: "triage",
+  owner: "",
+  eta_at: "",
+  blocker: "",
+  summary: "",
+  note: ""
+};
+
 const defaultWorkflowStepForm: NewWorkflowTemplateStepForm = {
   id: "",
   name: "",
@@ -1646,11 +1715,18 @@ export function App() {
   const [playbookNotice, setPlaybookNotice] = useState<string | null>(null);
   const [dailyCockpitQueue, setDailyCockpitQueue] = useState<DailyCockpitQueueResponse | null>(null);
   const [opsChecklist, setOpsChecklist] = useState<OpsChecklistResponse | null>(null);
+  const [incidentCommands, setIncidentCommands] = useState<IncidentCommandRecord[]>([]);
+  const [incidentCommandDraft, setIncidentCommandDraft] = useState<IncidentCommandDraft>(defaultIncidentCommandDraft);
+  const [incidentCommandDetail, setIncidentCommandDetail] = useState<IncidentCommandDetailResponse | null>(null);
+  const [selectedIncidentAlertId, setSelectedIncidentAlertId] = useState("");
   const [backupPolicies, setBackupPolicies] = useState<BackupPolicyRecord[]>([]);
   const [backupPolicyRuns, setBackupPolicyRuns] = useState<BackupPolicyRunRecord[]>([]);
   const [backupPolicyDraft, setBackupPolicyDraft] = useState<BackupPolicyForm>(defaultBackupPolicyForm);
   const [loadingDailyCockpit, setLoadingDailyCockpit] = useState(false);
   const [loadingOpsChecklist, setLoadingOpsChecklist] = useState(false);
+  const [loadingIncidentCommands, setLoadingIncidentCommands] = useState(false);
+  const [loadingIncidentCommandDetail, setLoadingIncidentCommandDetail] = useState(false);
+  const [savingIncidentCommand, setSavingIncidentCommand] = useState(false);
   const [loadingBackupPolicies, setLoadingBackupPolicies] = useState(false);
   const [loadingBackupPolicyRuns, setLoadingBackupPolicyRuns] = useState(false);
   const [savingBackupPolicy, setSavingBackupPolicy] = useState(false);
@@ -1670,6 +1746,7 @@ export function App() {
   const [runningOpsChecklistActionKey, setRunningOpsChecklistActionKey] = useState<string | null>(null);
   const [dailyCockpitNotice, setDailyCockpitNotice] = useState<string | null>(null);
   const [opsChecklistNotice, setOpsChecklistNotice] = useState<string | null>(null);
+  const [incidentCommandNotice, setIncidentCommandNotice] = useState<string | null>(null);
   const [backupPolicyNotice, setBackupPolicyNotice] = useState<string | null>(null);
   const [weeklyDigestNotice, setWeeklyDigestNotice] = useState<string | null>(null);
   const [dailyCockpitSiteFilter, setDailyCockpitSiteFilter] = useState("");
@@ -2538,6 +2615,149 @@ export function App() {
     }
   }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter, opsChecklistDate]);
 
+  const loadIncidentCommands = useCallback(async () => {
+    setLoadingIncidentCommands(true);
+    setError(null);
+    setIncidentCommandNotice(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "40",
+        offset: "0"
+      });
+      if (dailyCockpitSiteFilter.trim().length > 0) {
+        params.set("site", dailyCockpitSiteFilter.trim());
+      }
+      if (dailyCockpitDepartmentFilter.trim().length > 0) {
+        params.set("department", dailyCockpitDepartmentFilter.trim());
+      }
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/incidents?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: IncidentCommandListResponse = await response.json();
+      setIncidentCommands(payload.items);
+      setSelectedIncidentAlertId((current) => {
+        if (current.length > 0 && payload.items.some((item) => String(item.alert_id) === current)) {
+          return current;
+        }
+        return payload.items.length > 0 ? String(payload.items[0].alert_id) : "";
+      });
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setIncidentCommands([]);
+      setSelectedIncidentAlertId("");
+      setIncidentCommandDetail(null);
+      return [];
+    } finally {
+      setLoadingIncidentCommands(false);
+    }
+  }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter]);
+
+  const loadIncidentCommandDetail = useCallback(async (alertIdInput?: number | string) => {
+    const raw = typeof alertIdInput === "number" ? String(alertIdInput) : (alertIdInput ?? selectedIncidentAlertId);
+    const alertId = Number.parseInt(raw.trim(), 10);
+    if (!Number.isFinite(alertId) || alertId <= 0) {
+      setIncidentCommandDetail(null);
+      return null;
+    }
+
+    setLoadingIncidentCommandDetail(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/incidents/${alertId}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: IncidentCommandDetailResponse = await response.json();
+      setIncidentCommandDetail(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setIncidentCommandDetail(null);
+      return null;
+    } finally {
+      setLoadingIncidentCommandDetail(false);
+    }
+  }, [selectedIncidentAlertId]);
+
+  const saveIncidentCommand = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const alertId = Number.parseInt(incidentCommandDraft.alert_id.trim(), 10);
+    if (!Number.isFinite(alertId) || alertId <= 0) {
+      setError("Alert id is required.");
+      return null;
+    }
+    const owner = incidentCommandDraft.owner.trim();
+    if (owner.length === 0) {
+      setError("Owner is required.");
+      return null;
+    }
+
+    const etaRaw = incidentCommandDraft.eta_at.trim();
+    if (
+      (incidentCommandDraft.status === "in_progress" || incidentCommandDraft.status === "blocked")
+      && etaRaw.length === 0
+    ) {
+      setError("ETA is required when status is in_progress or blocked.");
+      return null;
+    }
+
+    let etaAt: string | null = null;
+    if (etaRaw.length > 0) {
+      const parsed = new Date(etaRaw);
+      if (Number.isNaN(parsed.getTime())) {
+        setError("ETA must use a valid RFC3339 datetime.");
+        return null;
+      }
+      etaAt = parsed.toISOString();
+    }
+
+    const payload = {
+      status: incidentCommandDraft.status,
+      owner,
+      eta_at: etaAt,
+      blocker: trimToNull(incidentCommandDraft.blocker),
+      summary: trimToNull(incidentCommandDraft.summary),
+      note: trimToNull(incidentCommandDraft.note)
+    };
+
+    setSavingIncidentCommand(true);
+    setError(null);
+    setIncidentCommandNotice(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/incidents/${alertId}/command`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const detail: IncidentCommandDetailResponse = await response.json();
+      setIncidentCommandDetail(detail);
+      setIncidentCommandNotice(
+        `Incident command for alert #${detail.item.alert_id} updated: status=${detail.item.command_status}, owner=${detail.item.command_owner}.`
+      );
+      await loadIncidentCommands();
+      return detail;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setSavingIncidentCommand(false);
+    }
+  }, [canWriteCmdb, incidentCommandDraft, loadIncidentCommands, t]);
+
   const loadBackupPolicies = useCallback(async () => {
     setLoadingBackupPolicies(true);
     setError(null);
@@ -2823,18 +3043,20 @@ export function App() {
   }, [weeklyDigestWeekStart]);
 
   const loadDailyCockpitSnapshot = useCallback(async () => {
-    const [queue, checklist, policies, runs, digest] = await Promise.all([
+    const [queue, checklist, incidents, policies, runs, digest] = await Promise.all([
       loadDailyCockpitQueue(),
       loadOpsChecklist(),
+      loadIncidentCommands(),
       loadBackupPolicies(),
       loadBackupPolicyRuns(),
       loadWeeklyDigest()
     ]);
-    return { queue, checklist, policies, runs, digest };
+    return { queue, checklist, incidents, policies, runs, digest };
   }, [
     loadBackupPolicies,
     loadBackupPolicyRuns,
     loadDailyCockpitQueue,
+    loadIncidentCommands,
     loadOpsChecklist,
     loadWeeklyDigest
   ]);
@@ -5459,6 +5681,30 @@ export function App() {
   }, [playbookApprovalRequests, selectedPlaybookApprovalId]);
 
   useEffect(() => {
+    if (selectedIncidentAlertId.trim().length === 0) {
+      setIncidentCommandDetail(null);
+      setIncidentCommandDraft(defaultIncidentCommandDraft);
+      return;
+    }
+    void loadIncidentCommandDetail(selectedIncidentAlertId);
+  }, [loadIncidentCommandDetail, selectedIncidentAlertId]);
+
+  useEffect(() => {
+    if (!incidentCommandDetail) {
+      return;
+    }
+    setIncidentCommandDraft((current) => ({
+      ...current,
+      alert_id: String(incidentCommandDetail.item.alert_id),
+      status: incidentCommandDetail.item.command_status,
+      owner: incidentCommandDetail.item.command_owner ?? "",
+      eta_at: incidentCommandDetail.item.eta_at ?? "",
+      blocker: incidentCommandDetail.item.blocker ?? "",
+      summary: incidentCommandDetail.item.summary ?? ""
+    }));
+  }, [incidentCommandDetail]);
+
+  useEffect(() => {
     if (backupPolicies.length === 0) {
       setBackupPolicyDraft(defaultBackupPolicyForm);
       return;
@@ -7068,10 +7314,16 @@ export function App() {
     dailyCockpitNotice,
     dailyCockpitQueue,
     dailyCockpitSiteFilter,
+    incidentCommandDetail,
+    incidentCommandDraft,
+    incidentCommandNotice,
+    incidentCommands,
     exportingWeeklyDigest,
     exportWeeklyDigest,
     loadBackupPolicies,
     loadBackupPolicyRuns,
+    loadIncidentCommandDetail,
+    loadIncidentCommands,
     loadWeeklyDigest,
     completeOpsChecklistItem,
     departmentWorkspace,
@@ -7086,6 +7338,8 @@ export function App() {
     runBackupSchedulerTick,
     loadingDailyCockpit,
     loadingOpsChecklist,
+    loadingIncidentCommandDetail,
+    loadingIncidentCommands,
     loadingBackupPolicies,
     loadingBackupPolicyRuns,
     loadingWeeklyDigest,
@@ -7107,6 +7361,8 @@ export function App() {
     selectedDepartmentAssetCount,
     runDailyCockpitAction,
     runningDailyCockpitActionKey,
+    saveIncidentCommand,
+    savingIncidentCommand,
     saveBackupPolicy,
     savingBackupPolicy,
     setBusinessWorkspace,
@@ -7115,9 +7371,12 @@ export function App() {
     setDailyCockpitSiteFilter,
     setDepartmentWorkspace,
     setFunctionWorkspace,
+    setIncidentCommandDraft,
     setMenuAxis,
     setOpsChecklistDate,
+    setSelectedIncidentAlertId,
     setWeeklyDigestWeekStart,
+    selectedIncidentAlertId,
     subSectionTitleStyle,
     t,
     tickingBackupScheduler,

@@ -31,11 +31,17 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     dailyCockpitNotice,
     dailyCockpitQueue,
     dailyCockpitSiteFilter,
+    incidentCommandDetail,
+    incidentCommandDraft,
+    incidentCommandNotice,
+    incidentCommands,
     exportingWeeklyDigest,
     exportWeeklyDigest,
     functionWorkspace,
     loadBackupPolicies,
     loadBackupPolicyRuns,
+    loadIncidentCommandDetail,
+    loadIncidentCommands,
     loadWeeklyDigest,
     loadDailyCockpitSnapshot,
     loadOpsChecklist,
@@ -47,6 +53,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     runningBackupPolicyActionId,
     loadingDailyCockpit,
     loadingOpsChecklist,
+    loadingIncidentCommandDetail,
+    loadingIncidentCommands,
     loadingBackupPolicies,
     loadingBackupPolicyRuns,
     loadingWeeklyDigest,
@@ -67,6 +75,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     selectedDepartmentAssetCount,
     runDailyCockpitAction,
     runningDailyCockpitActionKey,
+    saveIncidentCommand,
+    savingIncidentCommand,
     saveBackupPolicy,
     savingBackupPolicy,
     setBusinessWorkspace,
@@ -75,9 +85,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setDailyCockpitSiteFilter,
     setDepartmentWorkspace,
     setFunctionWorkspace,
+    setIncidentCommandDraft,
     setMenuAxis,
     setOpsChecklistDate,
+    setSelectedIncidentAlertId,
     setWeeklyDigestWeekStart,
+    selectedIncidentAlertId,
     subSectionTitleStyle,
     t,
     tickingBackupScheduler,
@@ -360,6 +373,207 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   </table>
                 </div>
               </>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Incident command</h3>
+              <div className="toolbar-row">
+                <button onClick={() => void loadIncidentCommands()} disabled={loadingIncidentCommands}>
+                  {loadingIncidentCommands ? t("cmdb.actions.loading") : "Refresh incidents"}
+                </button>
+                <button
+                  onClick={() => {
+                    if (selectedIncidentAlertId.trim().length > 0) {
+                      void loadIncidentCommandDetail(selectedIncidentAlertId);
+                    }
+                  }}
+                  disabled={loadingIncidentCommandDetail || selectedIncidentAlertId.trim().length === 0}
+                >
+                  {loadingIncidentCommandDetail ? t("cmdb.actions.loading") : "Refresh timeline"}
+                </button>
+              </div>
+            </div>
+            {incidentCommandNotice && <p className="banner banner-success">{incidentCommandNotice}</p>}
+            <p className="section-note">
+              Track incident owner, ETA, blocker, and status transitions with auditable timeline.
+            </p>
+
+            <div className="form-grid">
+              <label className="control-field">
+                <span>Alert</span>
+                <select
+                  value={selectedIncidentAlertId}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setSelectedIncidentAlertId(value);
+                    const selected = (incidentCommands as any[]).find((item) => String(item.alert_id) === value);
+                    if (!selected) {
+                      return;
+                    }
+                    setIncidentCommandDraft((prev: any) => ({
+                      ...prev,
+                      alert_id: String(selected.alert_id),
+                      status: selected.command_status,
+                      owner: selected.command_owner ?? "",
+                      eta_at: selected.eta_at ?? "",
+                      blocker: selected.blocker ?? "",
+                      summary: selected.summary ?? ""
+                    }));
+                  }}
+                >
+                  {(incidentCommands as any[]).map((item) => (
+                    <option key={`incident-alert-${item.alert_id}`} value={String(item.alert_id)}>
+                      #{item.alert_id} [{item.severity}] {item.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Status</span>
+                <select
+                  value={incidentCommandDraft.status}
+                  onChange={(event) => setIncidentCommandDraft((prev: any) => ({ ...prev, status: event.target.value }))}
+                >
+                  <option value="triage">triage</option>
+                  <option value="in_progress">in_progress</option>
+                  <option value="blocked">blocked</option>
+                  <option value="mitigated">mitigated</option>
+                  <option value="postmortem">postmortem</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Owner</span>
+                <input
+                  value={incidentCommandDraft.owner}
+                  onChange={(event) => setIncidentCommandDraft((prev: any) => ({ ...prev, owner: event.target.value }))}
+                  placeholder="operator-id"
+                />
+              </label>
+              <label className="control-field">
+                <span>ETA (RFC3339)</span>
+                <input
+                  value={incidentCommandDraft.eta_at}
+                  onChange={(event) => setIncidentCommandDraft((prev: any) => ({ ...prev, eta_at: event.target.value }))}
+                  placeholder="2026-03-07T10:00:00Z"
+                />
+              </label>
+              <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Summary</span>
+                <input
+                  value={incidentCommandDraft.summary}
+                  onChange={(event) => setIncidentCommandDraft((prev: any) => ({ ...prev, summary: event.target.value }))}
+                  placeholder="Current incident summary"
+                />
+              </label>
+              <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Blocker</span>
+                <input
+                  value={incidentCommandDraft.blocker}
+                  onChange={(event) => setIncidentCommandDraft((prev: any) => ({ ...prev, blocker: event.target.value }))}
+                  placeholder="Blocking dependency"
+                />
+              </label>
+              <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Note</span>
+                <input
+                  value={incidentCommandDraft.note}
+                  onChange={(event) => setIncidentCommandDraft((prev: any) => ({ ...prev, note: event.target.value }))}
+                  placeholder="State change note"
+                />
+              </label>
+            </div>
+
+            <div className="toolbar-row" style={{ marginTop: "0.65rem" }}>
+              <button onClick={() => void saveIncidentCommand()} disabled={!canWriteCmdb || savingIncidentCommand}>
+                {savingIncidentCommand ? t("cmdb.actions.loading") : "Save incident command"}
+              </button>
+            </div>
+
+            {(incidentCommands as any[]).length > 0 && (
+              <div style={{ overflowX: "auto", marginTop: "0.65rem" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "1050px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Alert</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Command</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner/ETA</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Scope</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(incidentCommands as any[]).slice(0, 20).map((item) => (
+                      <tr key={`incident-command-${item.alert_id}`}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          #{item.alert_id} [{item.severity}] {item.title}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.command_status}
+                          {item.summary ? ` | ${item.summary}` : ""}
+                          {item.blocker ? ` | blocker=${item.blocker}` : ""}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.command_owner}
+                          {item.eta_at ? ` @ ${new Date(item.eta_at).toLocaleString()}` : ""}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.site ?? "-"} / {item.department ?? "-"}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {new Date(item.updated_at).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <h4 style={{ marginBottom: "0.4rem", marginTop: "0.8rem" }}>Incident timeline</h4>
+            {loadingIncidentCommandDetail ? (
+              <p>{t("cmdb.actions.loading")}</p>
+            ) : !incidentCommandDetail ? (
+              <p>No incident timeline selected.</p>
+            ) : (incidentCommandDetail.timeline ?? []).length === 0 ? (
+              <p>No timeline event yet.</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Event</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner/ETA</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Note</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(incidentCommandDetail.timeline ?? []).slice(0, 20).map((event: any) => (
+                      <tr key={`incident-event-${event.id}`}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {event.event_type} by {event.actor}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {event.from_status ? `${event.from_status} -> ${event.to_status}` : event.to_status}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {event.command_owner}
+                          {event.eta_at ? ` @ ${new Date(event.eta_at).toLocaleString()}` : ""}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {event.note ?? event.summary ?? event.blocker ?? "-"}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {new Date(event.created_at).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
 

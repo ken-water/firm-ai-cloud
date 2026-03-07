@@ -10,10 +10,18 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - v0.1.5 planning document: `docs/29-v0.1.5-operator-autonomy-plan.md`.
 - v0.1.5 issue baseline: GitHub issues `#127` to `#135` (incident command flow, escalation policy, change calendar, handover digest, restore evidence, simulation drill, validation, release closure).
+- Incident command baseline for cockpit:
+  - migration: `202603070001_create_incident_command_tables.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/incidents`
+    - `GET /api/v1/ops/cockpit/incidents/{alert_id}`
+    - `POST /api/v1/ops/cockpit/incidents/{alert_id}/command`
 
 ### Changed
 
 - v0.1.x planning document now includes v0.1.5 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
+- Web console daily cockpit adds incident command panel (owner/ETA/status update and timeline view).
+- RBAC integration checks and permission mapping now cover incident command cockpit routes.
 
 ### Fixed
 

@@ -157,9 +157,18 @@ if [[ -z "$OPERATOR_MONITOR_SOURCE_ID" ]]; then
 fi
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/monitoring/sources/${OPERATOR_MONITOR_SOURCE_ID}/probe"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/alerts"
+OPERATOR_ALERT_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/alerts/policies"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/alerts/policies/preview" \
   "{\"match_source\":\"monitoring_sync\",\"match_severity\":\"warning\",\"match_status\":\"open\",\"dedup_window_seconds\":1800}"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/incidents"
+if [[ -n "${OPERATOR_ALERT_ID}" ]]; then
+  assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/incidents/${OPERATOR_ALERT_ID}"
+  assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/incidents/${OPERATOR_ALERT_ID}/command" \
+    "{\"status\":\"in_progress\",\"owner\":\"${OPERATOR_USER}\",\"eta_at\":\"$(date -u -d '+2 hour' +%Y-%m-%dT%H:%M:%SZ)\",\"summary\":\"rbac incident command update\"}"
+else
+  log "No alert available for operator incident command write-path check; skipped command mutation assertion"
+fi
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks/policy"
 assert_code 200 "$OPERATOR_USER" PUT "${API_BASE_URL}/api/v1/workflow/playbooks/policy" \
@@ -220,6 +229,15 @@ assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/alerts"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/alerts/policies"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/alerts/policies/preview" \
   "{\"match_source\":\"monitoring_sync\",\"match_severity\":\"warning\",\"match_status\":\"open\",\"dedup_window_seconds\":1800}"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/incidents"
+if [[ -n "${OPERATOR_ALERT_ID}" ]]; then
+  assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/incidents/${OPERATOR_ALERT_ID}"
+  assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/incidents/${OPERATOR_ALERT_ID}/command" \
+    "{\"status\":\"blocked\",\"owner\":\"${VIEWER_USER}\",\"eta_at\":\"$(date -u -d '+2 hour' +%Y-%m-%dT%H:%M:%SZ)\",\"summary\":\"viewer should not update\"}"
+else
+  assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/incidents/999999/command" \
+    "{\"status\":\"blocked\",\"owner\":\"${VIEWER_USER}\",\"eta_at\":\"$(date -u -d '+2 hour' +%Y-%m-%dT%H:%M:%SZ)\",\"summary\":\"viewer should not update\"}"
+fi
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/workflow/playbooks/policy"
 assert_code 403 "$VIEWER_USER" PUT "${API_BASE_URL}/api/v1/workflow/playbooks/policy" \
