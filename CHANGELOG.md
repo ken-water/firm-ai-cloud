@@ -8,11 +8,12 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- None yet.
+- v0.1.6 planning document: `docs/32-v0.1.6-operator-simplicity-v2-plan.md`.
+- v0.1.6 issue baseline: GitHub issues `#136` to `#144` (setup presets, action assistant, calendar reservation, handover quality gates, evidence compliance, runbook templates, validation, release closure).
 
 ### Changed
 
-- None yet.
+- v0.1.x master planning document now includes v0.1.6 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
 
 ### Fixed
 
