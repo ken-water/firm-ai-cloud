@@ -8,6 +8,20 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
+- None yet.
+
+### Changed
+
+- None yet.
+
+### Fixed
+
+- None yet.
+
+## [0.1.5] - 2026-03-07
+
+### Added
+
 - v0.1.5 planning document: `docs/29-v0.1.5-operator-autonomy-plan.md`.
 - v0.1.5 issue baseline: GitHub issues `#127` to `#135` (incident command flow, escalation policy, change calendar, handover digest, restore evidence, simulation drill, validation, release closure).
 - Incident command baseline for cockpit:
@@ -25,6 +39,29 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
     - `GET /api/v1/tickets/escalation/queue`
     - `GET /api/v1/tickets/escalation/actions`
     - `POST /api/v1/tickets/escalation/run`
+- Restore verification evidence baseline for backup/drill continuity:
+  - migration: `202603070003_create_restore_verification_evidence.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/backup/restore-evidence`
+    - `POST /api/v1/ops/cockpit/backup/runs/{id}/restore-evidence`
+    - `PATCH /api/v1/ops/cockpit/backup/restore-evidence/{id}`
+- Unified change calendar baseline for maintenance/freeze/approval overlays:
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/change-calendar`
+    - `POST /api/v1/ops/cockpit/change-calendar/conflicts`
+- Shift handover digest baseline for unresolved risk carryover:
+  - migration: `202603070004_create_handover_digest_tables.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/handover-digest`
+    - `GET /api/v1/ops/cockpit/handover-digest/export?format=csv|json`
+    - `POST /api/v1/ops/cockpit/handover-digest/items/{item_key}/close`
+- Escalation/failover dry-run simulation tooling:
+  - script: `scripts/ops-escalation-failover-sim.sh`
+  - policy: `scripts/ops-escalation-failover-policy.json`
+  - guide: `docs/30-v0.1.5-escalation-failover-simulation.md`
+- No-code operator journey validation suite:
+  - script: `scripts/qa-v0.1.5-operator-journey.sh`
+  - runbook: `docs/31-v0.1.5-operator-journey-validation.md`
 
 ### Changed
 
@@ -34,6 +71,12 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 - Web console tickets page now includes SLA escalation policy controls, policy preview/run actions, risk queue view, and escalation action timeline.
 - Ticket list and detail payloads now expose escalation state markers (`normal` / `near_breach` / `breached`) and latest action evidence.
 - RBAC permission mapping and integration checks now include escalation policy/queue/actions/run allow-deny matrix (viewer read-only for writes).
+- Backup run payloads now expose restore-evidence coverage hints (`restore_evidence_count` and latest evidence closure state).
+- Weekly digest now reports restore-evidence coverage and missing continuity evidence gaps.
+- Web console backup/dr panel now includes restore evidence attach/close workflow, coverage summary, and missing-run highlighting.
+- High-risk playbook execute path now includes change-calendar conflict detail in policy-block responses.
+- Web console daily cockpit now includes unified change calendar panel with date-range overlays and conflict check workflow.
+- Shift handover digest export now uses deterministic digest timestamp derived from shift context for reproducible artifacts.
 
 ### Fixed
 
