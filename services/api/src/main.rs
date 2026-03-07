@@ -5,6 +5,7 @@ mod auth_api;
 mod backup_dr;
 mod cmdb;
 mod cockpit;
+mod change_calendar;
 mod discovery_scheduler_worker;
 mod error;
 mod iam;
@@ -237,6 +238,7 @@ fn build_router(state: AppState) -> Router {
     let mut ops_routes = cockpit::routes()
         .merge(incident_command::routes())
         .merge(backup_dr::routes())
+        .merge(change_calendar::routes())
         .merge(ops_digest::routes());
     if state.rbac_enabled {
         ops_routes = ops_routes.route_layer(axum::middleware::from_fn_with_state(

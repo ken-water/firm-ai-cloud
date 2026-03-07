@@ -17,10 +17,24 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     backupPolicyDraft,
     backupPolicyNotice,
     backupPolicyRuns,
+    backupRestoreEvidence,
+    backupRestoreEvidenceCoverage,
+    backupRestoreEvidenceDraft,
+    backupRestoreEvidenceMissingRunIds,
+    backupRestoreRunStatusFilter,
+    changeCalendar,
+    changeCalendarConflictDraft,
+    changeCalendarConflictResult,
+    changeCalendarEndDate,
+    changeCalendarNotice,
+    changeCalendarStartDate,
     businessWorkspace,
     businessWorkspaceOptions,
     canAccessAdmin,
     canWriteCmdb,
+    checkChangeCalendarConflicts,
+    closeHandoverCarryoverItem,
+    closingHandoverItemKey,
     cockpitCriticalAssets,
     cockpitOperationalAssets,
     completeOpsChecklistItem,
@@ -35,11 +49,19 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     incidentCommandDraft,
     incidentCommandNotice,
     incidentCommands,
+    exportingHandoverDigest,
     exportingWeeklyDigest,
+    exportHandoverDigest,
     exportWeeklyDigest,
+    handoverDigest,
+    handoverDigestNotice,
+    handoverDigestShiftDate,
     functionWorkspace,
     loadBackupPolicies,
     loadBackupPolicyRuns,
+    loadBackupRestoreEvidence,
+    loadChangeCalendar,
+    loadHandoverDigest,
     loadIncidentCommandDetail,
     loadIncidentCommands,
     loadWeeklyDigest,
@@ -50,13 +72,18 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadFieldDefinitions,
     runBackupPolicy,
     runBackupSchedulerTick,
+    closeBackupRestoreEvidence,
     runningBackupPolicyActionId,
     loadingDailyCockpit,
     loadingOpsChecklist,
     loadingIncidentCommandDetail,
     loadingIncidentCommands,
+    loadingHandoverDigest,
     loadingBackupPolicies,
     loadingBackupPolicyRuns,
+    loadingBackupRestoreEvidence,
+    loadingChangeCalendar,
+    checkingChangeCalendarConflict,
     loadingWeeklyDigest,
     loadingAssetStats,
     loadingAssets,
@@ -79,12 +106,20 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     savingIncidentCommand,
     saveBackupPolicy,
     savingBackupPolicy,
+    saveBackupRestoreEvidence,
+    savingBackupRestoreEvidence,
     setBusinessWorkspace,
     setBackupPolicyDraft,
+    setBackupRestoreEvidenceDraft,
+    setBackupRestoreRunStatusFilter,
+    setChangeCalendarConflictDraft,
+    setChangeCalendarEndDate,
+    setChangeCalendarStartDate,
     setDailyCockpitDepartmentFilter,
     setDailyCockpitSiteFilter,
     setDepartmentWorkspace,
     setFunctionWorkspace,
+    setHandoverDigestShiftDate,
     setIncidentCommandDraft,
     setMenuAxis,
     setOpsChecklistDate,
@@ -587,6 +622,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <button onClick={() => void loadBackupPolicyRuns()} disabled={loadingBackupPolicyRuns}>
                   {loadingBackupPolicyRuns ? t("cmdb.actions.loading") : "Refresh runs"}
                 </button>
+                <button onClick={() => void loadBackupRestoreEvidence()} disabled={loadingBackupRestoreEvidence}>
+                  {loadingBackupRestoreEvidence ? t("cmdb.actions.loading") : "Refresh evidence"}
+                </button>
               </div>
             </div>
             {backupPolicyNotice && <p className="banner banner-success">{backupPolicyNotice}</p>}
@@ -865,6 +903,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                     <tr>
                       <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Run</th>
                       <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Restore evidence</th>
                       <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Trigger</th>
                       <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Hint</th>
                       <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Time</th>
@@ -881,6 +920,14 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                           {run.error_message ? ` | ${run.error_message}` : ""}
                         </td>
                         <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          count={run.restore_evidence_count}
+                          {run.latest_restore_closure_status ? ` | ${run.latest_restore_closure_status}` : ""}
+                          {run.latest_restore_verified_at ? ` @ ${new Date(run.latest_restore_verified_at).toLocaleString()}` : ""}
+                          {(run.status === "failed" || run.run_type === "drill") && run.restore_evidence_count === 0
+                            ? " | missing"
+                            : ""}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                           {run.triggered_by}
                           {run.triggered_by_scheduler ? " (scheduler)" : ""}
                         </td>
@@ -889,6 +936,319 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                         </td>
                         <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                           {new Date(run.started_at).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <h4 style={{ marginBottom: "0.4rem", marginTop: "0.8rem" }}>Restore verification evidence</h4>
+            <div className="toolbar-row" style={{ marginBottom: "0.45rem" }}>
+              <label className="control-field" style={{ minWidth: "220px" }}>
+                <span>Run status filter</span>
+                <select
+                  value={backupRestoreRunStatusFilter}
+                  onChange={(event) => setBackupRestoreRunStatusFilter(event.target.value)}
+                >
+                  <option value="all">all</option>
+                  <option value="succeeded">succeeded</option>
+                  <option value="failed">failed</option>
+                </select>
+              </label>
+              <button onClick={() => void loadBackupRestoreEvidence()} disabled={loadingBackupRestoreEvidence}>
+                {loadingBackupRestoreEvidence ? t("cmdb.actions.loading") : "Apply evidence filter"}
+              </button>
+            </div>
+            <p className="section-note">
+              required_runs={backupRestoreEvidenceCoverage.required_runs} | covered_runs={backupRestoreEvidenceCoverage.covered_runs} | missing_runs={backupRestoreEvidenceCoverage.missing_runs}
+              {(backupRestoreEvidenceMissingRunIds as number[]).length > 0
+                ? ` | missing_run_ids=${(backupRestoreEvidenceMissingRunIds as number[]).slice(0, 12).join(",")}`
+                : ""}
+            </p>
+
+            <div className="form-grid">
+              <label className="control-field">
+                <span>Run ID</span>
+                <input
+                  value={backupRestoreEvidenceDraft.run_id}
+                  onChange={(event) => setBackupRestoreEvidenceDraft((prev: any) => ({ ...prev, run_id: event.target.value }))}
+                  placeholder="backup run id"
+                />
+              </label>
+              <label className="control-field">
+                <span>Ticket</span>
+                <input
+                  value={backupRestoreEvidenceDraft.ticket_ref}
+                  onChange={(event) => setBackupRestoreEvidenceDraft((prev: any) => ({ ...prev, ticket_ref: event.target.value }))}
+                  placeholder="TKT-..."
+                />
+              </label>
+              <label className="control-field">
+                <span>Verifier</span>
+                <input
+                  value={backupRestoreEvidenceDraft.verifier}
+                  onChange={(event) => setBackupRestoreEvidenceDraft((prev: any) => ({ ...prev, verifier: event.target.value }))}
+                  placeholder="operator id"
+                />
+              </label>
+              <label className="control-field">
+                <span>Close evidence</span>
+                <select
+                  value={backupRestoreEvidenceDraft.close_evidence ? "true" : "false"}
+                  onChange={(event) =>
+                    setBackupRestoreEvidenceDraft((prev: any) => ({ ...prev, close_evidence: event.target.value === "true" }))
+                  }
+                >
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+              <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Artifact URL</span>
+                <input
+                  value={backupRestoreEvidenceDraft.artifact_url}
+                  onChange={(event) => setBackupRestoreEvidenceDraft((prev: any) => ({ ...prev, artifact_url: event.target.value }))}
+                  placeholder="https://artifact.example/restore-proof"
+                />
+              </label>
+              <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Note</span>
+                <input
+                  value={backupRestoreEvidenceDraft.note}
+                  onChange={(event) => setBackupRestoreEvidenceDraft((prev: any) => ({ ...prev, note: event.target.value }))}
+                  placeholder="restore validation summary"
+                />
+              </label>
+            </div>
+
+            <div className="toolbar-row" style={{ marginTop: "0.5rem" }}>
+              <button onClick={() => void saveBackupRestoreEvidence()} disabled={!canWriteCmdb || savingBackupRestoreEvidence}>
+                {savingBackupRestoreEvidence ? t("cmdb.actions.loading") : "Attach evidence"}
+              </button>
+            </div>
+
+            {loadingBackupRestoreEvidence ? (
+              <p>{t("cmdb.actions.loading")}</p>
+            ) : (backupRestoreEvidence as any[]).length === 0 ? (
+              <p>No restore evidence yet.</p>
+            ) : (
+              <div style={{ overflowX: "auto", marginTop: "0.55rem" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "1080px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Evidence</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Run</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Verifier</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Time</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(backupRestoreEvidence as any[]).slice(0, 30).map((item) => (
+                      <tr key={`restore-evidence-row-${item.id}`}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.ticket_ref ?? "-"}
+                          <div className="inline-note" style={{ marginTop: "0.2rem" }}>
+                            {item.artifact_url}
+                          </div>
+                          <div className="inline-note">{item.note ?? "-"}</div>
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          #{item.run_id} / policy #{item.policy_id} / {item.run_type} / {item.run_status}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.verifier}
+                          {item.closed_by ? ` -> ${item.closed_by}` : ""}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.closure_status}
+                          {item.closed_at ? ` @ ${new Date(item.closed_at).toLocaleString()}` : ""}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {new Date(item.created_at).toLocaleString()}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          <div className="toolbar-row">
+                            <button
+                              onClick={() => {
+                                setBackupRestoreEvidenceDraft((prev: any) => ({
+                                  ...prev,
+                                  run_id: String(item.run_id),
+                                  ticket_ref: item.ticket_ref ?? "",
+                                  artifact_url: item.artifact_url,
+                                  note: item.note ?? "",
+                                  verifier: item.verifier
+                                }));
+                              }}
+                            >
+                              Fill draft
+                            </button>
+                            <button
+                              onClick={() => void closeBackupRestoreEvidence(item.id)}
+                              disabled={!canWriteCmdb || item.closure_status === "closed" || savingBackupRestoreEvidence}
+                            >
+                              {item.closure_status === "closed" ? "Closed" : "Close"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Unified change calendar</h3>
+              <div className="toolbar-row">
+                <button onClick={() => void loadChangeCalendar()} disabled={loadingChangeCalendar}>
+                  {loadingChangeCalendar ? t("cmdb.actions.loading") : "Refresh calendar"}
+                </button>
+                <button onClick={() => void checkChangeCalendarConflicts()} disabled={!canWriteCmdb || checkingChangeCalendarConflict}>
+                  {checkingChangeCalendarConflict ? t("cmdb.actions.loading") : "Check conflict"}
+                </button>
+              </div>
+            </div>
+            {changeCalendarNotice && <p className="banner banner-success">{changeCalendarNotice}</p>}
+            {!canWriteCmdb && <p className="inline-note">{t("cmdb.dailyCockpit.messages.readOnlyHint")}</p>}
+            <div className="detail-grid" style={{ marginBottom: "0.65rem" }}>
+              <label className="control-field">
+                <span>Range start</span>
+                <input
+                  type="date"
+                  value={changeCalendarStartDate}
+                  onChange={(event) => setChangeCalendarStartDate(event.target.value)}
+                />
+              </label>
+              <label className="control-field">
+                <span>Range end</span>
+                <input
+                  type="date"
+                  value={changeCalendarEndDate}
+                  onChange={(event) => setChangeCalendarEndDate(event.target.value)}
+                />
+              </label>
+              <label className="control-field">
+                <span>Operation kind</span>
+                <input
+                  value={changeCalendarConflictDraft.operation_kind}
+                  onChange={(event) => setChangeCalendarConflictDraft((prev: any) => ({
+                    ...prev,
+                    operation_kind: event.target.value
+                  }))}
+                  placeholder="playbook.execute.restart-service-safe"
+                />
+              </label>
+              <label className="control-field">
+                <span>Risk level</span>
+                <select
+                  value={changeCalendarConflictDraft.risk_level}
+                  onChange={(event) => setChangeCalendarConflictDraft((prev: any) => ({
+                    ...prev,
+                    risk_level: event.target.value
+                  }))}
+                >
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="critical">critical</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Slot start</span>
+                <input
+                  type="datetime-local"
+                  value={changeCalendarConflictDraft.start_at_local}
+                  onChange={(event) => setChangeCalendarConflictDraft((prev: any) => ({
+                    ...prev,
+                    start_at_local: event.target.value
+                  }))}
+                />
+              </label>
+              <label className="control-field">
+                <span>Slot end</span>
+                <input
+                  type="datetime-local"
+                  value={changeCalendarConflictDraft.end_at_local}
+                  onChange={(event) => setChangeCalendarConflictDraft((prev: any) => ({
+                    ...prev,
+                    end_at_local: event.target.value
+                  }))}
+                />
+              </label>
+            </div>
+            {changeCalendar ? (
+              <p className="section-note">
+                generated_at={new Date(changeCalendar.generated_at).toLocaleString()} | range={changeCalendar.range.start_date}..{changeCalendar.range.end_date} | total={changeCalendar.total}
+              </p>
+            ) : (
+              <p className="inline-note">{loadingChangeCalendar ? t("cmdb.actions.loading") : "No calendar data loaded yet."}</p>
+            )}
+            {changeCalendarConflictResult && (
+              <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                <p className="section-note" style={{ marginTop: 0 }}>
+                  decision={changeCalendarConflictResult.decision_reason}
+                  {changeCalendarConflictResult.recommended_slot
+                    ? ` | recommended_slot=${new Date(changeCalendarConflictResult.recommended_slot).toLocaleString()}`
+                    : ""}
+                </p>
+                <div className="toolbar-row" style={{ marginBottom: "0.35rem" }}>
+                  <span className={`status-chip ${changeCalendarConflictResult.has_conflict ? "status-chip-danger" : "status-chip-success"}`}>
+                    {changeCalendarConflictResult.has_conflict ? "conflict" : "clear"}
+                  </span>
+                  <span className="status-chip">risk:{changeCalendarConflictResult.slot.risk_level}</span>
+                  <span className="status-chip">operation:{changeCalendarConflictResult.slot.operation_kind}</span>
+                </div>
+                {(changeCalendarConflictResult.conflicts ?? []).length > 0 && (
+                  <ul style={{ marginTop: "0.35rem", marginBottom: 0 }}>
+                    {(changeCalendarConflictResult.conflicts ?? []).map((item: any) => (
+                      <li key={`change-calendar-conflict-${item.code}`}>
+                        [{item.severity}] {item.title}: {item.detail}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            {!changeCalendar || (changeCalendar.items ?? []).length === 0 ? (
+              <p className="inline-note">No upcoming maintenance/freeze/approval overlay items in selected range.</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "1180px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Event</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Type</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Severity</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Time</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Source</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(changeCalendar.items ?? []).slice(0, 40).map((item: any) => (
+                      <tr key={`change-calendar-item-${item.event_key}`}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          <strong>{item.title}</strong>
+                          <div className="inline-note">{item.event_key}</div>
+                          <div className="inline-note">{item.details}</div>
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>{item.event_type}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          <span className={`status-chip ${item.severity === "critical" ? "status-chip-danger" : item.severity === "high" ? "status-chip-warn" : ""}`}>
+                            {item.severity}
+                          </span>
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {new Date(item.starts_at).toLocaleString()}
+                          <div className="inline-note">to {new Date(item.ends_at).toLocaleString()}</div>
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.source_type}#{item.source_id}
                         </td>
                       </tr>
                     ))}
@@ -951,6 +1311,11 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                     <p className="inline-note">
                       backup_failed={weeklyDigest.metrics.backup_failed_policies} | drill_failed={weeklyDigest.metrics.drill_failed_policies}
                     </p>
+                    <p className="inline-note">
+                      evidence_required={weeklyDigest.metrics.continuity_runs_requiring_evidence}
+                      {" | "}evidence_covered={weeklyDigest.metrics.continuity_runs_with_evidence}
+                      {" | "}evidence_missing={weeklyDigest.metrics.continuity_runs_missing_evidence}
+                    </p>
                   </div>
                   <div className="detail-panel">
                     <strong>Auth risk signals</strong>
@@ -988,6 +1353,113 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                     </ul>
                   </div>
                 </div>
+              </>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Shift handover digest</h3>
+              <div className="toolbar-row">
+                <button onClick={() => void loadHandoverDigest()} disabled={loadingHandoverDigest}>
+                  {loadingHandoverDigest ? t("cmdb.actions.loading") : "Generate handover"}
+                </button>
+                <button onClick={() => void exportHandoverDigest("csv")} disabled={exportingHandoverDigest}>
+                  {exportingHandoverDigest ? t("cmdb.actions.loading") : "Export CSV"}
+                </button>
+                <button onClick={() => void exportHandoverDigest("json")} disabled={exportingHandoverDigest}>
+                  {exportingHandoverDigest ? t("cmdb.actions.loading") : "Export JSON"}
+                </button>
+              </div>
+            </div>
+            {handoverDigestNotice && <p className="banner banner-success">{handoverDigestNotice}</p>}
+
+            <div className="toolbar-row" style={{ marginBottom: "0.55rem" }}>
+              <label className="control-field" style={{ minWidth: "220px" }}>
+                <span>Shift date</span>
+                <input
+                  type="date"
+                  value={handoverDigestShiftDate}
+                  onChange={(event) => setHandoverDigestShiftDate(event.target.value)}
+                />
+              </label>
+            </div>
+
+            {!handoverDigest ? (
+              <p>{loadingHandoverDigest ? t("cmdb.actions.loading") : "No handover digest generated yet."}</p>
+            ) : (
+              <>
+                <p className="section-note">
+                  digest_key={handoverDigest.digest_key} | generated_at={new Date(handoverDigest.generated_at).toLocaleString()} | shift_date={handoverDigest.shift_date}
+                </p>
+                <div className="toolbar-row" style={{ marginBottom: "0.45rem" }}>
+                  <span className="status-chip status-chip-danger">incidents:{handoverDigest.metrics.unresolved_incidents}</span>
+                  <span className="status-chip">ticket_backlog:{handoverDigest.metrics.escalation_backlog}</span>
+                  <span className="status-chip status-chip-warn">failed_runs:{handoverDigest.metrics.failed_continuity_runs}</span>
+                  <span className="status-chip">pending_approvals:{handoverDigest.metrics.pending_approvals}</span>
+                  <span className="status-chip status-chip-danger">evidence_gap:{handoverDigest.metrics.restore_evidence_missing_runs}</span>
+                  <span className="status-chip status-chip-success">closed:{handoverDigest.metrics.closed_items}</span>
+                </div>
+
+                {(handoverDigest.items ?? []).length === 0 ? (
+                  <p>No carryover item.</p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ borderCollapse: "collapse", minWidth: "1280px", width: "100%" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Item</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Carryover</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Risk</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Observed</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(handoverDigest.items ?? []).slice(0, 40).map((item: any) => (
+                          <tr key={`handover-item-${item.item_key}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <strong>{item.item_key}</strong>
+                              <div>{item.title}</div>
+                              <div className="inline-note">{item.source_type}#{item.source_id}</div>
+                              <div className="inline-note">{item.source_ref}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              owner={item.owner}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              next_owner={item.next_owner}
+                              <div className="inline-note">{item.next_action}</div>
+                              <div className="inline-note">status={item.status}</div>
+                              <div className="inline-note">note={item.note ?? "-"}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <span className={`status-chip ${item.risk_level === "critical" ? "status-chip-danger" : item.risk_level === "high" ? "status-chip-warn" : ""}`}>
+                                {item.risk_level}
+                              </span>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {new Date(item.observed_at).toLocaleString()}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <button
+                                onClick={() => void closeHandoverCarryoverItem(item)}
+                                disabled={!canWriteCmdb || item.status === "closed" || closingHandoverItemKey === item.item_key}
+                              >
+                                {closingHandoverItemKey === item.item_key
+                                  ? t("cmdb.actions.loading")
+                                  : item.status === "closed"
+                                    ? "Closed"
+                                    : "Close item"}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </>
             )}
           </div>

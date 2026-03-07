@@ -999,6 +999,41 @@ mod tests {
             ),
             (
                 Method::GET,
+                "/api/v1/ops/cockpit/change-calendar",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/change-calendar/conflicts",
+                "ops.cockpit.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/backup/restore-evidence",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/backup/runs/1/restore-evidence",
+                "ops.cockpit.write",
+            ),
+            (
+                Method::PATCH,
+                "/api/v1/ops/cockpit/backup/restore-evidence/1",
+                "ops.cockpit.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/handover-digest",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/handover-digest/items/ticket:1/close",
+                "ops.cockpit.write",
+            ),
+            (
+                Method::GET,
                 "/api/v1/ops/cockpit/incidents",
                 "ops.cockpit.read",
             ),

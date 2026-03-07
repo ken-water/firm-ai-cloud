@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::{
     alerts::append_alert_remediation_timeline,
     audit::{actor_from_headers, write_from_headers_best_effort},
+    change_calendar::evaluate_change_calendar_conflicts,
     error::{AppError, AppResult},
     state::AppState,
 };
@@ -2025,9 +2026,19 @@ async fn enforce_playbook_execution_policy(
     }
 
     let policy = load_or_init_playbook_execution_policy(&state.db).await?;
-    let runtime = evaluate_policy_runtime(&policy, Utc::now());
+    let now = Utc::now();
+    let runtime = evaluate_policy_runtime(&policy, now);
+    let operation_kind = format!("playbook.execute.{}", playbook.key);
+    let calendar_conflicts = evaluate_change_calendar_conflicts(
+        &state.db,
+        now,
+        now + Duration::minutes(30),
+        operation_kind.as_str(),
+        playbook.risk_level.as_str(),
+    )
+    .await?;
 
-    if runtime.blocked_reason.is_none() {
+    if runtime.blocked_reason.is_none() && !calendar_conflicts.has_conflict {
         return Ok(());
     }
 
@@ -2057,6 +2068,8 @@ async fn enforce_playbook_execution_policy(
                 "override_requires_reason": policy.override_requires_reason,
                 "blocked_reason": runtime.blocked_reason,
                 "next_allowed_at": runtime.next_allowed_at,
+                "calendar_conflicts": calendar_conflicts.conflicts,
+                "calendar_decision_reason": calendar_conflicts.decision_reason,
             }),
         )
         .await;
@@ -2064,15 +2077,30 @@ async fn enforce_playbook_execution_policy(
         return Ok(());
     }
 
-    let next_hint = runtime
-        .next_allowed_at
+    let next_allowed_at = runtime.next_allowed_at.or_else(|| {
+        calendar_conflicts
+            .recommended_slot
+            .map(|value| value.to_rfc3339())
+    });
+    let next_hint = next_allowed_at
         .map(|value| format!(" next_allowed_at={value}"))
         .unwrap_or_default();
     let blocked_reason = runtime
         .blocked_reason
-        .unwrap_or_else(|| "blocked by execution policy".to_string());
+        .unwrap_or_else(|| calendar_conflicts.decision_reason.clone());
+    let calendar_hint = if calendar_conflicts.has_conflict {
+        let details = calendar_conflicts
+            .conflicts
+            .iter()
+            .map(|item| format!("{}:{}", item.code, item.detail))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        format!(" calendar_conflicts={details}.")
+    } else {
+        String::new()
+    };
     Err(AppError::Validation(format!(
-        "playbook execution blocked by policy: {blocked_reason}.{next_hint} To override, set maintenance_override_confirmed=true and provide maintenance_override_reason."
+        "playbook execution blocked by policy: {blocked_reason}.{next_hint}{calendar_hint} To override, set maintenance_override_confirmed=true and provide maintenance_override_reason."
     )))
 }
 

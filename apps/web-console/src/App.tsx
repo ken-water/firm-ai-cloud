@@ -854,6 +854,9 @@ type BackupPolicyRunRecord = {
   error_message: string | null;
   started_at: string;
   finished_at: string;
+  restore_evidence_count: number;
+  latest_restore_verified_at: string | null;
+  latest_restore_closure_status: string | null;
   created_at: string;
 };
 
@@ -878,6 +881,97 @@ type BackupSchedulerTickResponse = {
   runs: BackupPolicyRunRecord[];
 };
 
+type BackupRestoreEvidenceRecord = {
+  id: number;
+  run_id: number;
+  policy_id: number;
+  run_type: "backup" | "drill";
+  run_status: "succeeded" | "failed";
+  ticket_ref: string | null;
+  artifact_url: string;
+  note: string | null;
+  verifier: string;
+  closure_status: "open" | "closed";
+  closed_at: string | null;
+  closed_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type BackupRestoreEvidenceListResponse = {
+  generated_at: string;
+  total: number;
+  limit: number;
+  offset: number;
+  coverage: {
+    required_runs: number;
+    covered_runs: number;
+    missing_runs: number;
+  };
+  missing_run_ids: number[];
+  items: BackupRestoreEvidenceRecord[];
+};
+
+type BackupRestoreEvidenceForm = {
+  run_id: string;
+  ticket_ref: string;
+  artifact_url: string;
+  note: string;
+  verifier: string;
+  close_evidence: boolean;
+};
+
+type ChangeCalendarEvent = {
+  event_key: string;
+  event_type: string;
+  severity: string;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  source_type: string;
+  source_id: string;
+  details: string;
+};
+
+type ChangeCalendarResponse = {
+  generated_at: string;
+  range: {
+    start_date: string;
+    end_date: string;
+  };
+  total: number;
+  items: ChangeCalendarEvent[];
+};
+
+type ChangeCalendarConflictItem = {
+  code: string;
+  title: string;
+  detail: string;
+  severity: string;
+  source: string;
+};
+
+type ChangeCalendarConflictResponse = {
+  generated_at: string;
+  slot: {
+    start_at: string;
+    end_at: string;
+    operation_kind: string;
+    risk_level: string;
+  };
+  has_conflict: boolean;
+  decision_reason: string;
+  conflicts: ChangeCalendarConflictItem[];
+  recommended_slot: string | null;
+};
+
+type ChangeCalendarConflictDraft = {
+  start_at_local: string;
+  end_at_local: string;
+  operation_kind: string;
+  risk_level: "low" | "medium" | "high" | "critical";
+};
+
 type WeeklyDigestResponse = {
   generated_at: string;
   digest_key: string;
@@ -892,6 +986,9 @@ type WeeklyDigestResponse = {
     playbook_approval_backlog: number;
     backup_failed_policies: number;
     drill_failed_policies: number;
+    continuity_runs_requiring_evidence: number;
+    continuity_runs_with_evidence: number;
+    continuity_runs_missing_evidence: number;
     locked_local_accounts: number;
     local_accounts_without_mfa: number;
   };
@@ -901,6 +998,43 @@ type WeeklyDigestResponse = {
 };
 
 type WeeklyDigestExportResponse = {
+  generated_at: string;
+  digest_key: string;
+  format: "csv" | "json";
+  content: string;
+};
+
+type HandoverCarryoverItem = {
+  item_key: string;
+  source_type: string;
+  source_id: number;
+  title: string;
+  owner: string;
+  next_owner: string;
+  next_action: string;
+  status: "open" | "closed";
+  note: string | null;
+  risk_level: string;
+  observed_at: string;
+  source_ref: string;
+};
+
+type HandoverDigestResponse = {
+  generated_at: string;
+  digest_key: string;
+  shift_date: string;
+  metrics: {
+    unresolved_incidents: number;
+    escalation_backlog: number;
+    failed_continuity_runs: number;
+    pending_approvals: number;
+    restore_evidence_missing_runs: number;
+    closed_items: number;
+  };
+  items: HandoverCarryoverItem[];
+};
+
+type HandoverDigestExportResponse = {
   generated_at: string;
   digest_key: string;
   format: "csv" | "json";
@@ -1622,6 +1756,22 @@ const defaultBackupPolicyForm: BackupPolicyForm = {
   note: ""
 };
 
+const defaultBackupRestoreEvidenceForm: BackupRestoreEvidenceForm = {
+  run_id: "",
+  ticket_ref: "",
+  artifact_url: "",
+  note: "",
+  verifier: "",
+  close_evidence: true
+};
+
+const defaultChangeCalendarConflictDraft: ChangeCalendarConflictDraft = {
+  start_at_local: formatLocalDateTimeInput(new Date()),
+  end_at_local: formatLocalDateTimeInput(new Date(Date.now() + 30 * 60 * 1000)),
+  operation_kind: "playbook.execute.restart-service-safe",
+  risk_level: "high"
+};
+
 const defaultIncidentCommandDraft: IncidentCommandDraft = {
   alert_id: "",
   status: "triage",
@@ -1863,6 +2013,27 @@ export function App() {
   const [backupPolicies, setBackupPolicies] = useState<BackupPolicyRecord[]>([]);
   const [backupPolicyRuns, setBackupPolicyRuns] = useState<BackupPolicyRunRecord[]>([]);
   const [backupPolicyDraft, setBackupPolicyDraft] = useState<BackupPolicyForm>(defaultBackupPolicyForm);
+  const [backupRestoreEvidence, setBackupRestoreEvidence] = useState<BackupRestoreEvidenceRecord[]>([]);
+  const [backupRestoreEvidenceCoverage, setBackupRestoreEvidenceCoverage] = useState({
+    required_runs: 0,
+    covered_runs: 0,
+    missing_runs: 0
+  });
+  const [backupRestoreEvidenceMissingRunIds, setBackupRestoreEvidenceMissingRunIds] = useState<number[]>([]);
+  const [backupRestoreEvidenceDraft, setBackupRestoreEvidenceDraft] =
+    useState<BackupRestoreEvidenceForm>(defaultBackupRestoreEvidenceForm);
+  const [backupRestoreRunStatusFilter, setBackupRestoreRunStatusFilter] = useState("all");
+  const [changeCalendar, setChangeCalendar] = useState<ChangeCalendarResponse | null>(null);
+  const [changeCalendarStartDate, setChangeCalendarStartDate] = useState(() => formatLocalDateKey(new Date()));
+  const [changeCalendarEndDate, setChangeCalendarEndDate] = useState(() => {
+    const date = new Date();
+    date.setDate(date.getDate() + 13);
+    return formatLocalDateKey(date);
+  });
+  const [changeCalendarConflictDraft, setChangeCalendarConflictDraft] =
+    useState<ChangeCalendarConflictDraft>(defaultChangeCalendarConflictDraft);
+  const [changeCalendarConflictResult, setChangeCalendarConflictResult] =
+    useState<ChangeCalendarConflictResponse | null>(null);
   const [loadingDailyCockpit, setLoadingDailyCockpit] = useState(false);
   const [loadingOpsChecklist, setLoadingOpsChecklist] = useState(false);
   const [loadingIncidentCommands, setLoadingIncidentCommands] = useState(false);
@@ -1870,7 +2041,11 @@ export function App() {
   const [savingIncidentCommand, setSavingIncidentCommand] = useState(false);
   const [loadingBackupPolicies, setLoadingBackupPolicies] = useState(false);
   const [loadingBackupPolicyRuns, setLoadingBackupPolicyRuns] = useState(false);
+  const [loadingBackupRestoreEvidence, setLoadingBackupRestoreEvidence] = useState(false);
+  const [loadingChangeCalendar, setLoadingChangeCalendar] = useState(false);
+  const [checkingChangeCalendarConflict, setCheckingChangeCalendarConflict] = useState(false);
   const [savingBackupPolicy, setSavingBackupPolicy] = useState(false);
+  const [savingBackupRestoreEvidence, setSavingBackupRestoreEvidence] = useState(false);
   const [runningBackupPolicyActionId, setRunningBackupPolicyActionId] = useState<string | null>(null);
   const [tickingBackupScheduler, setTickingBackupScheduler] = useState(false);
   const [weeklyDigest, setWeeklyDigest] = useState<WeeklyDigestResponse | null>(null);
@@ -1883,13 +2058,20 @@ export function App() {
     now.setDate(now.getDate() + offset);
     return formatLocalDateKey(now);
   });
+  const [handoverDigest, setHandoverDigest] = useState<HandoverDigestResponse | null>(null);
+  const [loadingHandoverDigest, setLoadingHandoverDigest] = useState(false);
+  const [exportingHandoverDigest, setExportingHandoverDigest] = useState(false);
+  const [closingHandoverItemKey, setClosingHandoverItemKey] = useState<string | null>(null);
+  const [handoverDigestShiftDate, setHandoverDigestShiftDate] = useState(() => formatLocalDateKey(new Date()));
   const [runningDailyCockpitActionKey, setRunningDailyCockpitActionKey] = useState<string | null>(null);
   const [runningOpsChecklistActionKey, setRunningOpsChecklistActionKey] = useState<string | null>(null);
   const [dailyCockpitNotice, setDailyCockpitNotice] = useState<string | null>(null);
   const [opsChecklistNotice, setOpsChecklistNotice] = useState<string | null>(null);
   const [incidentCommandNotice, setIncidentCommandNotice] = useState<string | null>(null);
   const [backupPolicyNotice, setBackupPolicyNotice] = useState<string | null>(null);
+  const [changeCalendarNotice, setChangeCalendarNotice] = useState<string | null>(null);
   const [weeklyDigestNotice, setWeeklyDigestNotice] = useState<string | null>(null);
+  const [handoverDigestNotice, setHandoverDigestNotice] = useState<string | null>(null);
   const [dailyCockpitSiteFilter, setDailyCockpitSiteFilter] = useState("");
   const [dailyCockpitDepartmentFilter, setDailyCockpitDepartmentFilter] = useState("");
   const [opsChecklistDate, setOpsChecklistDate] = useState(() => formatLocalDateKey(new Date()));
@@ -2959,6 +3141,231 @@ export function App() {
     }
   }, []);
 
+  const loadBackupRestoreEvidence = useCallback(async () => {
+    setLoadingBackupRestoreEvidence(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "80",
+        offset: "0"
+      });
+      const policyId = Number.parseInt(backupPolicyDraft.policy_id.trim(), 10);
+      if (Number.isFinite(policyId) && policyId > 0) {
+        params.set("policy_id", String(policyId));
+      }
+      if (backupRestoreRunStatusFilter !== "all") {
+        params.set("run_status", backupRestoreRunStatusFilter);
+      }
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/backup/restore-evidence?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupRestoreEvidenceListResponse = await response.json();
+      setBackupRestoreEvidence(payload.items);
+      setBackupRestoreEvidenceCoverage(payload.coverage);
+      setBackupRestoreEvidenceMissingRunIds(payload.missing_run_ids);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setBackupRestoreEvidence([]);
+      setBackupRestoreEvidenceCoverage({
+        required_runs: 0,
+        covered_runs: 0,
+        missing_runs: 0
+      });
+      setBackupRestoreEvidenceMissingRunIds([]);
+      return null;
+    } finally {
+      setLoadingBackupRestoreEvidence(false);
+    }
+  }, [backupPolicyDraft.policy_id, backupRestoreRunStatusFilter]);
+
+  const loadChangeCalendar = useCallback(async () => {
+    setLoadingChangeCalendar(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      const startDate = changeCalendarStartDate.trim();
+      const endDate = changeCalendarEndDate.trim();
+      if (startDate) {
+        params.set("start_date", startDate);
+      }
+      if (endDate) {
+        params.set("end_date", endDate);
+      }
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/change-calendar?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: ChangeCalendarResponse = await response.json();
+      setChangeCalendar(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setChangeCalendar(null);
+      return null;
+    } finally {
+      setLoadingChangeCalendar(false);
+    }
+  }, [changeCalendarEndDate, changeCalendarStartDate]);
+
+  const checkChangeCalendarConflicts = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const startAt = localDateTimeInputToUtcRfc3339(changeCalendarConflictDraft.start_at_local);
+    const endAt = localDateTimeInputToUtcRfc3339(changeCalendarConflictDraft.end_at_local);
+    if (!startAt || !endAt) {
+      setError("Conflict check requires valid start/end date-time.");
+      return null;
+    }
+    if (Date.parse(endAt) <= Date.parse(startAt)) {
+      setError("Conflict check requires end time later than start time.");
+      return null;
+    }
+
+    setCheckingChangeCalendarConflict(true);
+    setChangeCalendarNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/conflicts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          start_at: startAt,
+          end_at: endAt,
+          operation_kind: changeCalendarConflictDraft.operation_kind.trim(),
+          risk_level: changeCalendarConflictDraft.risk_level
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: ChangeCalendarConflictResponse = await response.json();
+      setChangeCalendarConflictResult(payload);
+      setChangeCalendarNotice(
+        payload.has_conflict
+          ? `Calendar conflict detected: ${payload.decision_reason}`
+          : `Calendar slot is clear: ${payload.decision_reason}`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setCheckingChangeCalendarConflict(false);
+    }
+  }, [canWriteCmdb, changeCalendarConflictDraft, t]);
+
+  const saveBackupRestoreEvidence = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const runId = Number.parseInt(backupRestoreEvidenceDraft.run_id.trim(), 10);
+    if (!Number.isFinite(runId) || runId <= 0) {
+      setError("Run ID is required for restore evidence.");
+      return null;
+    }
+    const artifactUrl = backupRestoreEvidenceDraft.artifact_url.trim();
+    if (!artifactUrl) {
+      setError("Artifact URL is required.");
+      return null;
+    }
+
+    setSavingBackupRestoreEvidence(true);
+    setBackupPolicyNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/backup/runs/${runId}/restore-evidence`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          ticket_ref: trimToNull(backupRestoreEvidenceDraft.ticket_ref),
+          artifact_url: artifactUrl,
+          note: trimToNull(backupRestoreEvidenceDraft.note),
+          verifier: trimToNull(backupRestoreEvidenceDraft.verifier),
+          close_evidence: backupRestoreEvidenceDraft.close_evidence
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupRestoreEvidenceRecord = await response.json();
+      await Promise.all([
+        loadBackupPolicyRuns(),
+        loadBackupRestoreEvidence()
+      ]);
+      setBackupPolicyNotice(
+        `Restore evidence #${payload.id} attached to run #${payload.run_id} (${payload.closure_status}).`
+      );
+      setBackupRestoreEvidenceDraft((prev) => ({
+        ...defaultBackupRestoreEvidenceForm,
+        run_id: prev.run_id,
+        verifier: prev.verifier
+      }));
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setSavingBackupRestoreEvidence(false);
+    }
+  }, [
+    backupRestoreEvidenceDraft,
+    canWriteCmdb,
+    loadBackupPolicyRuns,
+    loadBackupRestoreEvidence,
+    t
+  ]);
+
+  const closeBackupRestoreEvidence = useCallback(async (evidenceId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    if (!Number.isFinite(evidenceId) || evidenceId <= 0) {
+      return null;
+    }
+
+    setSavingBackupRestoreEvidence(true);
+    setBackupPolicyNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/backup/restore-evidence/${evidenceId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          close_evidence: true
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupRestoreEvidenceRecord = await response.json();
+      await Promise.all([
+        loadBackupPolicyRuns(),
+        loadBackupRestoreEvidence()
+      ]);
+      setBackupPolicyNotice(`Restore evidence #${payload.id} closed.`);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setSavingBackupRestoreEvidence(false);
+    }
+  }, [canWriteCmdb, loadBackupPolicyRuns, loadBackupRestoreEvidence, t]);
+
   const saveBackupPolicy = useCallback(async () => {
     if (!canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
@@ -3020,7 +3427,7 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const item: BackupPolicyRecord = await response.json();
-      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns()]);
+      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns(), loadBackupRestoreEvidence()]);
       setBackupPolicyNotice(
         isEdit
           ? `Backup policy '${item.policy_key}' updated.`
@@ -3050,7 +3457,7 @@ export function App() {
     } finally {
       setSavingBackupPolicy(false);
     }
-  }, [backupPolicyDraft, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, t]);
+  }, [backupPolicyDraft, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, loadBackupRestoreEvidence, t]);
 
   const runBackupPolicy = useCallback(async (
     policyId: number,
@@ -3085,7 +3492,11 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const payload: BackupPolicyRunResult = await response.json();
-      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns()]);
+      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns(), loadBackupRestoreEvidence()]);
+      setBackupRestoreEvidenceDraft((prev) => ({
+        ...prev,
+        run_id: String(payload.run.id)
+      }));
       setBackupPolicyNotice(
         `${runType} run #${payload.run.id} for policy '${payload.policy.policy_key}' finished with status '${payload.run.status}'.`
       );
@@ -3096,7 +3507,7 @@ export function App() {
     } finally {
       setRunningBackupPolicyActionId(null);
     }
-  }, [backupPolicyDraft.note, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, t]);
+  }, [backupPolicyDraft.note, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, loadBackupRestoreEvidence, t]);
 
   const runBackupSchedulerTick = useCallback(async () => {
     if (!canWriteCmdb) {
@@ -3120,7 +3531,7 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const payload: BackupSchedulerTickResponse = await response.json();
-      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns()]);
+      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns(), loadBackupRestoreEvidence()]);
       setBackupPolicyNotice(
         `Scheduler tick completed: backup_runs=${payload.backup_runs}, drill_runs=${payload.drill_runs}.`
       );
@@ -3131,7 +3542,7 @@ export function App() {
     } finally {
       setTickingBackupScheduler(false);
     }
-  }, [backupPolicyDraft.note, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, t]);
+  }, [backupPolicyDraft.note, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, loadBackupRestoreEvidence, t]);
 
   const loadWeeklyDigest = useCallback(async () => {
     setLoadingWeeklyDigest(true);
@@ -3199,20 +3610,134 @@ export function App() {
     }
   }, [weeklyDigestWeekStart]);
 
+  const loadHandoverDigest = useCallback(async () => {
+    setLoadingHandoverDigest(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (handoverDigestShiftDate.trim().length > 0) {
+        params.set("shift_date", handoverDigestShiftDate.trim());
+      }
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/handover-digest?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: HandoverDigestResponse = await response.json();
+      setHandoverDigest(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setHandoverDigest(null);
+      return null;
+    } finally {
+      setLoadingHandoverDigest(false);
+    }
+  }, [handoverDigestShiftDate]);
+
+  const exportHandoverDigest = useCallback(async (format: "csv" | "json") => {
+    setExportingHandoverDigest(true);
+    setHandoverDigestNotice(null);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        format
+      });
+      if (handoverDigestShiftDate.trim().length > 0) {
+        params.set("shift_date", handoverDigestShiftDate.trim());
+      }
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/export?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: HandoverDigestExportResponse = await response.json();
+      if (typeof window !== "undefined") {
+        const blob = new Blob(
+          [payload.content],
+          { type: format === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8" }
+        );
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${payload.digest_key}.${format}`;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }
+      setHandoverDigestNotice(`Handover digest exported as ${payload.digest_key}.${format}.`);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setExportingHandoverDigest(false);
+    }
+  }, [handoverDigestShiftDate]);
+
+  const closeHandoverCarryoverItem = useCallback(async (item: HandoverCarryoverItem) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    const nextOwner = item.next_owner.trim();
+    const nextAction = item.next_action.trim();
+    if (!nextOwner || !nextAction) {
+      setError("next_owner and next_action are required to close handover item.");
+      return null;
+    }
+
+    setClosingHandoverItemKey(item.item_key);
+    setHandoverDigestNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/items/${encodeURIComponent(item.item_key)}/close`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          shift_date: handoverDigestShiftDate,
+          source_type: item.source_type,
+          source_id: item.source_id,
+          next_owner: nextOwner,
+          next_action: nextAction,
+          note: item.note ?? undefined
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await Promise.all([loadHandoverDigest(), loadWeeklyDigest()]);
+      setHandoverDigestNotice(`Handover item '${item.item_key}' closed.`);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setClosingHandoverItemKey(null);
+    }
+  }, [canWriteCmdb, handoverDigestShiftDate, loadHandoverDigest, loadWeeklyDigest, t]);
+
   const loadDailyCockpitSnapshot = useCallback(async () => {
-    const [queue, checklist, incidents, policies, runs, digest] = await Promise.all([
+    const [queue, checklist, incidents, policies, runs, evidence, calendar, digest, handover] = await Promise.all([
       loadDailyCockpitQueue(),
       loadOpsChecklist(),
       loadIncidentCommands(),
       loadBackupPolicies(),
       loadBackupPolicyRuns(),
-      loadWeeklyDigest()
+      loadBackupRestoreEvidence(),
+      loadChangeCalendar(),
+      loadWeeklyDigest(),
+      loadHandoverDigest()
     ]);
-    return { queue, checklist, incidents, policies, runs, digest };
+    return { queue, checklist, incidents, policies, runs, evidence, calendar, digest, handover };
   }, [
     loadBackupPolicies,
     loadBackupPolicyRuns,
+    loadBackupRestoreEvidence,
+    loadChangeCalendar,
     loadDailyCockpitQueue,
+    loadHandoverDigest,
     loadIncidentCommands,
     loadOpsChecklist,
     loadWeeklyDigest
@@ -6180,6 +6705,25 @@ export function App() {
   }, [backupPolicies]);
 
   useEffect(() => {
+    setBackupRestoreEvidenceDraft((current) => {
+      const hasRun = Number.isFinite(Number.parseInt(current.run_id, 10))
+        && Number.parseInt(current.run_id, 10) > 0;
+      const nextRunId = backupPolicyRuns.length > 0 ? String(backupPolicyRuns[0].id) : "";
+      const nextVerifier = current.verifier.trim().length > 0
+        ? current.verifier
+        : (authIdentity?.user.username ?? "");
+      if (hasRun && nextVerifier === current.verifier) {
+        return current;
+      }
+      return {
+        ...current,
+        run_id: hasRun ? current.run_id : nextRunId,
+        verifier: nextVerifier
+      };
+    });
+  }, [authIdentity?.user.username, backupPolicyRuns]);
+
+  useEffect(() => {
     if (tickets.length === 0) {
       setSelectedTicketId("");
       setTicketDetail(null);
@@ -7770,10 +8314,24 @@ export function App() {
     backupPolicyDraft,
     backupPolicyNotice,
     backupPolicyRuns,
+    backupRestoreEvidence,
+    backupRestoreEvidenceCoverage,
+    backupRestoreEvidenceDraft,
+    backupRestoreEvidenceMissingRunIds,
+    backupRestoreRunStatusFilter,
+    changeCalendar,
+    changeCalendarConflictDraft,
+    changeCalendarConflictResult,
+    changeCalendarEndDate,
+    changeCalendarNotice,
+    changeCalendarStartDate,
     businessWorkspace,
     businessWorkspaceOptions,
     canAccessAdmin,
     canWriteCmdb,
+    closeHandoverCarryoverItem,
+    checkChangeCalendarConflicts,
+    closingHandoverItemKey,
     cockpitCriticalAssets,
     cockpitOperationalAssets,
     createSampleAsset,
@@ -7786,10 +8344,18 @@ export function App() {
     incidentCommandDraft,
     incidentCommandNotice,
     incidentCommands,
+    exportingHandoverDigest,
     exportingWeeklyDigest,
+    exportHandoverDigest,
     exportWeeklyDigest,
+    handoverDigest,
+    handoverDigestNotice,
+    handoverDigestShiftDate,
     loadBackupPolicies,
     loadBackupPolicyRuns,
+    loadBackupRestoreEvidence,
+    loadChangeCalendar,
+    loadHandoverDigest,
     loadIncidentCommandDetail,
     loadIncidentCommands,
     loadWeeklyDigest,
@@ -7804,12 +8370,17 @@ export function App() {
     loadFieldDefinitions,
     runBackupPolicy,
     runBackupSchedulerTick,
+    closeBackupRestoreEvidence,
     loadingDailyCockpit,
     loadingOpsChecklist,
     loadingIncidentCommandDetail,
     loadingIncidentCommands,
+    loadingHandoverDigest,
     loadingBackupPolicies,
     loadingBackupPolicyRuns,
+    loadingBackupRestoreEvidence,
+    loadingChangeCalendar,
+    checkingChangeCalendarConflict,
     loadingWeeklyDigest,
     runningBackupPolicyActionId,
     loadingAssetStats,
@@ -7833,12 +8404,20 @@ export function App() {
     savingIncidentCommand,
     saveBackupPolicy,
     savingBackupPolicy,
+    saveBackupRestoreEvidence,
+    savingBackupRestoreEvidence,
     setBusinessWorkspace,
     setBackupPolicyDraft,
+    setBackupRestoreEvidenceDraft,
+    setBackupRestoreRunStatusFilter,
+    setChangeCalendarConflictDraft,
+    setChangeCalendarEndDate,
+    setChangeCalendarStartDate,
     setDailyCockpitDepartmentFilter,
     setDailyCockpitSiteFilter,
     setDepartmentWorkspace,
     setFunctionWorkspace,
+    setHandoverDigestShiftDate,
     setIncidentCommandDraft,
     setMenuAxis,
     setOpsChecklistDate,
@@ -7922,6 +8501,28 @@ function isWorkflowFailureStatus(status: string): boolean {
     || status === "cancelled"
     || status === "timeout"
   );
+}
+
+function formatLocalDateTimeInput(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function localDateTimeInputToUtcRfc3339(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const local = new Date(trimmed);
+  const timestamp = local.getTime();
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+  return new Date(timestamp).toISOString();
 }
 
 function formatLocalDateKey(date: Date): string {

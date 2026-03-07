@@ -135,14 +135,31 @@ assert_code 200 "$OPERATOR_USER" PATCH "${API_BASE_URL}/api/v1/ops/cockpit/backu
   "{\"retention_days\":14,\"note\":\"rbac operator tuning\"}"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies/${OPERATOR_BACKUP_POLICY_ID}/run" \
   "{\"run_type\":\"backup\"}"
+OPERATOR_BACKUP_RUN_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
+if [[ -z "$OPERATOR_BACKUP_RUN_ID" ]]; then
+  echo "ERROR: failed to parse operator backup run ID" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/runs/${OPERATOR_BACKUP_RUN_ID}/restore-evidence" \
+  "{\"ticket_ref\":\"TKT-RBAC-${STAMP}\",\"artifact_url\":\"https://example.invalid/rbac/${STAMP}/restore-proof\",\"note\":\"rbac restore evidence\",\"close_evidence\":false}"
+OPERATOR_RESTORE_EVIDENCE_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
+if [[ -z "$OPERATOR_RESTORE_EVIDENCE_ID" ]]; then
+  echo "ERROR: failed to parse operator restore evidence ID" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
+assert_code 200 "$OPERATOR_USER" PATCH "${API_BASE_URL}/api/v1/ops/cockpit/backup/restore-evidence/${OPERATOR_RESTORE_EVIDENCE_ID}" \
+  "{\"note\":\"rbac restore evidence close\",\"close_evidence\":true}"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/scheduler/tick" \
   "{\"note\":\"rbac scheduler tick\"}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/runs"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/restore-evidence"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest/export?format=csv"
-assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
-assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
-  "{\"asset_class\":\"server\",\"name\":\"rbac-op-asset-${STAMP}\",\"status\":\"active\"}"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar?days=7"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/conflicts" \
+  "{\"start_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"end_at\":\"$(date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)\",\"operation_kind\":\"playbook.execute.restart-service-safe\",\"risk_level\":\"high\"}"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/tickets" \
   "{\"title\":\"rbac-op-ticket-${STAMP}\",\"priority\":\"high\",\"category\":\"incident\",\"assignee\":\"oncall-a\"}"
 OPERATOR_TICKET_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
@@ -151,6 +168,13 @@ if [[ -z "$OPERATOR_TICKET_ID" ]]; then
   cat "$LAST_BODY_FILE" >&2 || true
   exit 1
 fi
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/export?format=csv"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/items/ticket:${OPERATOR_TICKET_ID}/close" \
+  "{\"shift_date\":\"$(date +%F)\",\"source_type\":\"ticket_backlog\",\"source_id\":${OPERATOR_TICKET_ID},\"next_owner\":\"${OPERATOR_USER}\",\"next_action\":\"handover close for rbac\"}"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
+  "{\"asset_class\":\"server\",\"name\":\"rbac-op-asset-${STAMP}\",\"status\":\"active\"}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/tickets/escalation/policy"
 assert_code 200 "$OPERATOR_USER" PUT "${API_BASE_URL}/api/v1/tickets/escalation/policy" \
   "{\"is_enabled\":true,\"near_high_minutes\":10,\"breach_high_minutes\":20,\"escalate_to_assignee\":\"ops-escalation-${STAMP}\",\"note\":\"rbac escalation policy update\"}"
@@ -212,8 +236,12 @@ assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/checklists"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/runs"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/restore-evidence"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest/export?format=json"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar?days=7"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/export?format=json"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete" \
   "{\"date\":\"$(date +%F)\",\"note\":\"viewer should not update checklist\"}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception" \
@@ -226,6 +254,14 @@ assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/p
   "{\"run_type\":\"backup\"}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/scheduler/tick" \
   "{\"note\":\"viewer should not trigger scheduler\"}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/runs/${OPERATOR_BACKUP_RUN_ID}/restore-evidence" \
+  "{\"ticket_ref\":\"TKT-DENY-${STAMP}\",\"artifact_url\":\"https://example.invalid/deny\",\"note\":\"viewer should not write evidence\"}"
+assert_code 403 "$VIEWER_USER" PATCH "${API_BASE_URL}/api/v1/ops/cockpit/backup/restore-evidence/${OPERATOR_RESTORE_EVIDENCE_ID}" \
+  "{\"note\":\"viewer should not patch evidence\",\"close_evidence\":true}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/conflicts" \
+  "{\"start_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"end_at\":\"$(date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)\",\"operation_kind\":\"playbook.execute.restart-service-safe\",\"risk_level\":\"high\"}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/items/ticket:${OPERATOR_TICKET_ID}/close" \
+  "{\"shift_date\":\"$(date +%F)\",\"source_type\":\"ticket_backlog\",\"source_id\":${OPERATOR_TICKET_ID},\"next_owner\":\"${VIEWER_USER}\",\"next_action\":\"viewer should not close handover\"}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-viewer-asset-${STAMP}\",\"status\":\"active\"}"

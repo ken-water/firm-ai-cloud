@@ -1,12 +1,17 @@
 use axum::{
     Json, Router,
-    extract::{Query, State},
-    routing::get,
+    extract::{Path, Query, State},
+    http::HeaderMap,
+    routing::{get, post},
 };
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+use std::collections::HashMap;
 
 use crate::{
+    audit::{AuditLogWriteInput, write_audit_log_best_effort},
+    auth::resolve_auth_user,
     error::{AppError, AppResult},
     state::AppState,
 };
@@ -15,6 +20,15 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/cockpit/weekly-digest", get(get_weekly_digest))
         .route("/cockpit/weekly-digest/export", get(export_weekly_digest))
+        .route("/cockpit/handover-digest", get(get_handover_digest))
+        .route(
+            "/cockpit/handover-digest/export",
+            get(export_handover_digest),
+        )
+        .route(
+            "/cockpit/handover-digest/items/{item_key}/close",
+            post(close_handover_item),
+        )
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -38,6 +52,9 @@ struct WeeklyDigestMetrics {
     playbook_approval_backlog: i64,
     backup_failed_policies: i64,
     drill_failed_policies: i64,
+    continuity_runs_requiring_evidence: i64,
+    continuity_runs_with_evidence: i64,
+    continuity_runs_missing_evidence: i64,
     locked_local_accounts: i64,
     local_accounts_without_mfa: i64,
 }
@@ -60,6 +77,135 @@ struct WeeklyDigestExportResponse {
     digest_key: String,
     format: String,
     content: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct HandoverDigestQuery {
+    shift_date: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct HandoverDigestExportQuery {
+    shift_date: Option<String>,
+    format: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CloseHandoverItemRequest {
+    shift_date: Option<String>,
+    source_type: String,
+    source_id: i64,
+    next_owner: String,
+    next_action: String,
+    note: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct HandoverDigestMetrics {
+    unresolved_incidents: i64,
+    escalation_backlog: i64,
+    failed_continuity_runs: i64,
+    pending_approvals: i64,
+    restore_evidence_missing_runs: i64,
+    closed_items: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct HandoverCarryoverItem {
+    item_key: String,
+    source_type: String,
+    source_id: i64,
+    title: String,
+    owner: String,
+    next_owner: String,
+    next_action: String,
+    status: String,
+    note: Option<String>,
+    risk_level: String,
+    observed_at: DateTime<Utc>,
+    source_ref: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct HandoverDigestResponse {
+    generated_at: DateTime<Utc>,
+    digest_key: String,
+    shift_date: String,
+    metrics: HandoverDigestMetrics,
+    items: Vec<HandoverCarryoverItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct HandoverDigestExportResponse {
+    generated_at: DateTime<Utc>,
+    digest_key: String,
+    format: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct HandoverItemUpdateRecord {
+    id: i64,
+    shift_date: NaiveDate,
+    item_key: String,
+    source_type: String,
+    source_id: i64,
+    status: String,
+    next_owner: String,
+    next_action: String,
+    note: Option<String>,
+    updated_by: String,
+    closed_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct IncidentCarryoverRow {
+    alert_id: i64,
+    title: String,
+    severity: String,
+    command_status: String,
+    command_owner: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct TicketCarryoverRow {
+    id: i64,
+    ticket_no: String,
+    title: String,
+    priority: String,
+    assignee: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct ContinuityRunCarryoverRow {
+    id: i64,
+    policy_id: i64,
+    run_type: String,
+    status: String,
+    triggered_by: String,
+    started_at: DateTime<Utc>,
+    evidence_count: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct WorkflowApprovalCarryoverRow {
+    id: i64,
+    title: String,
+    requester: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct PlaybookApprovalCarryoverRow {
+    id: i64,
+    playbook_key: String,
+    requester: String,
+    expires_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
 }
 
 async fn get_weekly_digest(
@@ -98,6 +244,119 @@ async fn export_weekly_digest(
         format,
         content,
     }))
+}
+
+async fn get_handover_digest(
+    State(state): State<AppState>,
+    Query(query): Query<HandoverDigestQuery>,
+) -> AppResult<Json<HandoverDigestResponse>> {
+    let digest = build_handover_digest(&state, query.shift_date).await?;
+    Ok(Json(digest))
+}
+
+async fn export_handover_digest(
+    State(state): State<AppState>,
+    Query(query): Query<HandoverDigestExportQuery>,
+) -> AppResult<Json<HandoverDigestExportResponse>> {
+    let digest = build_handover_digest(&state, query.shift_date).await?;
+    let format = query
+        .format
+        .unwrap_or_else(|| "csv".to_string())
+        .trim()
+        .to_ascii_lowercase();
+
+    let content = match format.as_str() {
+        "json" => serde_json::to_string_pretty(&digest).map_err(|err| {
+            AppError::Validation(format!("failed to serialize handover digest json: {err}"))
+        })?,
+        "csv" => handover_digest_to_csv(&digest),
+        _ => {
+            return Err(AppError::Validation(
+                "format must be one of: csv, json".to_string(),
+            ));
+        }
+    };
+
+    Ok(Json(HandoverDigestExportResponse {
+        generated_at: digest.generated_at,
+        digest_key: digest.digest_key,
+        format,
+        content,
+    }))
+}
+
+async fn close_handover_item(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(item_key): Path<String>,
+    Json(payload): Json<CloseHandoverItemRequest>,
+) -> AppResult<Json<HandoverItemUpdateRecord>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let shift_date = parse_shift_date(payload.shift_date)?;
+    let item_key = required_trimmed("item_key", item_key, 128)?;
+    let source_type = required_trimmed("source_type", payload.source_type, 32)?;
+    if payload.source_id <= 0 {
+        return Err(AppError::Validation(
+            "source_id must be a positive integer".to_string(),
+        ));
+    }
+    let next_owner = required_trimmed("next_owner", payload.next_owner, 128)?;
+    let next_action = required_trimmed("next_action", payload.next_action, 1024)?;
+    let note = trim_optional(payload.note, 1024);
+
+    let item: HandoverItemUpdateRecord = sqlx::query_as(
+        "INSERT INTO ops_handover_item_updates (
+            shift_date, item_key, source_type, source_id,
+            status, next_owner, next_action, note, updated_by, closed_at
+         )
+         VALUES ($1, $2, $3, $4, 'closed', $5, $6, $7, $8, NOW())
+         ON CONFLICT (shift_date, item_key)
+         DO UPDATE SET
+            source_type = EXCLUDED.source_type,
+            source_id = EXCLUDED.source_id,
+            status = 'closed',
+            next_owner = EXCLUDED.next_owner,
+            next_action = EXCLUDED.next_action,
+            note = EXCLUDED.note,
+            updated_by = EXCLUDED.updated_by,
+            closed_at = NOW(),
+            updated_at = NOW()
+         RETURNING id, shift_date, item_key, source_type, source_id, status, next_owner,
+                   next_action, note, updated_by, closed_at, created_at, updated_at",
+    )
+    .bind(shift_date)
+    .bind(item_key.clone())
+    .bind(source_type.clone())
+    .bind(payload.source_id)
+    .bind(next_owner.clone())
+    .bind(next_action.clone())
+    .bind(note.clone())
+    .bind(actor.clone())
+    .fetch_one(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor,
+            action: "ops.handover.item.close".to_string(),
+            target_type: "ops_handover_item".to_string(),
+            target_id: Some(item.item_key.clone()),
+            result: "success".to_string(),
+            message: note,
+            metadata: serde_json::json!({
+                "shift_date": item.shift_date.to_string(),
+                "source_type": source_type,
+                "source_id": payload.source_id,
+                "next_owner": next_owner,
+                "next_action": next_action,
+                "status": item.status,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(item))
 }
 
 async fn build_weekly_digest(
@@ -181,6 +440,30 @@ async fn build_weekly_digest(
     .fetch_one(&state.db)
     .await?;
 
+    let continuity_runs_requiring_evidence: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM ops_backup_policy_runs
+         WHERE status = 'failed'
+            OR run_type = 'drill'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    let continuity_runs_with_evidence: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT e.run_id)
+         FROM ops_backup_restore_evidence e
+         INNER JOIN ops_backup_policy_runs r ON r.id = e.run_id
+         WHERE r.status = 'failed'
+            OR r.run_type = 'drill'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    let continuity_runs_missing_evidence =
+        (continuity_runs_requiring_evidence - continuity_runs_with_evidence).max(0);
+
     let locked_local_accounts: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
          FROM auth_local_credentials
@@ -209,6 +492,9 @@ async fn build_weekly_digest(
         playbook_approval_backlog,
         backup_failed_policies,
         drill_failed_policies,
+        continuity_runs_requiring_evidence,
+        continuity_runs_with_evidence,
+        continuity_runs_missing_evidence,
         locked_local_accounts,
         local_accounts_without_mfa,
     };
@@ -222,6 +508,11 @@ async fn build_weekly_digest(
     }
     if drill_failed_policies > 0 {
         top_risks.push(format!("{drill_failed_policies} drill policies report latest failure."));
+    }
+    if continuity_runs_missing_evidence > 0 {
+        top_risks.push(format!(
+            "{continuity_runs_missing_evidence} continuity runs are missing restore verification evidence."
+        ));
     }
     if locked_local_accounts > 0 {
         top_risks.push(format!("{locked_local_accounts} local accounts are currently locked."));
@@ -247,6 +538,11 @@ async fn build_weekly_digest(
             "{suppressed_alert_threads} alert threads were suppressed this week; validate no incident is hidden."
         ));
     }
+    if continuity_runs_missing_evidence > 0 {
+        unresolved_items.push(format!(
+            "Restore evidence gap: {continuity_runs_missing_evidence} required runs have no verification artifact."
+        ));
+    }
     if unresolved_items.is_empty() {
         unresolved_items.push("No unresolved item above digest threshold.".to_string());
     }
@@ -258,6 +554,11 @@ async fn build_weekly_digest(
     if backup_failed_policies > 0 || drill_failed_policies > 0 {
         recommended_actions.push(
             "Run backup/drill manually after destination validation and attach remediation evidence.".to_string(),
+        );
+    }
+    if continuity_runs_missing_evidence > 0 {
+        recommended_actions.push(
+            "Attach restore verification ticket/artifact evidence and close continuity evidence records.".to_string(),
         );
     }
     if local_accounts_without_mfa > 0 {
@@ -288,6 +589,308 @@ async fn build_weekly_digest(
     })
 }
 
+async fn build_handover_digest(
+    state: &AppState,
+    shift_date_raw: Option<String>,
+) -> AppResult<HandoverDigestResponse> {
+    let shift_date = parse_shift_date(shift_date_raw)?;
+    let update_rows: Vec<HandoverItemUpdateRecord> = sqlx::query_as(
+        "SELECT id, shift_date, item_key, source_type, source_id, status, next_owner, next_action,
+                note, updated_by, closed_at, created_at, updated_at
+         FROM ops_handover_item_updates
+         WHERE shift_date = $1
+         ORDER BY updated_at DESC, id DESC",
+    )
+    .bind(shift_date)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let updates = update_rows
+        .into_iter()
+        .map(|item| (item.item_key.clone(), item))
+        .collect::<HashMap<_, _>>();
+
+    let incidents: Vec<IncidentCarryoverRow> = sqlx::query_as(
+        "SELECT c.alert_id,
+                COALESCE(a.title, concat(c.alert_id::text, ':incident')) AS title,
+                COALESCE(a.severity, 'warning') AS severity,
+                c.command_status,
+                c.command_owner,
+                c.updated_at
+         FROM ops_incident_commands c
+         LEFT JOIN unified_alerts a ON a.id = c.alert_id
+         WHERE c.command_status IN ('triage', 'in_progress', 'blocked')
+         ORDER BY c.updated_at DESC, c.alert_id DESC
+         LIMIT 120",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let ticket_backlog: Vec<TicketCarryoverRow> = sqlx::query_as(
+        "SELECT id, ticket_no, title, priority, assignee, updated_at
+         FROM tickets
+         WHERE status IN ('open', 'in_progress')
+         ORDER BY created_at ASC, id ASC
+         LIMIT 160",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let continuity_runs: Vec<ContinuityRunCarryoverRow> = sqlx::query_as(
+        "SELECT r.id, r.policy_id, r.run_type, r.status, r.triggered_by, r.started_at,
+                (SELECT COUNT(*) FROM ops_backup_restore_evidence e WHERE e.run_id = r.id) AS evidence_count
+         FROM ops_backup_policy_runs r
+         WHERE r.status = 'failed'
+            OR r.run_type = 'drill'
+         ORDER BY r.started_at DESC, r.id DESC
+         LIMIT 160",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let workflow_approvals: Vec<WorkflowApprovalCarryoverRow> = sqlx::query_as(
+        "SELECT id, title, requester, created_at
+         FROM workflow_requests
+         WHERE status = 'pending_approval'
+         ORDER BY created_at ASC, id ASC
+         LIMIT 120",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let playbook_approvals: Vec<PlaybookApprovalCarryoverRow> = sqlx::query_as(
+        "SELECT id, playbook_key, requester, expires_at, created_at
+         FROM workflow_playbook_approval_requests
+         WHERE status = 'pending'
+           AND expires_at > NOW()
+         ORDER BY created_at ASC, id ASC
+         LIMIT 120",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let mut items: Vec<HandoverCarryoverItem> = Vec::new();
+
+    for row in &incidents {
+        let item_key = format!("incident:{}", row.alert_id);
+        let (status, next_owner, next_action, note) = resolve_handover_item_state(
+            updates.get(&item_key),
+            row.command_owner.clone(),
+            format!(
+                "Continue incident command from status '{}' and update ETA/blocker.",
+                row.command_status
+            ),
+        );
+        let risk_level = if row.command_status == "blocked" || row.severity == "critical" {
+            "critical"
+        } else {
+            "high"
+        };
+        items.push(HandoverCarryoverItem {
+            item_key,
+            source_type: "incident_command".to_string(),
+            source_id: row.alert_id,
+            title: format!("[{}] {}", row.severity, row.title),
+            owner: row.command_owner.clone(),
+            next_owner,
+            next_action,
+            status,
+            note,
+            risk_level: risk_level.to_string(),
+            observed_at: row.updated_at,
+            source_ref: format!("/api/v1/ops/cockpit/incidents/{}", row.alert_id),
+        });
+    }
+
+    for row in &ticket_backlog {
+        let item_key = format!("ticket:{}", row.id);
+        let owner = row
+            .assignee
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "ops-oncall".to_string());
+        let (status, next_owner, next_action, note) = resolve_handover_item_state(
+            updates.get(&item_key),
+            owner.clone(),
+            format!(
+                "Review ticket {} ({}) and decide escalation or closure.",
+                row.ticket_no, row.priority
+            ),
+        );
+        let risk_level = match row.priority.as_str() {
+            "critical" => "critical",
+            "high" => "high",
+            _ => "medium",
+        };
+        items.push(HandoverCarryoverItem {
+            item_key,
+            source_type: "ticket_backlog".to_string(),
+            source_id: row.id,
+            title: format!("{}: {}", row.ticket_no, row.title),
+            owner,
+            next_owner,
+            next_action,
+            status,
+            note,
+            risk_level: risk_level.to_string(),
+            observed_at: row.updated_at,
+            source_ref: format!("/api/v1/tickets/{}", row.id),
+        });
+    }
+
+    for row in &continuity_runs {
+        let item_key = format!("continuity_run:{}", row.id);
+        let owner = row.triggered_by.clone();
+        let default_action = if row.evidence_count == 0 {
+            format!(
+                "Attach restore verification evidence for {} run #{} before handover closure.",
+                row.run_type, row.id
+            )
+        } else {
+            format!("Review {} run #{} output and handoff remediation plan.", row.run_type, row.id)
+        };
+        let (status, next_owner, next_action, note) =
+            resolve_handover_item_state(updates.get(&item_key), owner.clone(), default_action);
+        let risk_level = if row.status == "failed" || row.evidence_count == 0 {
+            "critical"
+        } else {
+            "high"
+        };
+        items.push(HandoverCarryoverItem {
+            item_key,
+            source_type: "continuity_run".to_string(),
+            source_id: row.id,
+            title: format!(
+                "run #{} policy #{} ({}/{}) evidence_count={}",
+                row.id, row.policy_id, row.run_type, row.status, row.evidence_count
+            ),
+            owner,
+            next_owner,
+            next_action,
+            status,
+            note,
+            risk_level: risk_level.to_string(),
+            observed_at: row.started_at,
+            source_ref: "/api/v1/ops/cockpit/backup/runs".to_string(),
+        });
+    }
+
+    for row in &workflow_approvals {
+        let item_key = format!("workflow_approval:{}", row.id);
+        let (status, next_owner, next_action, note) = resolve_handover_item_state(
+            updates.get(&item_key),
+            row.requester.clone(),
+            "Assign approver and resolve workflow pending approval.".to_string(),
+        );
+        items.push(HandoverCarryoverItem {
+            item_key,
+            source_type: "workflow_approval".to_string(),
+            source_id: row.id,
+            title: row.title.clone(),
+            owner: row.requester.clone(),
+            next_owner,
+            next_action,
+            status,
+            note,
+            risk_level: "medium".to_string(),
+            observed_at: row.created_at,
+            source_ref: "/api/v1/workflow/requests".to_string(),
+        });
+    }
+
+    for row in &playbook_approvals {
+        let item_key = format!("playbook_approval:{}", row.id);
+        let (status, next_owner, next_action, note) = resolve_handover_item_state(
+            updates.get(&item_key),
+            row.requester.clone(),
+            format!(
+                "Resolve playbook approval '{}' before {}.",
+                row.playbook_key,
+                row.expires_at.to_rfc3339()
+            ),
+        );
+        items.push(HandoverCarryoverItem {
+            item_key,
+            source_type: "playbook_approval".to_string(),
+            source_id: row.id,
+            title: format!("{} pending approval", row.playbook_key),
+            owner: row.requester.clone(),
+            next_owner,
+            next_action,
+            status,
+            note,
+            risk_level: "high".to_string(),
+            observed_at: row.created_at,
+            source_ref: "/api/v1/workflow/playbooks/approvals".to_string(),
+        });
+    }
+
+    items.sort_by(|left, right| {
+        risk_rank(right.risk_level.as_str())
+            .cmp(&risk_rank(left.risk_level.as_str()))
+            .then_with(|| left.observed_at.cmp(&right.observed_at))
+            .then_with(|| left.item_key.cmp(&right.item_key))
+    });
+
+    let failed_continuity_runs = continuity_runs
+        .iter()
+        .filter(|item| item.status == "failed")
+        .count() as i64;
+    let restore_evidence_missing_runs = continuity_runs
+        .iter()
+        .filter(|item| item.evidence_count == 0)
+        .count() as i64;
+
+    let metrics = HandoverDigestMetrics {
+        unresolved_incidents: incidents.len() as i64,
+        escalation_backlog: ticket_backlog.len() as i64,
+        failed_continuity_runs,
+        pending_approvals: (workflow_approvals.len() + playbook_approvals.len()) as i64,
+        restore_evidence_missing_runs,
+        closed_items: items.iter().filter(|item| item.status == "closed").count() as i64,
+    };
+
+    let generated_at = items
+        .iter()
+        .map(|item| item.observed_at)
+        .max()
+        .unwrap_or_else(|| Utc.from_utc_datetime(&shift_date.and_hms_opt(0, 0, 0).expect("midnight")));
+
+    Ok(HandoverDigestResponse {
+        generated_at,
+        digest_key: format!("handover-{}", shift_date.format("%Y-%m-%d")),
+        shift_date: shift_date.format("%Y-%m-%d").to_string(),
+        metrics,
+        items,
+    })
+}
+
+fn resolve_handover_item_state(
+    update: Option<&HandoverItemUpdateRecord>,
+    default_next_owner: String,
+    default_next_action: String,
+) -> (String, String, String, Option<String>) {
+    match update {
+        Some(item) => (
+            item.status.clone(),
+            item.next_owner.clone(),
+            item.next_action.clone(),
+            item.note.clone(),
+        ),
+        None => (
+            "open".to_string(),
+            default_next_owner,
+            default_next_action,
+            None,
+        ),
+    }
+}
+
 fn parse_week_start(value: Option<String>) -> AppResult<DateTime<Utc>> {
     match value {
         Some(raw) => {
@@ -309,6 +912,122 @@ fn default_week_start() -> AppResult<DateTime<Utc>> {
     let weekday = today.weekday().number_from_monday() as i64;
     let monday = today - Duration::days(weekday - 1);
     Ok(Utc.from_utc_datetime(&monday.and_hms_opt(0, 0, 0).expect("midnight")))
+}
+
+fn parse_shift_date(value: Option<String>) -> AppResult<NaiveDate> {
+    match value {
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Ok(Utc::now().date_naive());
+            }
+            NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").map_err(|_| {
+                AppError::Validation("shift_date must use YYYY-MM-DD format".to_string())
+            })
+        }
+        None => Ok(Utc::now().date_naive()),
+    }
+}
+
+fn required_trimmed(field: &str, value: String, max_len: usize) -> AppResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(format!("{field} is required")));
+    }
+    if trimmed.len() > max_len {
+        return Err(AppError::Validation(format!(
+            "{field} length must be <= {max_len}"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn trim_optional(value: Option<String>, max_len: usize) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else if trimmed.len() > max_len {
+            Some(trimmed[..max_len].to_string())
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn risk_rank(value: &str) -> i32 {
+    match value {
+        "critical" => 4,
+        "high" => 3,
+        "medium" => 2,
+        "low" => 1,
+        _ => 0,
+    }
+}
+
+fn escape_csv_cell(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn handover_digest_to_csv(digest: &HandoverDigestResponse) -> String {
+    let mut lines = vec![
+        "section,field,value".to_string(),
+        format!("meta,digest_key,{}", escape_csv_cell(digest.digest_key.as_str())),
+        format!(
+            "meta,generated_at,{}",
+            escape_csv_cell(digest.generated_at.to_rfc3339().as_str())
+        ),
+        format!(
+            "meta,shift_date,{}",
+            escape_csv_cell(digest.shift_date.as_str())
+        ),
+        format!(
+            "metrics,unresolved_incidents,{}",
+            digest.metrics.unresolved_incidents
+        ),
+        format!(
+            "metrics,escalation_backlog,{}",
+            digest.metrics.escalation_backlog
+        ),
+        format!(
+            "metrics,failed_continuity_runs,{}",
+            digest.metrics.failed_continuity_runs
+        ),
+        format!(
+            "metrics,pending_approvals,{}",
+            digest.metrics.pending_approvals
+        ),
+        format!(
+            "metrics,restore_evidence_missing_runs,{}",
+            digest.metrics.restore_evidence_missing_runs
+        ),
+        format!("metrics,closed_items,{}", digest.metrics.closed_items),
+        "items,item_key,source_type,source_id,title,owner,next_owner,next_action,status,risk_level,observed_at,source_ref,note".to_string(),
+    ];
+
+    for item in &digest.items {
+        lines.push(format!(
+            "item,{},{},{},{},{},{},{},{},{},{},{},{}",
+            escape_csv_cell(item.item_key.as_str()),
+            escape_csv_cell(item.source_type.as_str()),
+            item.source_id,
+            escape_csv_cell(item.title.as_str()),
+            escape_csv_cell(item.owner.as_str()),
+            escape_csv_cell(item.next_owner.as_str()),
+            escape_csv_cell(item.next_action.as_str()),
+            escape_csv_cell(item.status.as_str()),
+            escape_csv_cell(item.risk_level.as_str()),
+            escape_csv_cell(item.observed_at.to_rfc3339().as_str()),
+            escape_csv_cell(item.source_ref.as_str()),
+            escape_csv_cell(item.note.as_deref().unwrap_or("")),
+        ));
+    }
+
+    lines.join("\n")
 }
 
 fn digest_to_csv(digest: &WeeklyDigestResponse) -> String {
@@ -348,6 +1067,18 @@ fn digest_to_csv(digest: &WeeklyDigestResponse) -> String {
         digest.metrics.drill_failed_policies
     ));
     lines.push(format!(
+        "continuity_runs_requiring_evidence,{}",
+        digest.metrics.continuity_runs_requiring_evidence
+    ));
+    lines.push(format!(
+        "continuity_runs_with_evidence,{}",
+        digest.metrics.continuity_runs_with_evidence
+    ));
+    lines.push(format!(
+        "continuity_runs_missing_evidence,{}",
+        digest.metrics.continuity_runs_missing_evidence
+    ));
+    lines.push(format!(
         "locked_local_accounts,{}",
         digest.metrics.locked_local_accounts
     ));
@@ -371,7 +1102,11 @@ fn digest_to_csv(digest: &WeeklyDigestResponse) -> String {
 mod tests {
     use chrono::{Datelike, Utc};
 
-    use super::{default_week_start, digest_to_csv, WeeklyDigestMetrics, WeeklyDigestResponse};
+    use super::{
+        default_week_start, digest_to_csv, handover_digest_to_csv, parse_shift_date,
+        HandoverCarryoverItem, HandoverDigestMetrics, HandoverDigestResponse, WeeklyDigestMetrics,
+        WeeklyDigestResponse,
+    };
 
     #[test]
     fn week_start_defaults_to_monday() {
@@ -395,6 +1130,9 @@ mod tests {
                 playbook_approval_backlog: 6,
                 backup_failed_policies: 1,
                 drill_failed_policies: 1,
+                continuity_runs_requiring_evidence: 8,
+                continuity_runs_with_evidence: 6,
+                continuity_runs_missing_evidence: 2,
                 locked_local_accounts: 0,
                 local_accounts_without_mfa: 2,
             },
@@ -406,6 +1144,50 @@ mod tests {
         let csv = digest_to_csv(&digest);
         assert!(csv.contains("digest_key"));
         assert!(csv.contains("open_critical_alerts,1"));
+        assert!(csv.contains("continuity_runs_missing_evidence,2"));
         assert!(csv.contains("recommended_actions,action"));
+    }
+
+    #[test]
+    fn parses_shift_date_with_expected_format() {
+        let parsed = parse_shift_date(Some("2026-03-07".to_string())).expect("shift date");
+        assert_eq!(parsed.to_string(), "2026-03-07");
+        assert!(parse_shift_date(Some("2026/03/07".to_string())).is_err());
+    }
+
+    #[test]
+    fn handover_csv_contains_digest_key_and_items() {
+        let digest = HandoverDigestResponse {
+            generated_at: Utc::now(),
+            digest_key: "handover-2026-03-07".to_string(),
+            shift_date: "2026-03-07".to_string(),
+            metrics: HandoverDigestMetrics {
+                unresolved_incidents: 1,
+                escalation_backlog: 2,
+                failed_continuity_runs: 1,
+                pending_approvals: 3,
+                restore_evidence_missing_runs: 1,
+                closed_items: 0,
+            },
+            items: vec![HandoverCarryoverItem {
+                item_key: "incident:10".to_string(),
+                source_type: "incident_command".to_string(),
+                source_id: 10,
+                title: "incident".to_string(),
+                owner: "ops-a".to_string(),
+                next_owner: "ops-b".to_string(),
+                next_action: "continue".to_string(),
+                status: "open".to_string(),
+                note: None,
+                risk_level: "high".to_string(),
+                observed_at: Utc::now(),
+                source_ref: "/api/v1/ops/cockpit/incidents/10".to_string(),
+            }],
+        };
+
+        let csv = handover_digest_to_csv(&digest);
+        assert!(csv.contains("handover-2026-03-07"));
+        assert!(csv.contains("incident:10"));
+        assert!(csv.contains("restore_evidence_missing_runs,1"));
     }
 }
