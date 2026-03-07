@@ -143,6 +143,23 @@ assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-op-asset-${STAMP}\",\"status\":\"active\"}"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/tickets" \
+  "{\"title\":\"rbac-op-ticket-${STAMP}\",\"priority\":\"high\",\"category\":\"incident\",\"assignee\":\"oncall-a\"}"
+OPERATOR_TICKET_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
+if [[ -z "$OPERATOR_TICKET_ID" ]]; then
+  echo "ERROR: failed to parse operator ticket ID" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/tickets/escalation/policy"
+assert_code 200 "$OPERATOR_USER" PUT "${API_BASE_URL}/api/v1/tickets/escalation/policy" \
+  "{\"is_enabled\":true,\"near_high_minutes\":10,\"breach_high_minutes\":20,\"escalate_to_assignee\":\"ops-escalation-${STAMP}\",\"note\":\"rbac escalation policy update\"}"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/tickets/escalation/policy/preview" \
+  "{\"priority\":\"high\",\"status\":\"open\",\"ticket_age_minutes\":25,\"current_assignee\":\"oncall-a\"}"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/tickets/escalation/queue"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/tickets/escalation/run" \
+  "{\"dry_run\":true,\"note\":\"rbac escalation run dry\"}"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/tickets/escalation/actions?ticket_id=${OPERATOR_TICKET_ID}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/monitoring/sources"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/monitoring/overview"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/monitoring/layers/hardware"
@@ -212,6 +229,15 @@ assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/s
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/cmdb/assets" \
   "{\"asset_class\":\"server\",\"name\":\"rbac-viewer-asset-${STAMP}\",\"status\":\"active\"}"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/tickets/escalation/policy"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/tickets/escalation/queue"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/tickets/escalation/actions?ticket_id=${OPERATOR_TICKET_ID}"
+assert_code 403 "$VIEWER_USER" PUT "${API_BASE_URL}/api/v1/tickets/escalation/policy" \
+  "{\"near_high_minutes\":5,\"breach_high_minutes\":15,\"escalate_to_assignee\":\"viewer-deny\"}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/tickets/escalation/policy/preview" \
+  "{\"priority\":\"high\",\"status\":\"open\",\"ticket_age_minutes\":30}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/tickets/escalation/run" \
+  "{\"dry_run\":true,\"note\":\"viewer should not run\"}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/monitoring/sources"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/monitoring/overview"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/monitoring/layers/service"

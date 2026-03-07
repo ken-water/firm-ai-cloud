@@ -4,9 +4,9 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::HeaderMap,
-    routing::get,
+    routing::{get, post},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{Postgres, QueryBuilder};
@@ -26,6 +26,17 @@ const MAX_ALERT_SOURCE_LEN: usize = 64;
 const MAX_ALERT_KEY_LEN: usize = 255;
 const MAX_ALERT_TITLE_LEN: usize = 255;
 const MAX_ALERT_SEVERITY_LEN: usize = 32;
+const TICKET_ESCALATION_POLICY_KEY_DEFAULT: &str = "default-ticket-sla";
+const MAX_ESCALATION_REASON_LEN: usize = 1_024;
+const MAX_ESCALATION_ACTION_LIMIT: u32 = 200;
+const DEFAULT_ESCALATION_ACTION_LIMIT: u32 = 60;
+
+const ESCALATION_STATE_NORMAL: &str = "normal";
+const ESCALATION_STATE_NEAR_BREACH: &str = "near_breach";
+const ESCALATION_STATE_BREACHED: &str = "breached";
+
+const ESCALATION_ACTION_ESCALATED: &str = "escalated";
+const ESCALATION_ACTION_SKIPPED: &str = "run_skipped";
 
 const STATUS_OPEN: &str = "open";
 const STATUS_IN_PROGRESS: &str = "in_progress";
@@ -40,6 +51,23 @@ const PRIORITY_CRITICAL: &str = "critical";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route(
+            "/tickets/escalation/policy",
+            get(get_ticket_escalation_policy).put(update_ticket_escalation_policy),
+        )
+        .route(
+            "/tickets/escalation/policy/preview",
+            post(preview_ticket_escalation_policy),
+        )
+        .route(
+            "/tickets/escalation/queue",
+            get(list_ticket_escalation_queue),
+        )
+        .route(
+            "/tickets/escalation/actions",
+            get(list_ticket_escalation_actions),
+        )
+        .route("/tickets/escalation/run", post(run_ticket_escalation))
         .route("/tickets", get(list_tickets).post(create_ticket))
         .route("/tickets/{id}", get(get_ticket))
         .route(
@@ -85,6 +113,11 @@ struct TicketListItem {
     updated_at: DateTime<Utc>,
     asset_link_count: i64,
     alert_link_count: i64,
+    escalation_state: String,
+    escalation_age_minutes: i64,
+    escalation_due_at: Option<DateTime<Utc>>,
+    escalation_last_action_at: Option<DateTime<Utc>>,
+    escalation_last_action_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -108,6 +141,87 @@ struct TicketDetailResponse {
     ticket: TicketRecord,
     asset_links: Vec<TicketAssetLink>,
     alert_links: Vec<TicketAlertLink>,
+    escalation: TicketEscalationDetail,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, sqlx::FromRow)]
+struct TicketEscalationPolicyRecord {
+    id: i64,
+    policy_key: String,
+    name: String,
+    is_enabled: bool,
+    near_critical_minutes: i32,
+    breach_critical_minutes: i32,
+    near_high_minutes: i32,
+    breach_high_minutes: i32,
+    near_medium_minutes: i32,
+    breach_medium_minutes: i32,
+    near_low_minutes: i32,
+    breach_low_minutes: i32,
+    escalate_to_assignee: String,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Clone, sqlx::FromRow)]
+struct TicketEscalationActionRecord {
+    id: i64,
+    ticket_id: i64,
+    action_kind: String,
+    state_before: String,
+    state_after: String,
+    from_assignee: Option<String>,
+    to_assignee: Option<String>,
+    actor: String,
+    reason: Option<String>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct TicketEscalationDetail {
+    policy_key: String,
+    policy_name: String,
+    policy_enabled: bool,
+    state: String,
+    age_minutes: i64,
+    near_breach_minutes: i32,
+    breach_minutes: i32,
+    due_at: Option<DateTime<Utc>>,
+    escalate_to_assignee: String,
+    latest_action: Option<TicketEscalationActionRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListTicketEscalationActionsResponse {
+    generated_at: DateTime<Utc>,
+    total: i64,
+    limit: u32,
+    offset: u32,
+    items: Vec<TicketEscalationActionRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct TicketEscalationPreviewResponse {
+    priority: String,
+    status: String,
+    ticket_age_minutes: i64,
+    state: String,
+    near_breach_minutes: i32,
+    breach_minutes: i32,
+    should_escalate: bool,
+    escalate_to_assignee: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TicketEscalationRunResponse {
+    generated_at: DateTime<Utc>,
+    dry_run: bool,
+    policy_key: String,
+    processed: usize,
+    escalated: usize,
+    skipped: usize,
+    actions: Vec<TicketEscalationActionRecord>,
 }
 
 #[derive(Debug, Serialize)]
@@ -167,10 +281,72 @@ struct ListTicketsQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct UpdateTicketEscalationPolicyRequest {
+    name: Option<String>,
+    is_enabled: Option<bool>,
+    near_critical_minutes: Option<i32>,
+    breach_critical_minutes: Option<i32>,
+    near_high_minutes: Option<i32>,
+    breach_high_minutes: Option<i32>,
+    near_medium_minutes: Option<i32>,
+    breach_medium_minutes: Option<i32>,
+    near_low_minutes: Option<i32>,
+    breach_low_minutes: Option<i32>,
+    escalate_to_assignee: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TicketEscalationPreviewRequest {
+    priority: String,
+    status: String,
+    ticket_age_minutes: i64,
+    current_assignee: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ListTicketEscalationQueueQuery {
+    state: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ListTicketEscalationActionsQuery {
+    ticket_id: Option<i64>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RunTicketEscalationRequest {
+    dry_run: Option<bool>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct TicketEscalationEvaluation {
+    state: String,
+    age_minutes: i64,
+    near_breach_minutes: i32,
+    breach_minutes: i32,
+    due_at: Option<DateTime<Utc>>,
+    should_escalate: bool,
+}
+
+impl TicketEscalationEvaluation {
+    fn with_due_at(mut self, due_at: Option<DateTime<Utc>>) -> Self {
+        self.due_at = due_at;
+        self
+    }
+}
+
 async fn list_tickets(
     State(state): State<AppState>,
     Query(query): Query<ListTicketsQuery>,
 ) -> AppResult<Json<ListTicketsResponse>> {
+    let policy = load_ticket_escalation_policy(&state.db).await?;
     let limit = query.limit.unwrap_or(50).min(200) as i64;
     let offset = query.offset.unwrap_or(0) as i64;
     let status = normalize_optional_status_filter(query.status)?;
@@ -198,7 +374,20 @@ async fn list_tickets(
         "SELECT t.id, t.ticket_no, t.title, t.status, t.priority, t.category, t.requester, t.assignee,
                 t.workflow_template_id, t.workflow_request_id, t.closed_at, t.created_at, t.updated_at,
                 (SELECT COUNT(*) FROM ticket_asset_links ta WHERE ta.ticket_id = t.id) AS asset_link_count,
-                (SELECT COUNT(*) FROM ticket_alert_links al WHERE al.ticket_id = t.id) AS alert_link_count
+                (SELECT COUNT(*) FROM ticket_alert_links al WHERE al.ticket_id = t.id) AS alert_link_count,
+                'normal'::text AS escalation_state,
+                0::bigint AS escalation_age_minutes,
+                NULL::timestamptz AS escalation_due_at,
+                (SELECT a.created_at
+                 FROM ticket_escalation_actions a
+                 WHERE a.ticket_id = t.id
+                 ORDER BY a.created_at DESC, a.id DESC
+                 LIMIT 1) AS escalation_last_action_at,
+                (SELECT a.action_kind
+                 FROM ticket_escalation_actions a
+                 WHERE a.ticket_id = t.id
+                 ORDER BY a.created_at DESC, a.id DESC
+                 LIMIT 1) AS escalation_last_action_kind
          FROM tickets t
          WHERE 1=1",
     );
@@ -217,6 +406,11 @@ async fn list_tickets(
         .push_bind(offset);
 
     let items: Vec<TicketListItem> = list_builder.build_query_as().fetch_all(&state.db).await?;
+    let now = Utc::now();
+    let items = items
+        .into_iter()
+        .map(|item| apply_ticket_escalation(item, now, &policy))
+        .collect();
 
     Ok(Json(ListTicketsResponse {
         items,
@@ -439,6 +633,418 @@ async fn update_ticket_status(
     Ok(Json(detail))
 }
 
+async fn get_ticket_escalation_policy(
+    State(state): State<AppState>,
+) -> AppResult<Json<TicketEscalationPolicyRecord>> {
+    let policy = load_ticket_escalation_policy(&state.db).await?;
+    Ok(Json(policy))
+}
+
+async fn update_ticket_escalation_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateTicketEscalationPolicyRequest>,
+) -> AppResult<Json<TicketEscalationPolicyRecord>> {
+    let current = load_ticket_escalation_policy(&state.db).await?;
+    let name = trim_optional(payload.name, 128).unwrap_or(current.name.clone());
+    let is_enabled = payload.is_enabled.unwrap_or(current.is_enabled);
+    let near_critical_minutes = payload
+        .near_critical_minutes
+        .unwrap_or(current.near_critical_minutes);
+    let breach_critical_minutes = payload
+        .breach_critical_minutes
+        .unwrap_or(current.breach_critical_minutes);
+    let near_high_minutes = payload
+        .near_high_minutes
+        .unwrap_or(current.near_high_minutes);
+    let breach_high_minutes = payload
+        .breach_high_minutes
+        .unwrap_or(current.breach_high_minutes);
+    let near_medium_minutes = payload
+        .near_medium_minutes
+        .unwrap_or(current.near_medium_minutes);
+    let breach_medium_minutes = payload
+        .breach_medium_minutes
+        .unwrap_or(current.breach_medium_minutes);
+    let near_low_minutes = payload.near_low_minutes.unwrap_or(current.near_low_minutes);
+    let breach_low_minutes = payload
+        .breach_low_minutes
+        .unwrap_or(current.breach_low_minutes);
+    let escalate_to_assignee = trim_optional(payload.escalate_to_assignee, MAX_USER_REF_LEN)
+        .unwrap_or(current.escalate_to_assignee.clone());
+    let note = trim_optional(payload.note, MAX_ESCALATION_REASON_LEN);
+
+    validate_escalation_pair("critical", near_critical_minutes, breach_critical_minutes)?;
+    validate_escalation_pair("high", near_high_minutes, breach_high_minutes)?;
+    validate_escalation_pair("medium", near_medium_minutes, breach_medium_minutes)?;
+    validate_escalation_pair("low", near_low_minutes, breach_low_minutes)?;
+    if escalate_to_assignee.trim().is_empty() {
+        return Err(AppError::Validation(
+            "escalate_to_assignee is required".to_string(),
+        ));
+    }
+
+    let actor = actor_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
+
+    let updated: TicketEscalationPolicyRecord = sqlx::query_as(
+        "UPDATE ticket_escalation_policies
+         SET name = $2,
+             is_enabled = $3,
+             near_critical_minutes = $4,
+             breach_critical_minutes = $5,
+             near_high_minutes = $6,
+             breach_high_minutes = $7,
+             near_medium_minutes = $8,
+             breach_medium_minutes = $9,
+             near_low_minutes = $10,
+             breach_low_minutes = $11,
+             escalate_to_assignee = $12,
+             updated_by = $13,
+             updated_at = NOW()
+         WHERE policy_key = $1
+         RETURNING id, policy_key, name, is_enabled,
+                   near_critical_minutes, breach_critical_minutes,
+                   near_high_minutes, breach_high_minutes,
+                   near_medium_minutes, breach_medium_minutes,
+                   near_low_minutes, breach_low_minutes,
+                   escalate_to_assignee, updated_by, created_at, updated_at",
+    )
+    .bind(TICKET_ESCALATION_POLICY_KEY_DEFAULT)
+    .bind(name)
+    .bind(is_enabled)
+    .bind(near_critical_minutes)
+    .bind(breach_critical_minutes)
+    .bind(near_high_minutes)
+    .bind(breach_high_minutes)
+    .bind(near_medium_minutes)
+    .bind(breach_medium_minutes)
+    .bind(near_low_minutes)
+    .bind(breach_low_minutes)
+    .bind(escalate_to_assignee)
+    .bind(actor.clone())
+    .fetch_one(&state.db)
+    .await?;
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "ticket.escalation.policy.update",
+        "ticket_escalation_policy",
+        Some(updated.id.to_string()),
+        "success",
+        note,
+        json!({
+            "policy_key": updated.policy_key,
+            "is_enabled": updated.is_enabled,
+            "escalate_to_assignee": updated.escalate_to_assignee,
+            "updated_by": actor
+        }),
+    )
+    .await;
+
+    Ok(Json(updated))
+}
+
+async fn preview_ticket_escalation_policy(
+    State(state): State<AppState>,
+    Json(payload): Json<TicketEscalationPreviewRequest>,
+) -> AppResult<Json<TicketEscalationPreviewResponse>> {
+    let policy = load_ticket_escalation_policy(&state.db).await?;
+    let priority = normalize_priority(Some(payload.priority))?;
+    let status = normalize_required_status(payload.status)?;
+    if payload.ticket_age_minutes < 0 {
+        return Err(AppError::Validation(
+            "ticket_age_minutes must be >= 0".to_string(),
+        ));
+    }
+
+    let evaluation = evaluate_ticket_escalation_by_age(
+        priority.as_str(),
+        status.as_str(),
+        payload.ticket_age_minutes,
+        &policy,
+    );
+
+    let should_escalate = evaluation.should_escalate
+        && payload
+            .current_assignee
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            != policy.escalate_to_assignee;
+
+    Ok(Json(TicketEscalationPreviewResponse {
+        priority,
+        status,
+        ticket_age_minutes: payload.ticket_age_minutes,
+        state: evaluation.state,
+        near_breach_minutes: evaluation.near_breach_minutes,
+        breach_minutes: evaluation.breach_minutes,
+        should_escalate,
+        escalate_to_assignee: policy.escalate_to_assignee,
+    }))
+}
+
+async fn list_ticket_escalation_queue(
+    State(state): State<AppState>,
+    Query(query): Query<ListTicketEscalationQueueQuery>,
+) -> AppResult<Json<ListTicketsResponse>> {
+    let policy = load_ticket_escalation_policy(&state.db).await?;
+    let limit = query.limit.unwrap_or(60).min(200) as usize;
+    let offset = query.offset.unwrap_or(0) as usize;
+    let state_filter = query.state.map(normalize_escalation_state).transpose()?;
+
+    let items: Vec<TicketListItem> = sqlx::query_as(
+        "SELECT t.id, t.ticket_no, t.title, t.status, t.priority, t.category, t.requester, t.assignee,
+                t.workflow_template_id, t.workflow_request_id, t.closed_at, t.created_at, t.updated_at,
+                (SELECT COUNT(*) FROM ticket_asset_links ta WHERE ta.ticket_id = t.id) AS asset_link_count,
+                (SELECT COUNT(*) FROM ticket_alert_links al WHERE al.ticket_id = t.id) AS alert_link_count,
+                'normal'::text AS escalation_state,
+                0::bigint AS escalation_age_minutes,
+                NULL::timestamptz AS escalation_due_at,
+                (SELECT a.created_at
+                 FROM ticket_escalation_actions a
+                 WHERE a.ticket_id = t.id
+                 ORDER BY a.created_at DESC, a.id DESC
+                 LIMIT 1) AS escalation_last_action_at,
+                (SELECT a.action_kind
+                 FROM ticket_escalation_actions a
+                 WHERE a.ticket_id = t.id
+                 ORDER BY a.created_at DESC, a.id DESC
+                 LIMIT 1) AS escalation_last_action_kind
+         FROM tickets t
+         WHERE t.status IN ('open', 'in_progress')
+         ORDER BY t.created_at DESC, t.id DESC
+         LIMIT 400",
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let now = Utc::now();
+    let mut filtered: Vec<TicketListItem> = items
+        .into_iter()
+        .map(|item| apply_ticket_escalation(item, now, &policy))
+        .filter(|item| {
+            item.escalation_state == ESCALATION_STATE_NEAR_BREACH
+                || item.escalation_state == ESCALATION_STATE_BREACHED
+        })
+        .collect();
+
+    if let Some(state) = state_filter {
+        filtered.retain(|item| item.escalation_state == state);
+    }
+
+    let total = filtered.len() as i64;
+    let page_items = filtered.into_iter().skip(offset).take(limit).collect();
+
+    Ok(Json(ListTicketsResponse {
+        items: page_items,
+        total,
+        limit: limit as u32,
+        offset: offset as u32,
+    }))
+}
+
+async fn list_ticket_escalation_actions(
+    State(state): State<AppState>,
+    Query(query): Query<ListTicketEscalationActionsQuery>,
+) -> AppResult<Json<ListTicketEscalationActionsResponse>> {
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_ESCALATION_ACTION_LIMIT)
+        .clamp(1, MAX_ESCALATION_ACTION_LIMIT) as i64;
+    let offset = query.offset.unwrap_or(0) as i64;
+
+    let mut count_builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT COUNT(*) FROM ticket_escalation_actions a WHERE 1=1");
+    if let Some(ticket_id) = query.ticket_id {
+        count_builder
+            .push(" AND a.ticket_id = ")
+            .push_bind(ticket_id);
+    }
+    let total: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, ticket_id, action_kind, state_before, state_after, from_assignee, to_assignee,
+                actor, reason, created_at
+         FROM ticket_escalation_actions a
+         WHERE 1=1",
+    );
+    if let Some(ticket_id) = query.ticket_id {
+        list_builder
+            .push(" AND a.ticket_id = ")
+            .push_bind(ticket_id);
+    }
+    list_builder
+        .push(" ORDER BY a.created_at DESC, a.id DESC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+
+    let items: Vec<TicketEscalationActionRecord> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
+    Ok(Json(ListTicketEscalationActionsResponse {
+        generated_at: Utc::now(),
+        total,
+        limit: limit as u32,
+        offset: offset as u32,
+        items,
+    }))
+}
+
+async fn run_ticket_escalation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<RunTicketEscalationRequest>,
+) -> AppResult<Json<TicketEscalationRunResponse>> {
+    let policy = load_ticket_escalation_policy(&state.db).await?;
+    let dry_run = payload.dry_run.unwrap_or(false);
+    let reason = trim_optional(payload.note, MAX_ESCALATION_REASON_LEN);
+    let actor = actor_from_headers(&headers).unwrap_or_else(|| "unknown".to_string());
+
+    let mut candidates: Vec<TicketRecord> = sqlx::query_as(
+        "SELECT id, ticket_no, title, description, status, priority, category, requester, assignee,
+                workflow_template_id, workflow_request_id, metadata, last_status_note, closed_at, created_at, updated_at
+         FROM tickets
+         WHERE status IN ('open', 'in_progress')
+         ORDER BY created_at ASC, id ASC
+         LIMIT 500",
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let now = Utc::now();
+    let mut processed = 0usize;
+    let mut escalated = 0usize;
+    let mut skipped = 0usize;
+    let mut actions: Vec<TicketEscalationActionRecord> = Vec::new();
+
+    let mut tx = state.db.begin().await?;
+    for ticket in &mut candidates {
+        let evaluation = evaluate_ticket_escalation(
+            ticket.priority.as_str(),
+            ticket.status.as_str(),
+            ticket.created_at,
+            now,
+            &policy,
+        );
+        if !evaluation.should_escalate {
+            continue;
+        }
+        processed += 1;
+
+        let current_assignee = ticket.assignee.clone();
+        if current_assignee.as_deref() == Some(policy.escalate_to_assignee.as_str()) {
+            skipped += 1;
+            if !dry_run {
+                let action: TicketEscalationActionRecord = sqlx::query_as(
+                    "INSERT INTO ticket_escalation_actions (
+                        ticket_id, policy_id, action_kind, state_before, state_after,
+                        from_assignee, to_assignee, actor, reason, metadata
+                     )
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                     RETURNING id, ticket_id, action_kind, state_before, state_after, from_assignee, to_assignee,
+                               actor, reason, created_at",
+                )
+                .bind(ticket.id)
+                .bind(policy.id)
+                .bind(ESCALATION_ACTION_SKIPPED)
+                .bind(evaluation.state.as_str())
+                .bind(evaluation.state.as_str())
+                .bind(current_assignee.as_deref())
+                .bind(current_assignee.as_deref())
+                .bind(actor.as_str())
+                .bind(reason.as_deref())
+                .bind(json!({
+                    "dry_run": dry_run,
+                    "reason": "already escalated owner"
+                }))
+                .fetch_one(&mut *tx)
+                .await?;
+                actions.push(action);
+            }
+            continue;
+        }
+
+        escalated += 1;
+        if !dry_run {
+            sqlx::query(
+                "UPDATE tickets
+                 SET assignee = $2,
+                     updated_at = NOW()
+                 WHERE id = $1",
+            )
+            .bind(ticket.id)
+            .bind(policy.escalate_to_assignee.as_str())
+            .execute(&mut *tx)
+            .await?;
+
+            let action: TicketEscalationActionRecord = sqlx::query_as(
+                "INSERT INTO ticket_escalation_actions (
+                    ticket_id, policy_id, action_kind, state_before, state_after,
+                    from_assignee, to_assignee, actor, reason, metadata
+                 )
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                 RETURNING id, ticket_id, action_kind, state_before, state_after, from_assignee, to_assignee,
+                           actor, reason, created_at",
+            )
+            .bind(ticket.id)
+            .bind(policy.id)
+            .bind(ESCALATION_ACTION_ESCALATED)
+            .bind(evaluation.state.as_str())
+            .bind(ESCALATION_STATE_BREACHED)
+            .bind(current_assignee.as_deref())
+            .bind(policy.escalate_to_assignee.as_str())
+            .bind(actor.as_str())
+            .bind(reason.as_deref())
+            .bind(json!({
+                "dry_run": dry_run,
+                "ticket_no": ticket.ticket_no,
+                "priority": ticket.priority
+            }))
+            .fetch_one(&mut *tx)
+            .await?;
+            actions.push(action);
+        }
+    }
+
+    if !dry_run {
+        tx.commit().await?;
+    } else {
+        tx.rollback().await?;
+    }
+
+    write_from_headers_best_effort(
+        &state.db,
+        &headers,
+        "ticket.escalation.run",
+        "ticket_escalation_policy",
+        Some(policy.id.to_string()),
+        "success",
+        reason.clone(),
+        json!({
+            "dry_run": dry_run,
+            "processed": processed,
+            "escalated": escalated,
+            "skipped": skipped
+        }),
+    )
+    .await;
+
+    Ok(Json(TicketEscalationRunResponse {
+        generated_at: Utc::now(),
+        dry_run,
+        policy_key: policy.policy_key,
+        processed,
+        escalated,
+        skipped,
+        actions,
+    }))
+}
+
 async fn load_ticket_detail(db: &sqlx::PgPool, id: i64) -> AppResult<TicketDetailResponse> {
     let ticket: Option<TicketRecord> = sqlx::query_as(
         "SELECT id, ticket_no, title, description, status, priority, category, requester, assignee,
@@ -473,10 +1079,42 @@ async fn load_ticket_detail(db: &sqlx::PgPool, id: i64) -> AppResult<TicketDetai
     .fetch_all(db)
     .await?;
 
+    let policy = load_ticket_escalation_policy(db).await?;
+    let evaluation = evaluate_ticket_escalation(
+        ticket.priority.as_str(),
+        ticket.status.as_str(),
+        ticket.created_at,
+        Utc::now(),
+        &policy,
+    );
+    let latest_action: Option<TicketEscalationActionRecord> = sqlx::query_as(
+        "SELECT id, ticket_id, action_kind, state_before, state_after, from_assignee, to_assignee,
+                actor, reason, created_at
+         FROM ticket_escalation_actions
+         WHERE ticket_id = $1
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+
     Ok(TicketDetailResponse {
         ticket,
         asset_links,
         alert_links,
+        escalation: TicketEscalationDetail {
+            policy_key: policy.policy_key,
+            policy_name: policy.name,
+            policy_enabled: policy.is_enabled,
+            state: evaluation.state,
+            age_minutes: evaluation.age_minutes,
+            near_breach_minutes: evaluation.near_breach_minutes,
+            breach_minutes: evaluation.breach_minutes,
+            due_at: evaluation.due_at,
+            escalate_to_assignee: policy.escalate_to_assignee,
+            latest_action,
+        },
     })
 }
 
@@ -525,6 +1163,160 @@ async fn validate_workflow_template_exists(
         )));
     }
     Ok(())
+}
+
+fn apply_ticket_escalation(
+    mut item: TicketListItem,
+    now: DateTime<Utc>,
+    policy: &TicketEscalationPolicyRecord,
+) -> TicketListItem {
+    let evaluation = evaluate_ticket_escalation(
+        item.priority.as_str(),
+        item.status.as_str(),
+        item.created_at,
+        now,
+        policy,
+    );
+    item.escalation_state = evaluation.state;
+    item.escalation_age_minutes = evaluation.age_minutes;
+    item.escalation_due_at = evaluation.due_at;
+    item
+}
+
+fn evaluate_ticket_escalation(
+    priority: &str,
+    status: &str,
+    created_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+    policy: &TicketEscalationPolicyRecord,
+) -> TicketEscalationEvaluation {
+    let age_minutes = (now - created_at).num_minutes().max(0);
+    evaluate_ticket_escalation_by_age(priority, status, age_minutes, policy).with_due_at(
+        if matches!(status, STATUS_OPEN | STATUS_IN_PROGRESS) {
+            let (_, breach) = escalation_threshold_for_priority(priority, policy);
+            Some(created_at + Duration::minutes(breach as i64))
+        } else {
+            None
+        },
+    )
+}
+
+fn evaluate_ticket_escalation_by_age(
+    priority: &str,
+    status: &str,
+    age_minutes: i64,
+    policy: &TicketEscalationPolicyRecord,
+) -> TicketEscalationEvaluation {
+    let (near_breach_minutes, breach_minutes) = escalation_threshold_for_priority(priority, policy);
+    let active_status = matches!(status, STATUS_OPEN | STATUS_IN_PROGRESS);
+    if !policy.is_enabled || !active_status {
+        return TicketEscalationEvaluation {
+            state: ESCALATION_STATE_NORMAL.to_string(),
+            age_minutes,
+            near_breach_minutes,
+            breach_minutes,
+            due_at: None,
+            should_escalate: false,
+        };
+    }
+
+    let state = if age_minutes >= breach_minutes as i64 {
+        ESCALATION_STATE_BREACHED
+    } else if age_minutes >= near_breach_minutes as i64 {
+        ESCALATION_STATE_NEAR_BREACH
+    } else {
+        ESCALATION_STATE_NORMAL
+    };
+    TicketEscalationEvaluation {
+        state: state.to_string(),
+        age_minutes,
+        near_breach_minutes,
+        breach_minutes,
+        due_at: None,
+        should_escalate: state == ESCALATION_STATE_BREACHED,
+    }
+}
+
+fn escalation_threshold_for_priority(
+    priority: &str,
+    policy: &TicketEscalationPolicyRecord,
+) -> (i32, i32) {
+    match priority {
+        PRIORITY_CRITICAL => (policy.near_critical_minutes, policy.breach_critical_minutes),
+        PRIORITY_HIGH => (policy.near_high_minutes, policy.breach_high_minutes),
+        PRIORITY_LOW => (policy.near_low_minutes, policy.breach_low_minutes),
+        _ => (policy.near_medium_minutes, policy.breach_medium_minutes),
+    }
+}
+
+fn validate_escalation_pair(label: &str, near: i32, breach: i32) -> AppResult<()> {
+    if near <= 0 || breach <= 0 {
+        return Err(AppError::Validation(format!(
+            "{label} escalation windows must be > 0"
+        )));
+    }
+    if near >= breach {
+        return Err(AppError::Validation(format!(
+            "{label} near window must be less than breach window"
+        )));
+    }
+    Ok(())
+}
+
+fn normalize_escalation_state(value: String) -> AppResult<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        ESCALATION_STATE_NORMAL | ESCALATION_STATE_NEAR_BREACH | ESCALATION_STATE_BREACHED => {
+            Ok(normalized)
+        }
+        _ => Err(AppError::Validation(
+            "state must be one of: normal, near_breach, breached".to_string(),
+        )),
+    }
+}
+
+async fn load_ticket_escalation_policy(
+    db: &sqlx::PgPool,
+) -> AppResult<TicketEscalationPolicyRecord> {
+    if let Some(existing) = sqlx::query_as(
+        "SELECT id, policy_key, name, is_enabled,
+                near_critical_minutes, breach_critical_minutes,
+                near_high_minutes, breach_high_minutes,
+                near_medium_minutes, breach_medium_minutes,
+                near_low_minutes, breach_low_minutes,
+                escalate_to_assignee, updated_by, created_at, updated_at
+         FROM ticket_escalation_policies
+         WHERE policy_key = $1",
+    )
+    .bind(TICKET_ESCALATION_POLICY_KEY_DEFAULT)
+    .fetch_optional(db)
+    .await?
+    {
+        return Ok(existing);
+    }
+
+    let inserted: TicketEscalationPolicyRecord = sqlx::query_as(
+        "INSERT INTO ticket_escalation_policies (
+            policy_key, name, is_enabled,
+            near_critical_minutes, breach_critical_minutes,
+            near_high_minutes, breach_high_minutes,
+            near_medium_minutes, breach_medium_minutes,
+            near_low_minutes, breach_low_minutes,
+            escalate_to_assignee, updated_by
+         )
+         VALUES ($1, $2, TRUE, 30, 60, 60, 120, 120, 240, 240, 480, 'ops-escalation', 'system')
+         RETURNING id, policy_key, name, is_enabled,
+                   near_critical_minutes, breach_critical_minutes,
+                   near_high_minutes, breach_high_minutes,
+                   near_medium_minutes, breach_medium_minutes,
+                   near_low_minutes, breach_low_minutes,
+                   escalate_to_assignee, updated_by, created_at, updated_at",
+    )
+    .bind(TICKET_ESCALATION_POLICY_KEY_DEFAULT)
+    .bind("Default Ticket SLA Policy")
+    .fetch_one(db)
+    .await?;
+    Ok(inserted)
 }
 
 fn append_ticket_filters(
@@ -727,8 +1519,35 @@ fn trim_optional(value: Option<String>, max_len: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_priority, normalize_required_status, supported_priorities, supported_statuses,
+        evaluate_ticket_escalation_by_age, normalize_escalation_state, normalize_priority,
+        normalize_required_status, supported_priorities, supported_statuses, validate_escalation_pair,
+        TicketEscalationPolicyRecord,
+        ESCALATION_STATE_BREACHED,
+        ESCALATION_STATE_NEAR_BREACH,
+        TICKET_ESCALATION_POLICY_KEY_DEFAULT,
     };
+    use chrono::Utc;
+
+    fn sample_policy() -> TicketEscalationPolicyRecord {
+        TicketEscalationPolicyRecord {
+            id: 1,
+            policy_key: TICKET_ESCALATION_POLICY_KEY_DEFAULT.to_string(),
+            name: "default".to_string(),
+            is_enabled: true,
+            near_critical_minutes: 30,
+            breach_critical_minutes: 60,
+            near_high_minutes: 60,
+            breach_high_minutes: 120,
+            near_medium_minutes: 120,
+            breach_medium_minutes: 240,
+            near_low_minutes: 240,
+            breach_low_minutes: 480,
+            escalate_to_assignee: "ops-escalation".to_string(),
+            updated_by: "system".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn normalizes_ticket_status() {
@@ -754,5 +1573,33 @@ mod tests {
     fn status_and_priority_sets_are_non_empty() {
         assert!(!supported_statuses().is_empty());
         assert!(!supported_priorities().is_empty());
+    }
+
+    #[test]
+    fn escalation_policy_evaluation_marks_near_breach_and_breach() {
+        let policy = sample_policy();
+        let near = evaluate_ticket_escalation_by_age("high", "open", 60, &policy);
+        assert_eq!(near.state, ESCALATION_STATE_NEAR_BREACH);
+        assert!(!near.should_escalate);
+
+        let breached = evaluate_ticket_escalation_by_age("high", "open", 120, &policy);
+        assert_eq!(breached.state, ESCALATION_STATE_BREACHED);
+        assert!(breached.should_escalate);
+    }
+
+    #[test]
+    fn escalation_policy_pair_validation_rejects_invalid_window() {
+        assert!(validate_escalation_pair("high", 10, 30).is_ok());
+        assert!(validate_escalation_pair("high", 10, 10).is_err());
+        assert!(validate_escalation_pair("high", 0, 30).is_err());
+    }
+
+    #[test]
+    fn escalation_state_normalization_supports_expected_values() {
+        assert_eq!(
+            normalize_escalation_state("near_breach".to_string()).expect("near"),
+            "near_breach"
+        );
+        assert!(normalize_escalation_state("urgent".to_string()).is_err());
     }
 }

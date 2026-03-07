@@ -846,6 +846,31 @@ mod tests {
         assert_permission(Method::GET, "/api/v1/tickets", "tickets.read");
         assert_permission(Method::POST, "/api/v1/tickets", "tickets.write");
         assert_permission(Method::PATCH, "/api/v1/tickets/1/status", "tickets.write");
+        assert_permission(
+            Method::GET,
+            "/api/v1/tickets/escalation/policy",
+            "tickets.read",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/tickets/escalation/queue",
+            "tickets.read",
+        );
+        assert_permission(
+            Method::PUT,
+            "/api/v1/tickets/escalation/policy",
+            "tickets.write",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/tickets/escalation/policy/preview",
+            "tickets.write",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/tickets/escalation/run",
+            "tickets.write",
+        );
     }
 
     #[test]
@@ -984,8 +1009,33 @@ mod tests {
             ),
             (Method::GET, "/api/v1/tickets", "tickets.read"),
             (Method::GET, "/api/v1/tickets/1", "tickets.read"),
+            (
+                Method::GET,
+                "/api/v1/tickets/escalation/policy",
+                "tickets.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/tickets/escalation/queue",
+                "tickets.read",
+            ),
             (Method::POST, "/api/v1/tickets", "tickets.write"),
             (Method::PATCH, "/api/v1/tickets/1/status", "tickets.write"),
+            (
+                Method::PUT,
+                "/api/v1/tickets/escalation/policy",
+                "tickets.write",
+            ),
+            (
+                Method::POST,
+                "/api/v1/tickets/escalation/policy/preview",
+                "tickets.write",
+            ),
+            (
+                Method::POST,
+                "/api/v1/tickets/escalation/run",
+                "tickets.write",
+            ),
             (
                 Method::DELETE,
                 "/api/v1/cmdb/relations/1",

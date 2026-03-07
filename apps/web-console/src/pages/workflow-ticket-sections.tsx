@@ -28,6 +28,9 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   formatSignedDelta,
   loadTicketDetail,
   loadTickets,
+  loadTicketEscalationActions,
+  loadTicketEscalationPolicy,
+  loadTicketEscalationQueue,
   loadPlaybookCatalog,
   loadPlaybookApprovalRequests,
   loadPlaybookExecutionPolicy,
@@ -41,6 +44,9 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   loadingPlaybookPolicy,
   loadingTicketDetail,
   loadingTickets,
+  loadingTicketEscalationActions,
+  loadingTicketEscalationPolicy,
+  loadingTicketEscalationQueue,
   loadingWorkflowLogs,
   loadingWorkflowRequests,
   loadingWorkflowTemplates,
@@ -82,6 +88,9 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   requestingPlaybookApproval,
   runningPlaybookDryRun,
   runningPlaybookExecute,
+  runningTicketEscalation,
+  savingTicketEscalationPolicy,
+  previewingTicketEscalationPolicy,
   selectedPlaybookApprovalId,
   selectedPlaybook,
   selectedPlaybookKey,
@@ -110,6 +119,9 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   setSelectedWorkflowRequestId,
   setTicketPriorityFilter,
   setTicketQueryFilter,
+  setTicketEscalationPolicyDraft,
+  setTicketEscalationPreviewDraft,
+  setTicketEscalationRunNote,
   setTicketStatusDraft,
   setTicketStatusFilter,
   setWorkflowReportRangeDays,
@@ -120,6 +132,14 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   subSectionTitleStyle,
   t,
   ticketDetail,
+  ticketEscalationActions,
+  ticketEscalationPolicy,
+  ticketEscalationPolicyDraft,
+  ticketEscalationPreview,
+  ticketEscalationPreviewDraft,
+  ticketEscalationQueue,
+  ticketEscalationRunNote,
+  ticketEscalationRunResponse,
   ticketNotice,
   ticketPriorityFilter,
   ticketQueryFilter,
@@ -127,6 +147,9 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   ticketStatusFilter,
   tickets,
   truncateTopologyLabel,
+  previewTicketEscalationPolicy,
+  runTicketEscalation,
+  updateTicketEscalationPolicy,
   updateTicketStatus,
   updatingTicketStatusId,
   visibleSections,
@@ -1669,6 +1692,312 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
             </label>
           </div>
 
+          <div className="detail-grid" style={{ marginTop: "0.75rem" }}>
+            <div className="detail-panel">
+              <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                <h3 style={subSectionTitleStyle}>SLA escalation policy</h3>
+                <button onClick={() => void loadTicketEscalationPolicy()} disabled={loadingTicketEscalationPolicy}>
+                  {loadingTicketEscalationPolicy ? t("cmdb.actions.loading") : "Refresh policy"}
+                </button>
+              </div>
+              <p className="section-note">
+                Maintain per-priority near-breach/breach windows and verify escalation before applying updates.
+              </p>
+
+              <div className="form-grid">
+                <label className="control-field">
+                  <span>Policy name</span>
+                  <input
+                    value={ticketEscalationPolicyDraft.name}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, name: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                    placeholder="Default Ticket SLA Policy"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Escalate to assignee</span>
+                  <input
+                    value={ticketEscalationPolicyDraft.escalate_to_assignee}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({
+                        ...prev,
+                        escalate_to_assignee: event.target.value
+                      }))
+                    }
+                    disabled={!canWriteCmdb}
+                    placeholder="ops-escalation"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Enabled</span>
+                  <select
+                    value={ticketEscalationPolicyDraft.is_enabled ? "true" : "false"}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, is_enabled: event.target.value === "true" }))
+                    }
+                    disabled={!canWriteCmdb}
+                  >
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="form-grid" style={{ marginTop: "0.45rem" }}>
+                <label className="control-field">
+                  <span>Critical near (min)</span>
+                  <input
+                    value={ticketEscalationPolicyDraft.near_critical_minutes}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, near_critical_minutes: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Critical breach (min)</span>
+                  <input
+                    value={ticketEscalationPolicyDraft.breach_critical_minutes}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, breach_critical_minutes: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>High near (min)</span>
+                  <input
+                    value={ticketEscalationPolicyDraft.near_high_minutes}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, near_high_minutes: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>High breach (min)</span>
+                  <input
+                    value={ticketEscalationPolicyDraft.breach_high_minutes}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, breach_high_minutes: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+              </div>
+
+              <div className="form-grid" style={{ marginTop: "0.45rem" }}>
+                <label className="control-field">
+                  <span>Medium near (min)</span>
+                  <input
+                    value={ticketEscalationPolicyDraft.near_medium_minutes}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, near_medium_minutes: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Medium breach (min)</span>
+                  <input
+                    value={ticketEscalationPolicyDraft.breach_medium_minutes}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, breach_medium_minutes: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Low near (min)</span>
+                  <input
+                    value={ticketEscalationPolicyDraft.near_low_minutes}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, near_low_minutes: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Low breach (min)</span>
+                  <input
+                    value={ticketEscalationPolicyDraft.breach_low_minutes}
+                    onChange={(event) =>
+                      setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, breach_low_minutes: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+              </div>
+
+              <div className="form-grid" style={{ marginTop: "0.45rem" }}>
+                <label className="control-field">
+                  <span>Preview priority</span>
+                  <select
+                    value={ticketEscalationPreviewDraft.priority}
+                    onChange={(event) =>
+                      setTicketEscalationPreviewDraft((prev: any) => ({ ...prev, priority: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                  >
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    <option value="critical">critical</option>
+                  </select>
+                </label>
+                <label className="control-field">
+                  <span>Preview status</span>
+                  <select
+                    value={ticketEscalationPreviewDraft.status}
+                    onChange={(event) =>
+                      setTicketEscalationPreviewDraft((prev: any) => ({ ...prev, status: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                  >
+                    <option value="open">open</option>
+                    <option value="in_progress">in_progress</option>
+                    <option value="resolved">resolved</option>
+                    <option value="closed">closed</option>
+                    <option value="cancelled">cancelled</option>
+                  </select>
+                </label>
+                <label className="control-field">
+                  <span>Preview age (min)</span>
+                  <input
+                    value={ticketEscalationPreviewDraft.ticket_age_minutes}
+                    onChange={(event) =>
+                      setTicketEscalationPreviewDraft((prev: any) => ({ ...prev, ticket_age_minutes: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                    placeholder="90"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Current assignee</span>
+                  <input
+                    value={ticketEscalationPreviewDraft.current_assignee}
+                    onChange={(event) =>
+                      setTicketEscalationPreviewDraft((prev: any) => ({ ...prev, current_assignee: event.target.value }))
+                    }
+                    disabled={!canWriteCmdb}
+                    placeholder="ops-oncall"
+                  />
+                </label>
+              </div>
+
+              <label className="control-field" style={{ marginTop: "0.45rem" }}>
+                <span>Policy note</span>
+                <input
+                  value={ticketEscalationPolicyDraft.note}
+                  onChange={(event) =>
+                    setTicketEscalationPolicyDraft((prev: any) => ({ ...prev, note: event.target.value }))
+                  }
+                  disabled={!canWriteCmdb}
+                  placeholder="change reason"
+                />
+              </label>
+
+              <label className="control-field" style={{ marginTop: "0.45rem" }}>
+                <span>Escalation run note</span>
+                <input
+                  value={ticketEscalationRunNote}
+                  onChange={(event) => setTicketEscalationRunNote(event.target.value)}
+                  disabled={!canWriteCmdb}
+                  placeholder="batch escalation note"
+                />
+              </label>
+
+              {canWriteCmdb && (
+                <div className="toolbar-row" style={{ marginTop: "0.5rem" }}>
+                  <button onClick={() => void updateTicketEscalationPolicy()} disabled={savingTicketEscalationPolicy}>
+                    {savingTicketEscalationPolicy ? t("cmdb.actions.loading") : "Save policy"}
+                  </button>
+                  <button onClick={() => void previewTicketEscalationPolicy()} disabled={previewingTicketEscalationPolicy}>
+                    {previewingTicketEscalationPolicy ? t("cmdb.actions.loading") : "Preview policy"}
+                  </button>
+                  <button onClick={() => void runTicketEscalation(true)} disabled={runningTicketEscalation}>
+                    {runningTicketEscalation ? t("cmdb.actions.loading") : "Run dry-run"}
+                  </button>
+                  <button onClick={() => void runTicketEscalation(false)} disabled={runningTicketEscalation}>
+                    {runningTicketEscalation ? t("cmdb.actions.loading") : "Run escalation"}
+                  </button>
+                </div>
+              )}
+
+              {ticketEscalationPolicy && (
+                <p className="inline-note" style={{ marginTop: "0.45rem" }}>
+                  policy_key: {ticketEscalationPolicy.policy_key} | updated_by: {ticketEscalationPolicy.updated_by} | updated_at: {new Date(ticketEscalationPolicy.updated_at).toLocaleString()}
+                </p>
+              )}
+
+              {ticketEscalationPreview && (
+                <p className="inline-note" style={{ marginTop: "0.4rem" }}>
+                  preview: state={ticketEscalationPreview.state}, near={ticketEscalationPreview.near_breach_minutes}m, breach={ticketEscalationPreview.breach_minutes}m, should_escalate={String(ticketEscalationPreview.should_escalate)}
+                </p>
+              )}
+              {ticketEscalationRunResponse && (
+                <p className="inline-note" style={{ marginTop: "0.4rem" }}>
+                  last run ({ticketEscalationRunResponse.dry_run ? "dry-run" : "apply"}): processed {ticketEscalationRunResponse.processed}, escalated {ticketEscalationRunResponse.escalated}, skipped {ticketEscalationRunResponse.skipped}
+                </p>
+              )}
+            </div>
+
+            <div className="detail-panel">
+              <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                <h3 style={subSectionTitleStyle}>Escalation queue</h3>
+                <button onClick={() => void loadTicketEscalationQueue()} disabled={loadingTicketEscalationQueue}>
+                  {loadingTicketEscalationQueue ? t("cmdb.actions.loading") : "Refresh queue"}
+                </button>
+              </div>
+              <p className="section-note">Tickets at near-breach or breached state based on current policy.</p>
+              {loadingTicketEscalationQueue && ticketEscalationQueue.length === 0 ? (
+                <p>{t("cmdb.actions.loading")}</p>
+              ) : ticketEscalationQueue.length === 0 ? (
+                <p>No escalation risk tickets.</p>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", minWidth: "680px", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        <th style={cellStyle}>Ticket</th>
+                        <th style={cellStyle}>State</th>
+                        <th style={cellStyle}>Age (min)</th>
+                        <th style={cellStyle}>Due</th>
+                        <th style={cellStyle}>Assignee</th>
+                        <th style={cellStyle}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(ticketEscalationQueue as any[]).slice(0, 20).map((ticket) => (
+                        <tr key={`ticket-escalation-queue-${ticket.id}`}>
+                          <td style={cellStyle}>{ticket.ticket_no}</td>
+                          <td style={cellStyle}>
+                            <span className={statusChipClass(ticket.escalation_state)}>{ticket.escalation_state}</span>
+                          </td>
+                          <td style={cellStyle}>{ticket.escalation_age_minutes}</td>
+                          <td style={cellStyle}>{ticket.escalation_due_at ? new Date(ticket.escalation_due_at).toLocaleString() : "-"}</td>
+                          <td style={cellStyle}>{ticket.assignee ?? "-"}</td>
+                          <td style={cellStyle}>
+                            <button
+                              onClick={() => {
+                                setSelectedTicketId(String(ticket.id));
+                                void Promise.all([loadTicketDetail(ticket.id), loadTicketEscalationActions(ticket.id)]);
+                              }}
+                            >
+                              {t("cmdb.tickets.actions.viewDetail")}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+
           {canWriteCmdb && (
             <>
               <h3 style={subSectionTitleStyle}>{t("cmdb.tickets.createTitle")}</h3>
@@ -1798,13 +2127,14 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
             <p>{t("cmdb.tickets.messages.noTickets")}</p>
           ) : (
             <div style={{ overflowX: "auto" }}>
-              <table style={{ borderCollapse: "collapse", minWidth: "1120px", width: "100%" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "1260px", width: "100%" }}>
                 <thead>
                   <tr>
                     <th style={cellStyle}>{t("cmdb.tickets.table.id")}</th>
                     <th style={cellStyle}>{t("cmdb.tickets.table.title")}</th>
                     <th style={cellStyle}>{t("cmdb.tickets.table.status")}</th>
                     <th style={cellStyle}>{t("cmdb.tickets.table.priority")}</th>
+                    <th style={cellStyle}>Escalation</th>
                     <th style={cellStyle}>{t("cmdb.tickets.table.requester")}</th>
                     <th style={cellStyle}>{t("cmdb.tickets.table.links")}</th>
                     <th style={cellStyle}>{t("cmdb.tickets.table.workflow")}</th>
@@ -1821,6 +2151,15 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
                         <span className={statusChipClass(ticket.status)}>{ticket.status}</span>
                       </td>
                       <td style={cellStyle}>{ticket.priority}</td>
+                      <td style={cellStyle}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem" }}>
+                          <span className={statusChipClass(ticket.escalation_state)}>{ticket.escalation_state}</span>
+                          <span className="inline-note" style={{ marginTop: 0 }}>
+                            age:{ticket.escalation_age_minutes}m
+                            {ticket.escalation_due_at ? ` | due:${new Date(ticket.escalation_due_at).toLocaleString()}` : ""}
+                          </span>
+                        </div>
+                      </td>
                       <td style={cellStyle}>{ticket.requester}</td>
                       <td style={cellStyle}>
                         assets:{ticket.asset_link_count} / alerts:{ticket.alert_link_count}
@@ -1874,6 +2213,26 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
                 <p className="inline-note">
                   updated: {new Date(ticketDetail.ticket.updated_at).toLocaleString()}
                 </p>
+                {ticketDetail.escalation && (
+                  <div style={{ marginTop: "0.45rem" }}>
+                    <div className="toolbar-row">
+                      <span className={statusChipClass(ticketDetail.escalation.state)}>
+                        escalation: {ticketDetail.escalation.state}
+                      </span>
+                      <span className="status-chip">
+                        age: {ticketDetail.escalation.age_minutes}m / breach: {ticketDetail.escalation.breach_minutes}m
+                      </span>
+                    </div>
+                    <p className="inline-note">
+                      due: {ticketDetail.escalation.due_at ? new Date(ticketDetail.escalation.due_at).toLocaleString() : "-"} | owner: {ticketDetail.escalation.escalate_to_assignee}
+                    </p>
+                    {ticketDetail.escalation.latest_action && (
+                      <p className="inline-note">
+                        latest action: {ticketDetail.escalation.latest_action.action_kind} | {ticketDetail.escalation.latest_action.actor} | {new Date(ticketDetail.escalation.latest_action.created_at).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {canWriteCmdb && (
                   <div className="toolbar-row" style={{ marginTop: "0.45rem" }}>
                     <select value={ticketStatusDraft} onChange={(event) => setTicketStatusDraft(event.target.value)}>
@@ -1919,6 +2278,42 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
                       </div>
                       <div className="inline-note">
                         {link.alert_title ?? "-"} | severity: {link.severity ?? "-"}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="detail-panel">
+                <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                  <h3 style={subSectionTitleStyle}>Escalation actions</h3>
+                  <button
+                    onClick={() => {
+                      const ticketId = Number.parseInt(selectedTicketId, 10);
+                      if (Number.isFinite(ticketId) && ticketId > 0) {
+                        void loadTicketEscalationActions(ticketId);
+                      }
+                    }}
+                    disabled={loadingTicketEscalationActions}
+                  >
+                    {loadingTicketEscalationActions ? t("cmdb.actions.loading") : "Refresh actions"}
+                  </button>
+                </div>
+                {loadingTicketEscalationActions && (ticketEscalationActions as any[]).length === 0 ? (
+                  <p>{t("cmdb.actions.loading")}</p>
+                ) : (ticketEscalationActions as any[]).length === 0 ? (
+                  <p>No escalation actions.</p>
+                ) : (
+                  (ticketEscalationActions as any[]).slice(0, 8).map((action) => (
+                    <div key={`ticket-escalation-action-${action.id}`} style={{ marginBottom: "0.5rem" }}>
+                      <div className="toolbar-row">
+                        <span className={statusChipClass(action.action_kind)}>{action.action_kind}</span>
+                        <span className="inline-note">{new Date(action.created_at).toLocaleString()}</span>
+                      </div>
+                      <div className="inline-note">
+                        {action.state_before} {" -> "} {action.state_after} | {action.from_assignee ?? "-"} {" -> "} {action.to_assignee ?? "-"}
+                      </div>
+                      <div className="inline-note">
+                        actor: {action.actor} | note: {action.reason ?? "-"}
                       </div>
                     </div>
                   ))

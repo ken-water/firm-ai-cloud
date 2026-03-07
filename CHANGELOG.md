@@ -16,12 +16,24 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
     - `GET /api/v1/ops/cockpit/incidents`
     - `GET /api/v1/ops/cockpit/incidents/{alert_id}`
     - `POST /api/v1/ops/cockpit/incidents/{alert_id}/command`
+- Ticket SLA escalation policy and queue guardrails baseline:
+  - migration: `202603070002_create_ticket_escalation_tables.sql`
+  - endpoints:
+    - `GET /api/v1/tickets/escalation/policy`
+    - `PUT /api/v1/tickets/escalation/policy`
+    - `POST /api/v1/tickets/escalation/policy/preview`
+    - `GET /api/v1/tickets/escalation/queue`
+    - `GET /api/v1/tickets/escalation/actions`
+    - `POST /api/v1/tickets/escalation/run`
 
 ### Changed
 
 - v0.1.x planning document now includes v0.1.5 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
 - Web console daily cockpit adds incident command panel (owner/ETA/status update and timeline view).
 - RBAC integration checks and permission mapping now cover incident command cockpit routes.
+- Web console tickets page now includes SLA escalation policy controls, policy preview/run actions, risk queue view, and escalation action timeline.
+- Ticket list and detail payloads now expose escalation state markers (`normal` / `near_breach` / `breached`) and latest action evidence.
+- RBAC permission mapping and integration checks now include escalation policy/queue/actions/run allow-deny matrix (viewer read-only for writes).
 
 ### Fixed
 

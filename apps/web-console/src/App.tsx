@@ -999,6 +999,11 @@ type TicketListItem = {
   updated_at: string;
   asset_link_count: number;
   alert_link_count: number;
+  escalation_state: "normal" | "near_breach" | "breached";
+  escalation_age_minutes: number;
+  escalation_due_at: string | null;
+  escalation_last_action_at: string | null;
+  escalation_last_action_kind: string | null;
 };
 
 type TicketAssetLink = {
@@ -1034,10 +1039,107 @@ type TicketRecord = {
   updated_at: string;
 };
 
+type TicketEscalationPolicyRecord = {
+  id: number;
+  policy_key: string;
+  name: string;
+  is_enabled: boolean;
+  near_critical_minutes: number;
+  breach_critical_minutes: number;
+  near_high_minutes: number;
+  breach_high_minutes: number;
+  near_medium_minutes: number;
+  breach_medium_minutes: number;
+  near_low_minutes: number;
+  breach_low_minutes: number;
+  escalate_to_assignee: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type TicketEscalationActionRecord = {
+  id: number;
+  ticket_id: number;
+  action_kind: string;
+  state_before: string;
+  state_after: string;
+  from_assignee: string | null;
+  to_assignee: string | null;
+  actor: string;
+  reason: string | null;
+  created_at: string;
+};
+
+type TicketEscalationDetail = {
+  policy_key: string;
+  policy_name: string;
+  policy_enabled: boolean;
+  state: string;
+  age_minutes: number;
+  near_breach_minutes: number;
+  breach_minutes: number;
+  due_at: string | null;
+  escalate_to_assignee: string;
+  latest_action: TicketEscalationActionRecord | null;
+};
+
+type TicketEscalationPreviewResponse = {
+  priority: string;
+  status: string;
+  ticket_age_minutes: number;
+  state: string;
+  near_breach_minutes: number;
+  breach_minutes: number;
+  should_escalate: boolean;
+  escalate_to_assignee: string;
+};
+
+type TicketEscalationActionsResponse = {
+  generated_at: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: TicketEscalationActionRecord[];
+};
+
+type TicketEscalationRunResponse = {
+  generated_at: string;
+  dry_run: boolean;
+  policy_key: string;
+  processed: number;
+  escalated: number;
+  skipped: number;
+  actions: TicketEscalationActionRecord[];
+};
+
+type TicketEscalationPolicyDraft = {
+  name: string;
+  is_enabled: boolean;
+  near_critical_minutes: string;
+  breach_critical_minutes: string;
+  near_high_minutes: string;
+  breach_high_minutes: string;
+  near_medium_minutes: string;
+  breach_medium_minutes: string;
+  near_low_minutes: string;
+  breach_low_minutes: string;
+  escalate_to_assignee: string;
+  note: string;
+};
+
+type TicketEscalationPreviewDraft = {
+  priority: "low" | "medium" | "high" | "critical";
+  status: "open" | "in_progress" | "resolved" | "closed" | "cancelled";
+  ticket_age_minutes: string;
+  current_assignee: string;
+};
+
 type TicketDetailResponse = {
   ticket: TicketRecord;
   asset_links: TicketAssetLink[];
   alert_links: TicketAlertLink[];
+  escalation: TicketEscalationDetail;
 };
 
 type TicketListResponse = {
@@ -1561,6 +1663,45 @@ const defaultTicketForm: NewTicketForm = {
   trigger_workflow: false
 };
 
+const defaultTicketEscalationPolicyDraft: TicketEscalationPolicyDraft = {
+  name: "Default Ticket SLA Policy",
+  is_enabled: true,
+  near_critical_minutes: "30",
+  breach_critical_minutes: "60",
+  near_high_minutes: "60",
+  breach_high_minutes: "120",
+  near_medium_minutes: "120",
+  breach_medium_minutes: "240",
+  near_low_minutes: "240",
+  breach_low_minutes: "480",
+  escalate_to_assignee: "ops-escalation",
+  note: ""
+};
+
+const defaultTicketEscalationPreviewDraft: TicketEscalationPreviewDraft = {
+  priority: "high",
+  status: "open",
+  ticket_age_minutes: "90",
+  current_assignee: "ops-oncall"
+};
+
+function buildTicketEscalationPolicyDraft(policy: TicketEscalationPolicyRecord): TicketEscalationPolicyDraft {
+  return {
+    name: policy.name,
+    is_enabled: policy.is_enabled,
+    near_critical_minutes: String(policy.near_critical_minutes),
+    breach_critical_minutes: String(policy.breach_critical_minutes),
+    near_high_minutes: String(policy.near_high_minutes),
+    breach_high_minutes: String(policy.breach_high_minutes),
+    near_medium_minutes: String(policy.near_medium_minutes),
+    breach_medium_minutes: String(policy.breach_medium_minutes),
+    near_low_minutes: String(policy.near_low_minutes),
+    breach_low_minutes: String(policy.breach_low_minutes),
+    escalate_to_assignee: policy.escalate_to_assignee,
+    note: ""
+  };
+}
+
 const lifecycleStatuses: LifecycleStatus[] = [
   "idle",
   "onboarding",
@@ -1765,6 +1906,22 @@ export function App() {
   const [ticketQueryFilter, setTicketQueryFilter] = useState("");
   const [ticketStatusDraft, setTicketStatusDraft] = useState("open");
   const [newTicket, setNewTicket] = useState<NewTicketForm>(defaultTicketForm);
+  const [ticketEscalationPolicy, setTicketEscalationPolicy] = useState<TicketEscalationPolicyRecord | null>(null);
+  const [ticketEscalationPolicyDraft, setTicketEscalationPolicyDraft] =
+    useState<TicketEscalationPolicyDraft>(defaultTicketEscalationPolicyDraft);
+  const [ticketEscalationPreviewDraft, setTicketEscalationPreviewDraft] =
+    useState<TicketEscalationPreviewDraft>(defaultTicketEscalationPreviewDraft);
+  const [ticketEscalationPreview, setTicketEscalationPreview] = useState<TicketEscalationPreviewResponse | null>(null);
+  const [ticketEscalationQueue, setTicketEscalationQueue] = useState<TicketListItem[]>([]);
+  const [ticketEscalationActions, setTicketEscalationActions] = useState<TicketEscalationActionRecord[]>([]);
+  const [ticketEscalationRunResponse, setTicketEscalationRunResponse] = useState<TicketEscalationRunResponse | null>(null);
+  const [ticketEscalationRunNote, setTicketEscalationRunNote] = useState("");
+  const [loadingTicketEscalationPolicy, setLoadingTicketEscalationPolicy] = useState(false);
+  const [savingTicketEscalationPolicy, setSavingTicketEscalationPolicy] = useState(false);
+  const [previewingTicketEscalationPolicy, setPreviewingTicketEscalationPolicy] = useState(false);
+  const [loadingTicketEscalationQueue, setLoadingTicketEscalationQueue] = useState(false);
+  const [loadingTicketEscalationActions, setLoadingTicketEscalationActions] = useState(false);
+  const [runningTicketEscalation, setRunningTicketEscalation] = useState(false);
   const [monitoringSources, setMonitoringSources] = useState<MonitoringSource[]>([]);
   const [loadingMonitoringSources, setLoadingMonitoringSources] = useState(false);
   const [creatingMonitoringSource, setCreatingMonitoringSource] = useState(false);
@@ -3190,7 +3347,81 @@ export function App() {
     [t, updateOpsChecklistStatus]
   );
 
-  const loadTickets = useCallback(async () => {
+  const loadTicketEscalationPolicy = useCallback(async () => {
+    setLoadingTicketEscalationPolicy(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/tickets/escalation/policy`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TicketEscalationPolicyRecord = await response.json();
+      setTicketEscalationPolicy(payload);
+      setTicketEscalationPolicyDraft((prev) => ({
+        ...buildTicketEscalationPolicyDraft(payload),
+        note: prev.note
+      }));
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setTicketEscalationPolicy(null);
+      return null;
+    } finally {
+      setLoadingTicketEscalationPolicy(false);
+    }
+  }, []);
+
+  const loadTicketEscalationQueue = useCallback(async () => {
+    setLoadingTicketEscalationQueue(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "120"
+      });
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/tickets/escalation/queue?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TicketListResponse = await response.json();
+      setTicketEscalationQueue(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setTicketEscalationQueue([]);
+      return [];
+    } finally {
+      setLoadingTicketEscalationQueue(false);
+    }
+  }, []);
+
+  const loadTicketEscalationActions = useCallback(async (ticketId?: number | null) => {
+    setLoadingTicketEscalationActions(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "60"
+      });
+      if (typeof ticketId === "number" && Number.isFinite(ticketId) && ticketId > 0) {
+        params.set("ticket_id", String(ticketId));
+      }
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/tickets/escalation/actions?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TicketEscalationActionsResponse = await response.json();
+      setTicketEscalationActions(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setTicketEscalationActions([]);
+      return [];
+    } finally {
+      setLoadingTicketEscalationActions(false);
+    }
+  }, []);
+
+  const reloadTicketList = useCallback(async () => {
     setLoadingTickets(true);
     setError(null);
     try {
@@ -3222,6 +3453,207 @@ export function App() {
       setLoadingTickets(false);
     }
   }, [ticketPriorityFilter, ticketQueryFilter, ticketStatusFilter]);
+
+  const updateTicketEscalationPolicy = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const parsePositiveInt = (label: string, value: string): number | null => {
+      const parsed = Number.parseInt(value.trim(), 10);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        setError(`${label} must be a positive integer.`);
+        return null;
+      }
+      return parsed;
+    };
+    const validateWindow = (label: string, near: number, breach: number): boolean => {
+      if (near >= breach) {
+        setError(`${label} near window must be less than breach window.`);
+        return false;
+      }
+      return true;
+    };
+
+    const nearCritical = parsePositiveInt("Critical near minutes", ticketEscalationPolicyDraft.near_critical_minutes);
+    const breachCritical = parsePositiveInt("Critical breach minutes", ticketEscalationPolicyDraft.breach_critical_minutes);
+    const nearHigh = parsePositiveInt("High near minutes", ticketEscalationPolicyDraft.near_high_minutes);
+    const breachHigh = parsePositiveInt("High breach minutes", ticketEscalationPolicyDraft.breach_high_minutes);
+    const nearMedium = parsePositiveInt("Medium near minutes", ticketEscalationPolicyDraft.near_medium_minutes);
+    const breachMedium = parsePositiveInt("Medium breach minutes", ticketEscalationPolicyDraft.breach_medium_minutes);
+    const nearLow = parsePositiveInt("Low near minutes", ticketEscalationPolicyDraft.near_low_minutes);
+    const breachLow = parsePositiveInt("Low breach minutes", ticketEscalationPolicyDraft.breach_low_minutes);
+    if (
+      nearCritical === null
+      || breachCritical === null
+      || nearHigh === null
+      || breachHigh === null
+      || nearMedium === null
+      || breachMedium === null
+      || nearLow === null
+      || breachLow === null
+    ) {
+      return null;
+    }
+    if (
+      !validateWindow("Critical", nearCritical, breachCritical)
+      || !validateWindow("High", nearHigh, breachHigh)
+      || !validateWindow("Medium", nearMedium, breachMedium)
+      || !validateWindow("Low", nearLow, breachLow)
+    ) {
+      return null;
+    }
+
+    const escalateToAssignee = ticketEscalationPolicyDraft.escalate_to_assignee.trim();
+    if (!escalateToAssignee) {
+      setError("Escalation owner is required.");
+      return null;
+    }
+
+    setSavingTicketEscalationPolicy(true);
+    setTicketNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/tickets/escalation/policy`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          name: ticketEscalationPolicyDraft.name.trim() || "Default Ticket SLA Policy",
+          is_enabled: ticketEscalationPolicyDraft.is_enabled,
+          near_critical_minutes: nearCritical,
+          breach_critical_minutes: breachCritical,
+          near_high_minutes: nearHigh,
+          breach_high_minutes: breachHigh,
+          near_medium_minutes: nearMedium,
+          breach_medium_minutes: breachMedium,
+          near_low_minutes: nearLow,
+          breach_low_minutes: breachLow,
+          escalate_to_assignee: escalateToAssignee,
+          note: trimToNull(ticketEscalationPolicyDraft.note)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TicketEscalationPolicyRecord = await response.json();
+      setTicketEscalationPolicy(payload);
+      setTicketEscalationPolicyDraft((prev) => ({
+        ...buildTicketEscalationPolicyDraft(payload),
+        note: prev.note
+      }));
+      await Promise.all([reloadTicketList(), loadTicketEscalationQueue()]);
+      setTicketNotice(`Escalation policy '${payload.policy_key}' updated.`);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setSavingTicketEscalationPolicy(false);
+    }
+  }, [canWriteCmdb, loadTicketEscalationQueue, reloadTicketList, t, ticketEscalationPolicyDraft]);
+
+  const previewTicketEscalationPolicy = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const ageMinutes = Number.parseInt(ticketEscalationPreviewDraft.ticket_age_minutes.trim(), 10);
+    if (!Number.isFinite(ageMinutes) || ageMinutes < 0) {
+      setError("Preview ticket age must be a non-negative integer.");
+      return null;
+    }
+
+    setPreviewingTicketEscalationPolicy(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/tickets/escalation/policy/preview`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          priority: ticketEscalationPreviewDraft.priority,
+          status: ticketEscalationPreviewDraft.status,
+          ticket_age_minutes: ageMinutes,
+          current_assignee: trimToNull(ticketEscalationPreviewDraft.current_assignee)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TicketEscalationPreviewResponse = await response.json();
+      setTicketEscalationPreview(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setTicketEscalationPreview(null);
+      return null;
+    } finally {
+      setPreviewingTicketEscalationPolicy(false);
+    }
+  }, [canWriteCmdb, t, ticketEscalationPreviewDraft]);
+
+  const runTicketEscalation = useCallback(async (dryRun: boolean) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    setRunningTicketEscalation(true);
+    setTicketNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/tickets/escalation/run`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          dry_run: dryRun,
+          note: trimToNull(ticketEscalationRunNote)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TicketEscalationRunResponse = await response.json();
+      setTicketEscalationRunResponse(payload);
+      await Promise.all([reloadTicketList(), loadTicketEscalationQueue()]);
+      const selectedId = Number.parseInt(selectedTicketId, 10);
+      if (Number.isFinite(selectedId) && selectedId > 0) {
+        const detailResponse = await apiFetch(`${API_BASE_URL}/api/v1/tickets/${selectedId}`);
+        if (detailResponse.ok) {
+          const detailPayload: TicketDetailResponse = await detailResponse.json();
+          setTicketDetail(detailPayload);
+          setTicketStatusDraft(detailPayload.ticket.status);
+        }
+        await loadTicketEscalationActions(selectedId);
+      }
+      setTicketNotice(
+        `Escalation ${dryRun ? "dry-run" : "run"} completed: processed ${payload.processed}, escalated ${payload.escalated}, skipped ${payload.skipped}.`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningTicketEscalation(false);
+    }
+  }, [
+    canWriteCmdb,
+    loadTicketEscalationActions,
+    loadTicketEscalationQueue,
+    reloadTicketList,
+    selectedTicketId,
+    t,
+    ticketEscalationRunNote
+  ]);
+
+  const loadTickets = reloadTicketList;
 
   const loadTicketDetail = useCallback(async (ticketId: number) => {
     if (!Number.isFinite(ticketId) || ticketId <= 0) {
@@ -5375,14 +5807,18 @@ export function App() {
       setSelectedTicketId(String(payload.ticket.id));
       setTicketDetail(payload);
       setTicketStatusDraft(payload.ticket.status);
-      await loadTickets();
+      await Promise.all([
+        loadTickets(),
+        loadTicketEscalationQueue(),
+        loadTicketEscalationActions(payload.ticket.id)
+      ]);
       setTicketNotice(`Ticket ${payload.ticket.ticket_no} created.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setCreatingTicket(false);
     }
-  }, [canWriteCmdb, loadTickets, newTicket, t]);
+  }, [canWriteCmdb, loadTicketEscalationActions, loadTicketEscalationQueue, loadTickets, newTicket, t]);
 
   const updateTicketStatus = useCallback(async (ticketId: number, status: string) => {
     if (!canWriteCmdb) {
@@ -5410,14 +5846,18 @@ export function App() {
       const payload: TicketDetailResponse = await response.json();
       setTicketDetail(payload);
       setTicketStatusDraft(payload.ticket.status);
-      await loadTickets();
+      await Promise.all([
+        loadTickets(),
+        loadTicketEscalationQueue(),
+        loadTicketEscalationActions(ticketId)
+      ]);
       setTicketNotice(`Ticket ${payload.ticket.ticket_no} moved to '${payload.ticket.status}'.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
     } finally {
       setUpdatingTicketStatusId(null);
     }
-  }, [canWriteCmdb, loadTickets, t]);
+  }, [canWriteCmdb, loadTicketEscalationActions, loadTicketEscalationQueue, loadTickets, t]);
 
   const createMonitoringSource = useCallback(async () => {
     if (!canWriteCmdb) {
@@ -6586,8 +7026,12 @@ export function App() {
     if (!authIdentity || !visibleSections.has("section-tickets")) {
       return;
     }
-    void loadTickets();
-  }, [authIdentity, loadTickets, visibleSections]);
+    void Promise.all([
+      loadTickets(),
+      loadTicketEscalationPolicy(),
+      loadTicketEscalationQueue()
+    ]);
+  }, [authIdentity, loadTicketEscalationPolicy, loadTicketEscalationQueue, loadTickets, visibleSections]);
   useEffect(() => {
     if (!authIdentity || !visibleSections.has("section-tickets")) {
       return;
@@ -6595,10 +7039,11 @@ export function App() {
     const ticketId = Number.parseInt(selectedTicketId, 10);
     if (!Number.isFinite(ticketId) || ticketId <= 0) {
       setTicketDetail(null);
+      setTicketEscalationActions([]);
       return;
     }
-    void loadTicketDetail(ticketId);
-  }, [authIdentity, loadTicketDetail, selectedTicketId, visibleSections]);
+    void Promise.all([loadTicketDetail(ticketId), loadTicketEscalationActions(ticketId)]);
+  }, [authIdentity, loadTicketDetail, loadTicketEscalationActions, selectedTicketId, visibleSections]);
   useEffect(() => {
     if (!authIdentity || !visibleSections.has("section-topology-workspace")) {
       return;
@@ -6846,6 +7291,9 @@ export function App() {
     formatSignedDelta,
     loadTicketDetail,
     loadTickets,
+    loadTicketEscalationActions,
+    loadTicketEscalationPolicy,
+    loadTicketEscalationQueue,
     loadPlaybookCatalog,
     loadPlaybookApprovalRequests,
     loadPlaybookExecutionPolicy,
@@ -6855,6 +7303,12 @@ export function App() {
     loadWorkflowTemplates,
     loadingTicketDetail,
     loadingTickets,
+    loadingTicketEscalationActions,
+    loadingTicketEscalationPolicy,
+    loadingTicketEscalationQueue,
+    previewingTicketEscalationPolicy,
+    runningTicketEscalation,
+    savingTicketEscalationPolicy,
     loadingWorkflowLogs,
     loadingWorkflowRequests,
     loadingWorkflowTemplates,
@@ -6938,13 +7392,27 @@ export function App() {
     subSectionTitleStyle,
     t,
     ticketDetail,
+    ticketEscalationActions,
+    ticketEscalationPolicy,
+    ticketEscalationPolicyDraft,
+    ticketEscalationPreview,
+    ticketEscalationPreviewDraft,
+    ticketEscalationQueue,
+    ticketEscalationRunNote,
+    ticketEscalationRunResponse,
     ticketNotice,
     ticketPriorityFilter,
     ticketQueryFilter,
     ticketStatusDraft,
     ticketStatusFilter,
     tickets,
+    setTicketEscalationPolicyDraft,
+    setTicketEscalationPreviewDraft,
+    setTicketEscalationRunNote,
     truncateTopologyLabel,
+    previewTicketEscalationPolicy,
+    runTicketEscalation,
+    updateTicketEscalationPolicy,
     updateTicketStatus,
     updatingTicketStatusId,
     visibleSections,
