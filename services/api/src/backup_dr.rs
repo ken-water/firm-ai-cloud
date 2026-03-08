@@ -4,7 +4,7 @@ use axum::{
     http::HeaderMap,
     routing::{get, patch, post},
 };
-use chrono::{DateTime, Datelike, Duration, NaiveTime, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{FromRow, Postgres, QueryBuilder};
@@ -20,6 +20,7 @@ const MAX_NOTE_LEN: usize = 1024;
 const MAX_DESTINATION_URI_LEN: usize = 512;
 const MAX_POLICY_KEY_LEN: usize = 64;
 const MAX_POLICY_NAME_LEN: usize = 128;
+const MAX_POLICY_MODE_LEN: usize = 32;
 const MAX_TICKET_REF_LEN: usize = 128;
 const MAX_ARTIFACT_URL_LEN: usize = 1024;
 const MAX_VERIFIER_LEN: usize = 128;
@@ -27,6 +28,9 @@ const DEFAULT_RUN_LIMIT: u32 = 40;
 const MAX_RUN_LIMIT: u32 = 200;
 const DEFAULT_EVIDENCE_LIMIT: u32 = 60;
 const MAX_EVIDENCE_LIMIT: u32 = 200;
+const MAX_EVIDENCE_COMPLIANCE_SLA_HOURS: i32 = 720;
+const DEFAULT_EVIDENCE_COMPLIANCE_SLA_HOURS: i32 = 24;
+const EVIDENCE_COMPLIANCE_POLICY_KEY: &str = "global";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -45,6 +49,19 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/cockpit/backup/restore-evidence/{id}",
             patch(update_restore_evidence),
+        )
+        .route(
+            "/cockpit/backup/evidence-compliance/policy",
+            get(get_restore_evidence_compliance_policy)
+                .put(update_restore_evidence_compliance_policy),
+        )
+        .route(
+            "/cockpit/backup/evidence-compliance/scorecard",
+            get(get_restore_evidence_compliance_scorecard),
+        )
+        .route(
+            "/cockpit/backup/evidence-compliance/scorecard/export",
+            get(export_restore_evidence_compliance_scorecard),
         )
         .route("/cockpit/backup/scheduler/tick", post(run_backup_scheduler_tick))
 }
@@ -206,6 +223,19 @@ struct ListRestoreEvidenceQuery {
 }
 
 #[derive(Debug, Deserialize, Default)]
+struct RestoreEvidenceComplianceScorecardQuery {
+    week_start: Option<String>,
+    as_of: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ExportRestoreEvidenceComplianceScorecardQuery {
+    week_start: Option<String>,
+    as_of: Option<String>,
+    format: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
 struct BackupSchedulerTickRequest {
     note: Option<String>,
 }
@@ -228,6 +258,15 @@ struct UpdateRestoreEvidenceRequest {
     close_evidence: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct UpdateRestoreEvidenceCompliancePolicyRequest {
+    mode: Option<String>,
+    sla_hours: Option<i32>,
+    require_failed_runs: Option<bool>,
+    require_drill_runs: Option<bool>,
+    note: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct RunBackupPolicyResponse {
     policy: BackupPolicyRecord,
@@ -241,6 +280,118 @@ struct BackupSchedulerTickResponse {
     backup_runs: usize,
     drill_runs: usize,
     runs: Vec<BackupPolicyRunRecord>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RestoreEvidenceCompliancePolicyView {
+    policy_key: String,
+    mode: String,
+    sla_hours: i32,
+    require_failed_runs: bool,
+    require_drill_runs: bool,
+    updated_by: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct RestoreEvidenceCompliancePolicyResponse {
+    generated_at: DateTime<Utc>,
+    policy: RestoreEvidenceCompliancePolicyView,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RestoreEvidenceComplianceMetrics {
+    required_runs: i64,
+    closed_runs: i64,
+    closed_within_sla_runs: i64,
+    open_runs: i64,
+    overdue_runs: i64,
+    overdue_open_runs: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RestoreEvidenceComplianceScorecardTimelinePoint {
+    date: String,
+    required_runs: i64,
+    closed_runs: i64,
+    overdue_runs: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RestoreEvidenceComplianceItem {
+    run_id: i64,
+    policy_id: i64,
+    run_type: String,
+    run_status: String,
+    started_at: DateTime<Utc>,
+    deadline_at: DateTime<Utc>,
+    evidence_total: i64,
+    closed_evidence_count: i64,
+    closure_state: String,
+    closed_at: Option<DateTime<Utc>>,
+    latest_evidence_id: Option<i64>,
+    latest_evidence_at: Option<DateTime<Utc>>,
+    latest_closure_status: Option<String>,
+    overdue_hours: i64,
+    run_ref: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RestoreEvidenceComplianceScorecardResponse {
+    generated_at: DateTime<Utc>,
+    scorecard_key: String,
+    week_start: String,
+    week_end: String,
+    as_of: DateTime<Utc>,
+    policy: RestoreEvidenceCompliancePolicyView,
+    metrics: RestoreEvidenceComplianceMetrics,
+    timeline: Vec<RestoreEvidenceComplianceScorecardTimelinePoint>,
+    overdue_items: Vec<RestoreEvidenceComplianceItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct RestoreEvidenceComplianceScorecardExportResponse {
+    generated_at: DateTime<Utc>,
+    scorecard_key: String,
+    format: String,
+    content: String,
+}
+
+#[derive(Debug, FromRow)]
+struct RestoreEvidenceCompliancePolicyRow {
+    policy_key: String,
+    mode: String,
+    sla_hours: i32,
+    require_failed_runs: bool,
+    require_drill_runs: bool,
+    updated_by: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct RestoreEvidenceCompliancePolicy {
+    policy_key: String,
+    mode: String,
+    sla_hours: i32,
+    require_failed_runs: bool,
+    require_drill_runs: bool,
+    updated_by: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct RestoreEvidenceComplianceRunRow {
+    run_id: i64,
+    policy_id: i64,
+    run_type: String,
+    run_status: String,
+    started_at: DateTime<Utc>,
+    evidence_total: i64,
+    closed_evidence_count: i64,
+    first_closed_at: Option<DateTime<Utc>>,
+    latest_evidence_id: Option<i64>,
+    latest_closure_status: Option<String>,
+    latest_evidence_at: Option<DateTime<Utc>>,
 }
 
 async fn list_backup_policies(
@@ -726,6 +877,8 @@ async fn create_restore_evidence(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| actor.clone());
     let close_evidence = payload.close_evidence.unwrap_or(false);
+    let evidence_policy = load_or_init_restore_evidence_compliance_policy(&state.db).await?;
+    enforce_restore_evidence_compliance(&evidence_policy, &run, close_evidence, Utc::now())?;
     let closure_status = if close_evidence { "closed" } else { "open" };
 
     let item: BackupRestoreEvidenceRecord = sqlx::query_as(
@@ -834,6 +987,9 @@ async fn update_restore_evidence(
         .unwrap_or(current.verifier.clone());
 
     let close_evidence = payload.close_evidence.unwrap_or(false);
+    let run = load_backup_run(&state.db, current.run_id).await?;
+    let evidence_policy = load_or_init_restore_evidence_compliance_policy(&state.db).await?;
+    enforce_restore_evidence_compliance(&evidence_policy, &run, close_evidence, Utc::now())?;
     let closure_status = if close_evidence { "closed" } else { "open" };
 
     let item: BackupRestoreEvidenceRecord = sqlx::query_as(
@@ -969,6 +1125,610 @@ async fn list_restore_evidence(
         missing_run_ids,
         items,
     }))
+}
+
+async fn get_restore_evidence_compliance_policy(
+    State(state): State<AppState>,
+) -> AppResult<Json<RestoreEvidenceCompliancePolicyResponse>> {
+    let policy = load_or_init_restore_evidence_compliance_policy(&state.db).await?;
+    Ok(Json(RestoreEvidenceCompliancePolicyResponse {
+        generated_at: policy.updated_at,
+        policy: build_restore_evidence_policy_view(&policy),
+    }))
+}
+
+async fn update_restore_evidence_compliance_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateRestoreEvidenceCompliancePolicyRequest>,
+) -> AppResult<Json<RestoreEvidenceCompliancePolicyResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let current = load_or_init_restore_evidence_compliance_policy(&state.db).await?;
+    let mode = payload
+        .mode
+        .map(normalize_restore_evidence_policy_mode)
+        .transpose()?
+        .unwrap_or_else(|| current.mode.clone());
+    let sla_hours = payload
+        .sla_hours
+        .map(normalize_restore_evidence_sla_hours)
+        .transpose()?
+        .unwrap_or(current.sla_hours);
+    let require_failed_runs = payload
+        .require_failed_runs
+        .unwrap_or(current.require_failed_runs);
+    let require_drill_runs = payload
+        .require_drill_runs
+        .unwrap_or(current.require_drill_runs);
+    if !require_failed_runs && !require_drill_runs {
+        return Err(AppError::Validation(
+            "at least one selector is required: require_failed_runs or require_drill_runs"
+                .to_string(),
+        ));
+    }
+
+    let note = normalize_optional_note(payload.note)?;
+    let updated_row: RestoreEvidenceCompliancePolicyRow = sqlx::query_as(
+        "UPDATE ops_restore_evidence_compliance_policies
+         SET mode = $2,
+             sla_hours = $3,
+             require_failed_runs = $4,
+             require_drill_runs = $5,
+             updated_by = $6,
+             updated_at = NOW()
+         WHERE policy_key = $1
+         RETURNING policy_key, mode, sla_hours, require_failed_runs, require_drill_runs, updated_by, updated_at",
+    )
+    .bind(EVIDENCE_COMPLIANCE_POLICY_KEY)
+    .bind(mode.as_str())
+    .bind(sla_hours)
+    .bind(require_failed_runs)
+    .bind(require_drill_runs)
+    .bind(actor.as_str())
+    .fetch_one(&state.db)
+    .await?;
+    let policy = parse_restore_evidence_compliance_policy_row(updated_row)?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "ops.backup.restore_evidence.policy.update".to_string(),
+            target_type: "ops_restore_evidence_compliance_policy".to_string(),
+            target_id: Some(policy.policy_key.clone()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "mode": policy.mode,
+                "sla_hours": policy.sla_hours,
+                "require_failed_runs": policy.require_failed_runs,
+                "require_drill_runs": policy.require_drill_runs,
+                "updated_by": actor,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(RestoreEvidenceCompliancePolicyResponse {
+        generated_at: policy.updated_at,
+        policy: build_restore_evidence_policy_view(&policy),
+    }))
+}
+
+async fn get_restore_evidence_compliance_scorecard(
+    State(state): State<AppState>,
+    Query(query): Query<RestoreEvidenceComplianceScorecardQuery>,
+) -> AppResult<Json<RestoreEvidenceComplianceScorecardResponse>> {
+    let week_start = parse_scorecard_week_start(query.week_start)?;
+    let as_of = parse_optional_as_of(query.as_of)?.unwrap_or_else(Utc::now);
+    let scorecard =
+        build_restore_evidence_compliance_scorecard(&state.db, week_start, as_of).await?;
+    Ok(Json(scorecard))
+}
+
+async fn export_restore_evidence_compliance_scorecard(
+    State(state): State<AppState>,
+    Query(query): Query<ExportRestoreEvidenceComplianceScorecardQuery>,
+) -> AppResult<Json<RestoreEvidenceComplianceScorecardExportResponse>> {
+    let week_start = parse_scorecard_week_start(query.week_start)?;
+    let as_of = parse_optional_as_of(query.as_of)?.unwrap_or_else(Utc::now);
+    let scorecard =
+        build_restore_evidence_compliance_scorecard(&state.db, week_start, as_of).await?;
+    let format = query
+        .format
+        .unwrap_or_else(|| "csv".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    let content = match format.as_str() {
+        "json" => serde_json::to_string_pretty(&scorecard).map_err(|err| {
+            AppError::Validation(format!(
+                "failed to serialize evidence compliance scorecard json: {err}"
+            ))
+        })?,
+        "csv" => restore_evidence_scorecard_to_csv(&scorecard),
+        _ => {
+            return Err(AppError::Validation(
+                "format must be one of: csv, json".to_string(),
+            ));
+        }
+    };
+
+    Ok(Json(RestoreEvidenceComplianceScorecardExportResponse {
+        generated_at: scorecard.generated_at,
+        scorecard_key: scorecard.scorecard_key,
+        format,
+        content,
+    }))
+}
+
+async fn build_restore_evidence_compliance_scorecard(
+    db: &sqlx::PgPool,
+    week_start: NaiveDate,
+    as_of: DateTime<Utc>,
+) -> AppResult<RestoreEvidenceComplianceScorecardResponse> {
+    let policy = load_or_init_restore_evidence_compliance_policy(db).await?;
+    let week_end = week_start + Duration::days(6);
+    let range_start = Utc.from_utc_datetime(
+        &week_start
+            .and_hms_opt(0, 0, 0)
+            .expect("valid start of day"),
+    );
+    let range_end_exclusive = Utc.from_utc_datetime(
+        &(week_end + Duration::days(1))
+            .and_hms_opt(0, 0, 0)
+            .expect("valid end exclusive"),
+    );
+
+    let rows: Vec<RestoreEvidenceComplianceRunRow> = sqlx::query_as(
+        "SELECT r.id AS run_id,
+                r.policy_id,
+                r.run_type,
+                r.status AS run_status,
+                r.started_at,
+                COALESCE(stats.evidence_total, 0)::bigint AS evidence_total,
+                COALESCE(stats.closed_evidence_count, 0)::bigint AS closed_evidence_count,
+                stats.first_closed_at,
+                stats.latest_evidence_id,
+                stats.latest_closure_status,
+                stats.latest_evidence_at
+         FROM ops_backup_policy_runs r
+         LEFT JOIN LATERAL (
+            SELECT COUNT(*)::bigint AS evidence_total,
+                   COUNT(*) FILTER (WHERE e.closure_status = 'closed')::bigint AS closed_evidence_count,
+                   MIN(e.closed_at) FILTER (WHERE e.closure_status = 'closed') AS first_closed_at,
+                   (
+                     SELECT e2.id
+                     FROM ops_backup_restore_evidence e2
+                     WHERE e2.run_id = r.id
+                     ORDER BY e2.created_at DESC, e2.id DESC
+                     LIMIT 1
+                   ) AS latest_evidence_id,
+                   (
+                     SELECT e2.closure_status
+                     FROM ops_backup_restore_evidence e2
+                     WHERE e2.run_id = r.id
+                     ORDER BY e2.created_at DESC, e2.id DESC
+                     LIMIT 1
+                   ) AS latest_closure_status,
+                   (
+                     SELECT e2.created_at
+                     FROM ops_backup_restore_evidence e2
+                     WHERE e2.run_id = r.id
+                     ORDER BY e2.created_at DESC, e2.id DESC
+                     LIMIT 1
+                   ) AS latest_evidence_at
+            FROM ops_backup_restore_evidence e
+            WHERE e.run_id = r.id
+         ) stats ON TRUE
+         WHERE r.started_at >= $1
+           AND r.started_at < $2
+           AND (
+                ($3 = TRUE AND r.status = 'failed')
+                OR
+                ($4 = TRUE AND r.run_type = 'drill')
+           )
+         ORDER BY r.started_at DESC, r.id DESC",
+    )
+    .bind(range_start)
+    .bind(range_end_exclusive)
+    .bind(policy.require_failed_runs)
+    .bind(policy.require_drill_runs)
+    .fetch_all(db)
+    .await?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        let deadline_at = row.started_at + Duration::hours(policy.sla_hours as i64);
+        let closed_at = row.first_closed_at;
+        let (closure_state, overdue_hours) =
+            evaluate_restore_evidence_closure_state(deadline_at, closed_at, as_of);
+        items.push(RestoreEvidenceComplianceItem {
+            run_id: row.run_id,
+            policy_id: row.policy_id,
+            run_type: row.run_type,
+            run_status: row.run_status,
+            started_at: row.started_at,
+            deadline_at,
+            evidence_total: row.evidence_total,
+            closed_evidence_count: row.closed_evidence_count,
+            closure_state,
+            closed_at,
+            latest_evidence_id: row.latest_evidence_id,
+            latest_evidence_at: row.latest_evidence_at,
+            latest_closure_status: row.latest_closure_status,
+            overdue_hours,
+            run_ref: format!("/api/v1/ops/cockpit/backup/runs/{}", row.run_id),
+        });
+    }
+
+    let mut timeline = Vec::new();
+    let mut day = week_start;
+    while day <= week_end {
+        let day_items = items
+            .iter()
+            .filter(|item| item.started_at.date_naive() == day)
+            .collect::<Vec<_>>();
+        let required_runs = day_items.len() as i64;
+        let closed_runs = day_items
+            .iter()
+            .filter(|item| item.closed_at.is_some())
+            .count() as i64;
+        let overdue_runs = day_items
+            .iter()
+            .filter(|item| {
+                item.closure_state == "overdue_open" || item.closure_state == "closed_late"
+            })
+            .count() as i64;
+        timeline.push(RestoreEvidenceComplianceScorecardTimelinePoint {
+            date: day.to_string(),
+            required_runs,
+            closed_runs,
+            overdue_runs,
+        });
+        day += Duration::days(1);
+    }
+
+    let metrics = RestoreEvidenceComplianceMetrics {
+        required_runs: items.len() as i64,
+        closed_runs: items.iter().filter(|item| item.closed_at.is_some()).count() as i64,
+        closed_within_sla_runs: items
+            .iter()
+            .filter(|item| item.closure_state == "closed_within_sla")
+            .count() as i64,
+        open_runs: items.iter().filter(|item| item.closed_at.is_none()).count() as i64,
+        overdue_runs: items
+            .iter()
+            .filter(|item| {
+                item.closure_state == "overdue_open" || item.closure_state == "closed_late"
+            })
+            .count() as i64,
+        overdue_open_runs: items
+            .iter()
+            .filter(|item| item.closure_state == "overdue_open")
+            .count() as i64,
+    };
+
+    let mut overdue_items = items
+        .iter()
+        .filter(|item| {
+            item.closure_state == "overdue_open" || item.closure_state == "closed_late"
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    overdue_items.sort_by(|left, right| {
+        right
+            .overdue_hours
+            .cmp(&left.overdue_hours)
+            .then_with(|| right.started_at.cmp(&left.started_at))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+    });
+
+    Ok(RestoreEvidenceComplianceScorecardResponse {
+        generated_at: as_of,
+        scorecard_key: format!("restore-evidence-compliance-{}", week_start.format("%Y-%m-%d")),
+        week_start: week_start.to_string(),
+        week_end: week_end.to_string(),
+        as_of,
+        policy: build_restore_evidence_policy_view(&policy),
+        metrics,
+        timeline,
+        overdue_items,
+    })
+}
+
+fn build_restore_evidence_policy_view(
+    policy: &RestoreEvidenceCompliancePolicy,
+) -> RestoreEvidenceCompliancePolicyView {
+    RestoreEvidenceCompliancePolicyView {
+        policy_key: policy.policy_key.clone(),
+        mode: policy.mode.clone(),
+        sla_hours: policy.sla_hours,
+        require_failed_runs: policy.require_failed_runs,
+        require_drill_runs: policy.require_drill_runs,
+        updated_by: policy.updated_by.clone(),
+        updated_at: policy.updated_at,
+    }
+}
+
+fn evaluate_restore_evidence_closure_state(
+    deadline_at: DateTime<Utc>,
+    closed_at: Option<DateTime<Utc>>,
+    as_of: DateTime<Utc>,
+) -> (String, i64) {
+    if let Some(closed_at) = closed_at {
+        if closed_at <= deadline_at {
+            return ("closed_within_sla".to_string(), 0);
+        }
+        let overdue_hours = (closed_at - deadline_at).num_hours().max(1);
+        return ("closed_late".to_string(), overdue_hours);
+    }
+
+    if as_of > deadline_at {
+        let overdue_hours = (as_of - deadline_at).num_hours().max(1);
+        return ("overdue_open".to_string(), overdue_hours);
+    }
+
+    ("open_within_sla".to_string(), 0)
+}
+
+fn restore_evidence_scorecard_to_csv(
+    scorecard: &RestoreEvidenceComplianceScorecardResponse,
+) -> String {
+    let mut lines = vec![
+        "section,field,value".to_string(),
+        format!(
+            "meta,scorecard_key,{}",
+            escape_csv_cell(scorecard.scorecard_key.as_str())
+        ),
+        format!(
+            "meta,generated_at,{}",
+            escape_csv_cell(scorecard.generated_at.to_rfc3339().as_str())
+        ),
+        format!(
+            "meta,as_of,{}",
+            escape_csv_cell(scorecard.as_of.to_rfc3339().as_str())
+        ),
+        format!(
+            "meta,week_start,{}",
+            escape_csv_cell(scorecard.week_start.as_str())
+        ),
+        format!(
+            "meta,week_end,{}",
+            escape_csv_cell(scorecard.week_end.as_str())
+        ),
+        format!(
+            "policy,policy_key,{}",
+            escape_csv_cell(scorecard.policy.policy_key.as_str())
+        ),
+        format!("policy,mode,{}", escape_csv_cell(scorecard.policy.mode.as_str())),
+        format!("policy,sla_hours,{}", scorecard.policy.sla_hours),
+        format!(
+            "policy,require_failed_runs,{}",
+            scorecard.policy.require_failed_runs
+        ),
+        format!(
+            "policy,require_drill_runs,{}",
+            scorecard.policy.require_drill_runs
+        ),
+        format!(
+            "policy,updated_by,{}",
+            escape_csv_cell(scorecard.policy.updated_by.as_str())
+        ),
+        format!(
+            "policy,updated_at,{}",
+            escape_csv_cell(scorecard.policy.updated_at.to_rfc3339().as_str())
+        ),
+        format!("metrics,required_runs,{}", scorecard.metrics.required_runs),
+        format!("metrics,closed_runs,{}", scorecard.metrics.closed_runs),
+        format!(
+            "metrics,closed_within_sla_runs,{}",
+            scorecard.metrics.closed_within_sla_runs
+        ),
+        format!("metrics,open_runs,{}", scorecard.metrics.open_runs),
+        format!("metrics,overdue_runs,{}", scorecard.metrics.overdue_runs),
+        format!(
+            "metrics,overdue_open_runs,{}",
+            scorecard.metrics.overdue_open_runs
+        ),
+        "timeline,date,required_runs,closed_runs,overdue_runs".to_string(),
+    ];
+
+    for point in &scorecard.timeline {
+        lines.push(format!(
+            "timeline,{},{},{},{}",
+            escape_csv_cell(point.date.as_str()),
+            point.required_runs,
+            point.closed_runs,
+            point.overdue_runs
+        ));
+    }
+
+    lines.push("overdue_items,run_id,policy_id,run_type,run_status,started_at,deadline_at,closure_state,closed_at,evidence_total,closed_evidence_count,latest_evidence_id,latest_closure_status,latest_evidence_at,overdue_hours,run_ref".to_string());
+    for item in &scorecard.overdue_items {
+        lines.push(format!(
+            "overdue_item,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            item.run_id,
+            item.policy_id,
+            escape_csv_cell(item.run_type.as_str()),
+            escape_csv_cell(item.run_status.as_str()),
+            escape_csv_cell(item.started_at.to_rfc3339().as_str()),
+            escape_csv_cell(item.deadline_at.to_rfc3339().as_str()),
+            escape_csv_cell(item.closure_state.as_str()),
+            escape_csv_cell(item.closed_at.map(|value| value.to_rfc3339()).unwrap_or_default().as_str()),
+            item.evidence_total,
+            item.closed_evidence_count,
+            escape_csv_cell(
+                item.latest_evidence_id
+                    .map(|value| value.to_string())
+                    .unwrap_or_default()
+                    .as_str(),
+            ),
+            escape_csv_cell(item.latest_closure_status.as_deref().unwrap_or("")),
+            escape_csv_cell(
+                item.latest_evidence_at
+                    .map(|value| value.to_rfc3339())
+                    .unwrap_or_default()
+                    .as_str(),
+            ),
+            item.overdue_hours,
+            escape_csv_cell(item.run_ref.as_str()),
+        ));
+    }
+
+    lines.join("\n")
+}
+
+async fn load_or_init_restore_evidence_compliance_policy(
+    db: &sqlx::PgPool,
+) -> AppResult<RestoreEvidenceCompliancePolicy> {
+    let existing: Option<RestoreEvidenceCompliancePolicyRow> = sqlx::query_as(
+        "SELECT policy_key, mode, sla_hours, require_failed_runs, require_drill_runs, updated_by, updated_at
+         FROM ops_restore_evidence_compliance_policies
+         WHERE policy_key = $1
+         LIMIT 1",
+    )
+    .bind(EVIDENCE_COMPLIANCE_POLICY_KEY)
+    .fetch_optional(db)
+    .await?;
+
+    if let Some(row) = existing {
+        return parse_restore_evidence_compliance_policy_row(row);
+    }
+
+    let inserted: RestoreEvidenceCompliancePolicyRow = sqlx::query_as(
+        "INSERT INTO ops_restore_evidence_compliance_policies (
+            policy_key, mode, sla_hours, require_failed_runs, require_drill_runs, updated_by, metadata
+         )
+         VALUES ($1, 'advisory', $2, TRUE, TRUE, 'system', $3)
+         RETURNING policy_key, mode, sla_hours, require_failed_runs, require_drill_runs, updated_by, updated_at",
+    )
+    .bind(EVIDENCE_COMPLIANCE_POLICY_KEY)
+    .bind(DEFAULT_EVIDENCE_COMPLIANCE_SLA_HOURS)
+    .bind(json!({
+        "initialized_by": "system",
+        "policy_kind": "restore_evidence_sla"
+    }))
+    .fetch_one(db)
+    .await?;
+
+    parse_restore_evidence_compliance_policy_row(inserted)
+}
+
+fn parse_restore_evidence_compliance_policy_row(
+    row: RestoreEvidenceCompliancePolicyRow,
+) -> AppResult<RestoreEvidenceCompliancePolicy> {
+    let mode = normalize_restore_evidence_policy_mode(row.mode)?;
+    let sla_hours = normalize_restore_evidence_sla_hours(row.sla_hours)?;
+    if !row.require_failed_runs && !row.require_drill_runs {
+        return Err(AppError::Validation(
+            "restore evidence policy requires at least one enabled selector".to_string(),
+        ));
+    }
+
+    Ok(RestoreEvidenceCompliancePolicy {
+        policy_key: row.policy_key,
+        mode,
+        sla_hours,
+        require_failed_runs: row.require_failed_runs,
+        require_drill_runs: row.require_drill_runs,
+        updated_by: row.updated_by,
+        updated_at: row.updated_at,
+    })
+}
+
+fn run_requires_restore_evidence(
+    policy: &RestoreEvidenceCompliancePolicy,
+    run_type: &str,
+    run_status: &str,
+) -> bool {
+    (policy.require_failed_runs && run_status == "failed")
+        || (policy.require_drill_runs && run_type == "drill")
+}
+
+fn enforce_restore_evidence_compliance(
+    policy: &RestoreEvidenceCompliancePolicy,
+    run: &BackupPolicyRunRecord,
+    close_evidence: bool,
+    now: DateTime<Utc>,
+) -> AppResult<()> {
+    if policy.mode != "enforced"
+        || !run_requires_restore_evidence(policy, run.run_type.as_str(), run.status.as_str())
+        || close_evidence
+    {
+        return Ok(());
+    }
+
+    let deadline_at = run.started_at + Duration::hours(policy.sla_hours as i64);
+    if now > deadline_at {
+        return Err(AppError::Validation(format!(
+            "restore evidence for run #{} exceeded SLA deadline {}; close_evidence=true is required by policy '{}'",
+            run.id,
+            deadline_at.to_rfc3339(),
+            policy.policy_key
+        )));
+    }
+
+    Ok(())
+}
+
+fn parse_scorecard_week_start(value: Option<String>) -> AppResult<NaiveDate> {
+    if let Some(value) = value {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Ok(monday_of(Utc::now().date_naive()));
+        }
+        let parsed = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").map_err(|_| {
+            AppError::Validation("week_start must use YYYY-MM-DD format".to_string())
+        })?;
+        return Ok(monday_of(parsed));
+    }
+    Ok(monday_of(Utc::now().date_naive()))
+}
+
+fn parse_optional_as_of(value: Option<String>) -> AppResult<Option<DateTime<Utc>>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let parsed = DateTime::parse_from_rfc3339(trimmed).map_err(|_| {
+        AppError::Validation("as_of must use RFC3339 datetime format".to_string())
+    })?;
+    Ok(Some(parsed.with_timezone(&Utc)))
+}
+
+fn monday_of(date: NaiveDate) -> NaiveDate {
+    let weekday = date.weekday().number_from_monday() as i64;
+    date - Duration::days((weekday - 1).max(0))
+}
+
+fn normalize_restore_evidence_policy_mode(value: String) -> AppResult<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(AppError::Validation("mode is required".to_string()));
+    }
+    if normalized.len() > MAX_POLICY_MODE_LEN {
+        return Err(AppError::Validation(format!(
+            "mode length must be <= {MAX_POLICY_MODE_LEN}"
+        )));
+    }
+    match normalized.as_str() {
+        "advisory" | "enforced" => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "mode must be one of: advisory, enforced".to_string(),
+        )),
+    }
+}
+
+fn normalize_restore_evidence_sla_hours(value: i32) -> AppResult<i32> {
+    if !(1..=MAX_EVIDENCE_COMPLIANCE_SLA_HOURS).contains(&value) {
+        return Err(AppError::Validation(format!(
+            "sla_hours must be in [1, {MAX_EVIDENCE_COMPLIANCE_SLA_HOURS}]"
+        )));
+    }
+    Ok(value)
 }
 
 fn append_backup_run_filters(
@@ -1344,6 +2104,14 @@ fn trim_optional(value: Option<String>, max_len: usize) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+fn escape_csv_cell(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
 }
 
 fn normalize_optional_note(value: Option<String>) -> AppResult<Option<String>> {

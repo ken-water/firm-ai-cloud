@@ -17,6 +17,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     backupPolicyDraft,
     backupPolicyNotice,
     backupPolicyRuns,
+    backupEvidenceCompliancePolicy,
+    backupEvidenceCompliancePolicyDraft,
+    backupEvidenceComplianceScorecard,
+    backupEvidenceComplianceWeekStart,
     backupRestoreEvidence,
     backupRestoreEvidenceCoverage,
     backupRestoreEvidenceDraft,
@@ -57,6 +61,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     exportingHandoverDigest,
     exportingHandoverReminders,
     exportingWeeklyDigest,
+    exportingBackupEvidenceComplianceScorecard,
+    exportBackupEvidenceComplianceScorecard,
     exportHandoverDigest,
     exportHandoverReminders,
     exportWeeklyDigest,
@@ -68,6 +74,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadBackupPolicies,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
+    loadBackupEvidenceCompliancePolicy,
+    loadBackupEvidenceComplianceScorecard,
     loadChangeCalendar,
     loadChangeCalendarReservations,
     loadChangeCalendarSlotRecommendations,
@@ -96,6 +104,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingBackupPolicies,
     loadingBackupPolicyRuns,
     loadingBackupRestoreEvidence,
+    loadingBackupEvidenceCompliancePolicy,
+    savingBackupEvidenceCompliancePolicy,
+    loadingBackupEvidenceComplianceScorecard,
     loadingChangeCalendar,
     checkingChangeCalendarConflict,
     loadingChangeCalendarReservations,
@@ -122,10 +133,13 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     saveIncidentCommand,
     savingIncidentCommand,
     saveBackupPolicy,
+    saveBackupEvidenceCompliancePolicy,
     savingBackupPolicy,
     saveBackupRestoreEvidence,
     savingBackupRestoreEvidence,
     setBusinessWorkspace,
+    setBackupEvidenceCompliancePolicyDraft,
+    setBackupEvidenceComplianceWeekStart,
     setBackupPolicyDraft,
     setBackupRestoreEvidenceDraft,
     setBackupRestoreRunStatusFilter,
@@ -1060,6 +1074,196 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 ? ` | missing_run_ids=${(backupRestoreEvidenceMissingRunIds as number[]).slice(0, 12).join(",")}`
                 : ""}
             </p>
+
+            <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+              <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                <h4 style={{ marginTop: 0, marginBottom: 0 }}>Restore evidence SLA compliance</h4>
+                <div className="toolbar-row">
+                  <button onClick={() => void loadBackupEvidenceCompliancePolicy()} disabled={loadingBackupEvidenceCompliancePolicy}>
+                    {loadingBackupEvidenceCompliancePolicy ? t("cmdb.actions.loading") : "Refresh policy"}
+                  </button>
+                  <button onClick={() => void loadBackupEvidenceComplianceScorecard()} disabled={loadingBackupEvidenceComplianceScorecard}>
+                    {loadingBackupEvidenceComplianceScorecard ? t("cmdb.actions.loading") : "Refresh scorecard"}
+                  </button>
+                  <button
+                    onClick={() => void exportBackupEvidenceComplianceScorecard("csv")}
+                    disabled={exportingBackupEvidenceComplianceScorecard}
+                  >
+                    {exportingBackupEvidenceComplianceScorecard ? t("cmdb.actions.loading") : "Export scorecard CSV"}
+                  </button>
+                  <button
+                    onClick={() => void exportBackupEvidenceComplianceScorecard("json")}
+                    disabled={exportingBackupEvidenceComplianceScorecard}
+                  >
+                    {exportingBackupEvidenceComplianceScorecard ? t("cmdb.actions.loading") : "Export scorecard JSON"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-grid" style={{ marginTop: "0.5rem" }}>
+                <label className="control-field">
+                  <span>Week start</span>
+                  <input
+                    type="date"
+                    value={backupEvidenceComplianceWeekStart}
+                    onChange={(event) => setBackupEvidenceComplianceWeekStart(event.target.value)}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Mode</span>
+                  <select
+                    value={backupEvidenceCompliancePolicyDraft.mode}
+                    onChange={(event) => setBackupEvidenceCompliancePolicyDraft((prev: any) => ({
+                      ...prev,
+                      mode: event.target.value
+                    }))}
+                    disabled={!canWriteCmdb}
+                  >
+                    <option value="advisory">advisory</option>
+                    <option value="enforced">enforced</option>
+                  </select>
+                </label>
+                <label className="control-field">
+                  <span>SLA hours</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={720}
+                    value={backupEvidenceCompliancePolicyDraft.sla_hours}
+                    onChange={(event) => setBackupEvidenceCompliancePolicyDraft((prev: any) => ({
+                      ...prev,
+                      sla_hours: event.target.value
+                    }))}
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Scope</span>
+                  <div className="toolbar-row">
+                    <label className="inline-note">
+                      <input
+                        type="checkbox"
+                        checked={backupEvidenceCompliancePolicyDraft.require_failed_runs}
+                        onChange={(event) => setBackupEvidenceCompliancePolicyDraft((prev: any) => ({
+                          ...prev,
+                          require_failed_runs: event.target.checked
+                        }))}
+                        disabled={!canWriteCmdb}
+                      />
+                      failed runs
+                    </label>
+                    <label className="inline-note">
+                      <input
+                        type="checkbox"
+                        checked={backupEvidenceCompliancePolicyDraft.require_drill_runs}
+                        onChange={(event) => setBackupEvidenceCompliancePolicyDraft((prev: any) => ({
+                          ...prev,
+                          require_drill_runs: event.target.checked
+                        }))}
+                        disabled={!canWriteCmdb}
+                      />
+                      drill runs
+                    </label>
+                  </div>
+                </label>
+                <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                  <span>Policy note</span>
+                  <input
+                    value={backupEvidenceCompliancePolicyDraft.note}
+                    onChange={(event) => setBackupEvidenceCompliancePolicyDraft((prev: any) => ({
+                      ...prev,
+                      note: event.target.value
+                    }))}
+                    placeholder="why this SLA mode is selected"
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+              </div>
+
+              <div className="toolbar-row" style={{ marginTop: "0.5rem" }}>
+                <button onClick={() => void saveBackupEvidenceCompliancePolicy()} disabled={!canWriteCmdb || savingBackupEvidenceCompliancePolicy}>
+                  {savingBackupEvidenceCompliancePolicy ? t("cmdb.actions.loading") : "Save evidence policy"}
+                </button>
+              </div>
+
+              {backupEvidenceCompliancePolicy && (
+                <p className="section-note">
+                  policy={backupEvidenceCompliancePolicy.policy.policy_key} | mode={backupEvidenceCompliancePolicy.policy.mode}
+                  {" | "}updated_by={backupEvidenceCompliancePolicy.policy.updated_by}
+                  {" @ "}{new Date(backupEvidenceCompliancePolicy.policy.updated_at).toLocaleString()}
+                </p>
+              )}
+
+              {backupEvidenceComplianceScorecard ? (
+                <>
+                  <div className="toolbar-row">
+                    <span className="status-chip">required:{backupEvidenceComplianceScorecard.metrics.required_runs}</span>
+                    <span className="status-chip status-chip-success">closed:{backupEvidenceComplianceScorecard.metrics.closed_runs}</span>
+                    <span className="status-chip status-chip-warn">closed_within_sla:{backupEvidenceComplianceScorecard.metrics.closed_within_sla_runs}</span>
+                    <span className="status-chip">open:{backupEvidenceComplianceScorecard.metrics.open_runs}</span>
+                    <span className="status-chip status-chip-danger">overdue:{backupEvidenceComplianceScorecard.metrics.overdue_runs}</span>
+                    <span className="status-chip status-chip-danger">overdue_open:{backupEvidenceComplianceScorecard.metrics.overdue_open_runs}</span>
+                  </div>
+
+                  {(backupEvidenceComplianceScorecard.timeline ?? []).length > 0 && (
+                    <div className="toolbar-row" style={{ marginTop: "0.35rem", marginBottom: "0.35rem" }}>
+                      {(backupEvidenceComplianceScorecard.timeline ?? []).map((point: any) => (
+                        <span key={`evidence-timeline-${point.date}`} className="status-chip">
+                          {point.date}: req={point.required_runs}, closed={point.closed_runs}, overdue={point.overdue_runs}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {(backupEvidenceComplianceScorecard.overdue_items ?? []).length === 0 ? (
+                    <p className="inline-note">No overdue evidence item in selected week.</p>
+                  ) : (
+                    <div style={{ overflowX: "auto", marginTop: "0.35rem" }}>
+                      <table style={{ borderCollapse: "collapse", minWidth: "1120px", width: "100%" }}>
+                        <thead>
+                          <tr>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Run</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>SLA window</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Evidence state</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Reference</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(backupEvidenceComplianceScorecard.overdue_items ?? []).slice(0, 30).map((item: any) => (
+                            <tr key={`evidence-overdue-item-${item.run_id}`}>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                run #{item.run_id} / policy #{item.policy_id}
+                                <div className="inline-note">{item.run_type} / {item.run_status}</div>
+                                <div className="inline-note">started={new Date(item.started_at).toLocaleString()}</div>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                deadline={new Date(item.deadline_at).toLocaleString()}
+                                <div className="inline-note">overdue_hours={item.overdue_hours}</div>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                state={item.closure_state}
+                                <div className="inline-note">evidence_total={item.evidence_total}</div>
+                                <div className="inline-note">closed_evidence_count={item.closed_evidence_count}</div>
+                                <div className="inline-note">
+                                  latest={item.latest_evidence_id ? `#${item.latest_evidence_id}` : "-"}
+                                  {item.latest_closure_status ? ` (${item.latest_closure_status})` : ""}
+                                  {item.latest_evidence_at ? ` @ ${new Date(item.latest_evidence_at).toLocaleString()}` : ""}
+                                </div>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                <code>{item.run_ref}</code>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="inline-note">No compliance scorecard loaded.</p>
+              )}
+            </div>
 
             <div className="form-grid">
               <label className="control-field">

@@ -936,6 +936,78 @@ type BackupRestoreEvidenceListResponse = {
   items: BackupRestoreEvidenceRecord[];
 };
 
+type BackupEvidenceCompliancePolicy = {
+  policy_key: string;
+  mode: "advisory" | "enforced";
+  sla_hours: number;
+  require_failed_runs: boolean;
+  require_drill_runs: boolean;
+  updated_by: string;
+  updated_at: string;
+};
+
+type BackupEvidenceCompliancePolicyResponse = {
+  generated_at: string;
+  policy: BackupEvidenceCompliancePolicy;
+};
+
+type BackupEvidenceCompliancePolicyDraft = {
+  mode: "advisory" | "enforced";
+  sla_hours: string;
+  require_failed_runs: boolean;
+  require_drill_runs: boolean;
+  note: string;
+};
+
+type BackupEvidenceComplianceScorecardItem = {
+  run_id: number;
+  policy_id: number;
+  run_type: "backup" | "drill";
+  run_status: "succeeded" | "failed";
+  started_at: string;
+  deadline_at: string;
+  evidence_total: number;
+  closed_evidence_count: number;
+  closure_state: "open_within_sla" | "overdue_open" | "closed_within_sla" | "closed_late";
+  closed_at: string | null;
+  latest_evidence_id: number | null;
+  latest_evidence_at: string | null;
+  latest_closure_status: "open" | "closed" | null;
+  overdue_hours: number;
+  run_ref: string;
+};
+
+type BackupEvidenceComplianceScorecardResponse = {
+  generated_at: string;
+  scorecard_key: string;
+  week_start: string;
+  week_end: string;
+  as_of: string;
+  policy: BackupEvidenceCompliancePolicy;
+  metrics: {
+    required_runs: number;
+    closed_runs: number;
+    closed_within_sla_runs: number;
+    open_runs: number;
+    overdue_runs: number;
+    overdue_open_runs: number;
+  };
+  timeline: Array<{
+    date: string;
+    required_runs: number;
+    closed_runs: number;
+    overdue_runs: number;
+  }>;
+  overdue_items: BackupEvidenceComplianceScorecardItem[];
+};
+
+type BackupEvidenceComplianceScorecardExportResponse = {
+  generated_at: string;
+  scorecard_key: string;
+  format: "csv" | "json";
+  content: string;
+};
+
 type BackupRestoreEvidenceForm = {
   run_id: string;
   ticket_ref: string;
@@ -1943,6 +2015,14 @@ const defaultBackupRestoreEvidenceForm: BackupRestoreEvidenceForm = {
   close_evidence: true
 };
 
+const defaultBackupEvidenceCompliancePolicyDraft: BackupEvidenceCompliancePolicyDraft = {
+  mode: "advisory",
+  sla_hours: "24",
+  require_failed_runs: true,
+  require_drill_runs: true,
+  note: ""
+};
+
 const defaultChangeCalendarConflictDraft: ChangeCalendarConflictDraft = {
   start_at_local: formatLocalDateTimeInput(new Date()),
   end_at_local: formatLocalDateTimeInput(new Date(Date.now() + 30 * 60 * 1000)),
@@ -2214,6 +2294,19 @@ export function App() {
   const [backupRestoreEvidenceDraft, setBackupRestoreEvidenceDraft] =
     useState<BackupRestoreEvidenceForm>(defaultBackupRestoreEvidenceForm);
   const [backupRestoreRunStatusFilter, setBackupRestoreRunStatusFilter] = useState("all");
+  const [backupEvidenceCompliancePolicy, setBackupEvidenceCompliancePolicy] =
+    useState<BackupEvidenceCompliancePolicyResponse | null>(null);
+  const [backupEvidenceCompliancePolicyDraft, setBackupEvidenceCompliancePolicyDraft] =
+    useState<BackupEvidenceCompliancePolicyDraft>(defaultBackupEvidenceCompliancePolicyDraft);
+  const [backupEvidenceComplianceScorecard, setBackupEvidenceComplianceScorecard] =
+    useState<BackupEvidenceComplianceScorecardResponse | null>(null);
+  const [backupEvidenceComplianceWeekStart, setBackupEvidenceComplianceWeekStart] = useState(() => {
+    const now = new Date();
+    const weekday = now.getDay();
+    const offset = weekday === 0 ? -6 : 1 - weekday;
+    now.setDate(now.getDate() + offset);
+    return formatLocalDateKey(now);
+  });
   const [changeCalendar, setChangeCalendar] = useState<ChangeCalendarResponse | null>(null);
   const [changeCalendarStartDate, setChangeCalendarStartDate] = useState(() => formatLocalDateKey(new Date()));
   const [changeCalendarEndDate, setChangeCalendarEndDate] = useState(() => {
@@ -2239,6 +2332,10 @@ export function App() {
   const [loadingBackupPolicies, setLoadingBackupPolicies] = useState(false);
   const [loadingBackupPolicyRuns, setLoadingBackupPolicyRuns] = useState(false);
   const [loadingBackupRestoreEvidence, setLoadingBackupRestoreEvidence] = useState(false);
+  const [loadingBackupEvidenceCompliancePolicy, setLoadingBackupEvidenceCompliancePolicy] = useState(false);
+  const [savingBackupEvidenceCompliancePolicy, setSavingBackupEvidenceCompliancePolicy] = useState(false);
+  const [loadingBackupEvidenceComplianceScorecard, setLoadingBackupEvidenceComplianceScorecard] = useState(false);
+  const [exportingBackupEvidenceComplianceScorecard, setExportingBackupEvidenceComplianceScorecard] = useState(false);
   const [loadingChangeCalendar, setLoadingChangeCalendar] = useState(false);
   const [checkingChangeCalendarConflict, setCheckingChangeCalendarConflict] = useState(false);
   const [loadingChangeCalendarReservations, setLoadingChangeCalendarReservations] = useState(false);
@@ -3428,6 +3525,159 @@ export function App() {
     }
   }, [backupPolicyDraft.policy_id, backupRestoreRunStatusFilter]);
 
+  const loadBackupEvidenceCompliancePolicy = useCallback(async () => {
+    setLoadingBackupEvidenceCompliancePolicy(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/policy`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupEvidenceCompliancePolicyResponse = await response.json();
+      setBackupEvidenceCompliancePolicy(payload);
+      setBackupEvidenceCompliancePolicyDraft({
+        mode: payload.policy.mode,
+        sla_hours: String(payload.policy.sla_hours),
+        require_failed_runs: payload.policy.require_failed_runs,
+        require_drill_runs: payload.policy.require_drill_runs,
+        note: ""
+      });
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setBackupEvidenceCompliancePolicy(null);
+      return null;
+    } finally {
+      setLoadingBackupEvidenceCompliancePolicy(false);
+    }
+  }, []);
+
+  const loadBackupEvidenceComplianceScorecard = useCallback(async () => {
+    setLoadingBackupEvidenceComplianceScorecard(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (backupEvidenceComplianceWeekStart.trim().length > 0) {
+        params.set("week_start", backupEvidenceComplianceWeekStart.trim());
+      }
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/scorecard?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupEvidenceComplianceScorecardResponse = await response.json();
+      setBackupEvidenceComplianceScorecard(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setBackupEvidenceComplianceScorecard(null);
+      return null;
+    } finally {
+      setLoadingBackupEvidenceComplianceScorecard(false);
+    }
+  }, [backupEvidenceComplianceWeekStart]);
+
+  const saveBackupEvidenceCompliancePolicy = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const slaHours = Number.parseInt(backupEvidenceCompliancePolicyDraft.sla_hours.trim(), 10);
+    if (!Number.isFinite(slaHours) || slaHours <= 0) {
+      setError("Evidence SLA hours must be a positive integer.");
+      return null;
+    }
+
+    if (!backupEvidenceCompliancePolicyDraft.require_failed_runs && !backupEvidenceCompliancePolicyDraft.require_drill_runs) {
+      setError("At least one evidence scope is required (failed runs or drill runs).");
+      return null;
+    }
+
+    setSavingBackupEvidenceCompliancePolicy(true);
+    setBackupPolicyNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/policy`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          mode: backupEvidenceCompliancePolicyDraft.mode,
+          sla_hours: slaHours,
+          require_failed_runs: backupEvidenceCompliancePolicyDraft.require_failed_runs,
+          require_drill_runs: backupEvidenceCompliancePolicyDraft.require_drill_runs,
+          note: trimToNull(backupEvidenceCompliancePolicyDraft.note)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupEvidenceCompliancePolicyResponse = await response.json();
+      setBackupEvidenceCompliancePolicy(payload);
+      setBackupEvidenceCompliancePolicyDraft((prev) => ({
+        ...prev,
+        mode: payload.policy.mode,
+        sla_hours: String(payload.policy.sla_hours),
+        require_failed_runs: payload.policy.require_failed_runs,
+        require_drill_runs: payload.policy.require_drill_runs,
+        note: ""
+      }));
+      await loadBackupEvidenceComplianceScorecard();
+      setBackupPolicyNotice(
+        `Evidence compliance policy updated: mode=${payload.policy.mode}, sla_hours=${payload.policy.sla_hours}.`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setSavingBackupEvidenceCompliancePolicy(false);
+    }
+  }, [backupEvidenceCompliancePolicyDraft, canWriteCmdb, loadBackupEvidenceComplianceScorecard, t]);
+
+  const exportBackupEvidenceComplianceScorecard = useCallback(async (format: "csv" | "json") => {
+    setExportingBackupEvidenceComplianceScorecard(true);
+    setBackupPolicyNotice(null);
+    setError(null);
+    try {
+      const params = new URLSearchParams({ format });
+      if (backupEvidenceComplianceWeekStart.trim().length > 0) {
+        params.set("week_start", backupEvidenceComplianceWeekStart.trim());
+      }
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/scorecard/export?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BackupEvidenceComplianceScorecardExportResponse = await response.json();
+      if (typeof window !== "undefined") {
+        const blob = new Blob(
+          [payload.content],
+          { type: format === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8" }
+        );
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${payload.scorecard_key}.${format}`;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }
+      setBackupPolicyNotice(`Evidence compliance scorecard exported as ${payload.scorecard_key}.${format}.`);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setExportingBackupEvidenceComplianceScorecard(false);
+    }
+  }, [backupEvidenceComplianceWeekStart]);
+
   const loadChangeCalendar = useCallback(async () => {
     setLoadingChangeCalendar(true);
     setError(null);
@@ -3699,7 +3949,8 @@ export function App() {
       const payload: BackupRestoreEvidenceRecord = await response.json();
       await Promise.all([
         loadBackupPolicyRuns(),
-        loadBackupRestoreEvidence()
+        loadBackupRestoreEvidence(),
+        loadBackupEvidenceComplianceScorecard()
       ]);
       setBackupPolicyNotice(
         `Restore evidence #${payload.id} attached to run #${payload.run_id} (${payload.closure_status}).`
@@ -3719,6 +3970,7 @@ export function App() {
   }, [
     backupRestoreEvidenceDraft,
     canWriteCmdb,
+    loadBackupEvidenceComplianceScorecard,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     t
@@ -3752,7 +4004,8 @@ export function App() {
       const payload: BackupRestoreEvidenceRecord = await response.json();
       await Promise.all([
         loadBackupPolicyRuns(),
-        loadBackupRestoreEvidence()
+        loadBackupRestoreEvidence(),
+        loadBackupEvidenceComplianceScorecard()
       ]);
       setBackupPolicyNotice(`Restore evidence #${payload.id} closed.`);
       return payload;
@@ -3762,7 +4015,7 @@ export function App() {
     } finally {
       setSavingBackupRestoreEvidence(false);
     }
-  }, [canWriteCmdb, loadBackupPolicyRuns, loadBackupRestoreEvidence, t]);
+  }, [canWriteCmdb, loadBackupEvidenceComplianceScorecard, loadBackupPolicyRuns, loadBackupRestoreEvidence, t]);
 
   const saveBackupPolicy = useCallback(async () => {
     if (!canWriteCmdb) {
@@ -3825,7 +4078,12 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const item: BackupPolicyRecord = await response.json();
-      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns(), loadBackupRestoreEvidence()]);
+      await Promise.all([
+        loadBackupPolicies(),
+        loadBackupPolicyRuns(),
+        loadBackupRestoreEvidence(),
+        loadBackupEvidenceComplianceScorecard()
+      ]);
       setBackupPolicyNotice(
         isEdit
           ? `Backup policy '${item.policy_key}' updated.`
@@ -3855,7 +4113,15 @@ export function App() {
     } finally {
       setSavingBackupPolicy(false);
     }
-  }, [backupPolicyDraft, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, loadBackupRestoreEvidence, t]);
+  }, [
+    backupPolicyDraft,
+    canWriteCmdb,
+    loadBackupEvidenceComplianceScorecard,
+    loadBackupPolicies,
+    loadBackupPolicyRuns,
+    loadBackupRestoreEvidence,
+    t
+  ]);
 
   const runBackupPolicy = useCallback(async (
     policyId: number,
@@ -3890,7 +4156,12 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const payload: BackupPolicyRunResult = await response.json();
-      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns(), loadBackupRestoreEvidence()]);
+      await Promise.all([
+        loadBackupPolicies(),
+        loadBackupPolicyRuns(),
+        loadBackupRestoreEvidence(),
+        loadBackupEvidenceComplianceScorecard()
+      ]);
       setBackupRestoreEvidenceDraft((prev) => ({
         ...prev,
         run_id: String(payload.run.id)
@@ -3905,7 +4176,15 @@ export function App() {
     } finally {
       setRunningBackupPolicyActionId(null);
     }
-  }, [backupPolicyDraft.note, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, loadBackupRestoreEvidence, t]);
+  }, [
+    backupPolicyDraft.note,
+    canWriteCmdb,
+    loadBackupEvidenceComplianceScorecard,
+    loadBackupPolicies,
+    loadBackupPolicyRuns,
+    loadBackupRestoreEvidence,
+    t
+  ]);
 
   const runBackupSchedulerTick = useCallback(async () => {
     if (!canWriteCmdb) {
@@ -3929,7 +4208,12 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const payload: BackupSchedulerTickResponse = await response.json();
-      await Promise.all([loadBackupPolicies(), loadBackupPolicyRuns(), loadBackupRestoreEvidence()]);
+      await Promise.all([
+        loadBackupPolicies(),
+        loadBackupPolicyRuns(),
+        loadBackupRestoreEvidence(),
+        loadBackupEvidenceComplianceScorecard()
+      ]);
       setBackupPolicyNotice(
         `Scheduler tick completed: backup_runs=${payload.backup_runs}, drill_runs=${payload.drill_runs}.`
       );
@@ -3940,7 +4224,15 @@ export function App() {
     } finally {
       setTickingBackupScheduler(false);
     }
-  }, [backupPolicyDraft.note, canWriteCmdb, loadBackupPolicies, loadBackupPolicyRuns, loadBackupRestoreEvidence, t]);
+  }, [
+    backupPolicyDraft.note,
+    canWriteCmdb,
+    loadBackupEvidenceComplianceScorecard,
+    loadBackupPolicies,
+    loadBackupPolicyRuns,
+    loadBackupRestoreEvidence,
+    t
+  ]);
 
   const loadWeeklyDigest = useCallback(async () => {
     setLoadingWeeklyDigest(true);
@@ -4181,7 +4473,22 @@ export function App() {
   }, [canWriteCmdb, handoverDigestShiftDate, loadHandoverDigest, loadHandoverReminders, loadWeeklyDigest, t]);
 
   const loadDailyCockpitSnapshot = useCallback(async () => {
-    const [queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, reservations, digest, handover, reminders] = await Promise.all([
+    const [
+      queue,
+      nextActions,
+      checklist,
+      incidents,
+      policies,
+      runs,
+      evidence,
+      evidencePolicy,
+      evidenceScorecard,
+      calendar,
+      reservations,
+      digest,
+      handover,
+      reminders
+    ] = await Promise.all([
       loadDailyCockpitQueue(),
       loadNextBestActions(),
       loadOpsChecklist(),
@@ -4189,14 +4496,33 @@ export function App() {
       loadBackupPolicies(),
       loadBackupPolicyRuns(),
       loadBackupRestoreEvidence(),
+      loadBackupEvidenceCompliancePolicy(),
+      loadBackupEvidenceComplianceScorecard(),
       loadChangeCalendar(),
       loadChangeCalendarReservations(),
       loadWeeklyDigest(),
       loadHandoverDigest(),
       loadHandoverReminders()
     ]);
-    return { queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, reservations, digest, handover, reminders };
+    return {
+      queue,
+      nextActions,
+      checklist,
+      incidents,
+      policies,
+      runs,
+      evidence,
+      evidencePolicy,
+      evidenceScorecard,
+      calendar,
+      reservations,
+      digest,
+      handover,
+      reminders
+    };
   }, [
+    loadBackupEvidenceCompliancePolicy,
+    loadBackupEvidenceComplianceScorecard,
     loadBackupPolicies,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
@@ -9047,6 +9373,10 @@ export function App() {
     backupPolicyDraft,
     backupPolicyNotice,
     backupPolicyRuns,
+    backupEvidenceCompliancePolicy,
+    backupEvidenceCompliancePolicyDraft,
+    backupEvidenceComplianceScorecard,
+    backupEvidenceComplianceWeekStart,
     backupRestoreEvidence,
     backupRestoreEvidenceCoverage,
     backupRestoreEvidenceDraft,
@@ -9084,6 +9414,8 @@ export function App() {
     incidentCommands,
     exportingHandoverDigest,
     exportingWeeklyDigest,
+    exportingBackupEvidenceComplianceScorecard,
+    exportBackupEvidenceComplianceScorecard,
     exportHandoverDigest,
     exportHandoverReminders,
     exportWeeklyDigest,
@@ -9094,6 +9426,8 @@ export function App() {
     loadBackupPolicies,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
+    loadBackupEvidenceCompliancePolicy,
+    loadBackupEvidenceComplianceScorecard,
     loadChangeCalendar,
     loadChangeCalendarReservations,
     loadChangeCalendarSlotRecommendations,
@@ -9125,6 +9459,9 @@ export function App() {
     loadingBackupPolicies,
     loadingBackupPolicyRuns,
     loadingBackupRestoreEvidence,
+    loadingBackupEvidenceCompliancePolicy,
+    savingBackupEvidenceCompliancePolicy,
+    loadingBackupEvidenceComplianceScorecard,
     loadingChangeCalendar,
     checkingChangeCalendarConflict,
     loadingChangeCalendarReservations,
@@ -9153,10 +9490,13 @@ export function App() {
     saveIncidentCommand,
     savingIncidentCommand,
     saveBackupPolicy,
+    saveBackupEvidenceCompliancePolicy,
     savingBackupPolicy,
     saveBackupRestoreEvidence,
     savingBackupRestoreEvidence,
     setBusinessWorkspace,
+    setBackupEvidenceCompliancePolicyDraft,
+    setBackupEvidenceComplianceWeekStart,
     setBackupPolicyDraft,
     setBackupRestoreEvidenceDraft,
     setBackupRestoreRunStatusFilter,

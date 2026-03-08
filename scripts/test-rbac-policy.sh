@@ -175,6 +175,11 @@ assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup
   "{\"note\":\"rbac scheduler tick\"}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/runs"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/restore-evidence"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/policy"
+assert_code 200 "$OPERATOR_USER" PUT "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/policy" \
+  "{\"mode\":\"advisory\",\"sla_hours\":24,\"require_failed_runs\":true,\"require_drill_runs\":true,\"note\":\"rbac evidence policy update\"}"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/scorecard"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/scorecard/export?format=csv"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest/export?format=csv"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar?days=7"
@@ -278,6 +283,9 @@ assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/checklist
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/runs"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/restore-evidence"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/policy"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/scorecard"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/scorecard/export?format=json"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest/export?format=json"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar?days=7"
@@ -303,6 +311,8 @@ assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/backup/r
   "{\"ticket_ref\":\"TKT-DENY-${STAMP}\",\"artifact_url\":\"https://example.invalid/deny\",\"note\":\"viewer should not write evidence\"}"
 assert_code 403 "$VIEWER_USER" PATCH "${API_BASE_URL}/api/v1/ops/cockpit/backup/restore-evidence/${OPERATOR_RESTORE_EVIDENCE_ID}" \
   "{\"note\":\"viewer should not patch evidence\",\"close_evidence\":true}"
+assert_code 403 "$VIEWER_USER" PUT "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/policy" \
+  "{\"mode\":\"enforced\",\"sla_hours\":12,\"require_failed_runs\":true,\"require_drill_runs\":true,\"note\":\"viewer deny evidence policy update\"}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/conflicts" \
   "{\"start_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"end_at\":\"$(date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)\",\"operation_kind\":\"playbook.execute.restart-service-safe\",\"risk_level\":\"high\"}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/reservations" \

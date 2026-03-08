@@ -754,6 +754,26 @@ mod tests {
         );
         assert_permission(
             Method::GET,
+            "/api/v1/ops/cockpit/backup/evidence-compliance/policy",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::PUT,
+            "/api/v1/ops/cockpit/backup/evidence-compliance/policy",
+            "ops.cockpit.write",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/backup/evidence-compliance/scorecard",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/backup/evidence-compliance/scorecard/export",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::GET,
             "/api/v1/ops/cockpit/handover-digest/reminders",
             "ops.cockpit.read",
         );
@@ -1055,6 +1075,26 @@ mod tests {
             (
                 Method::GET,
                 "/api/v1/ops/cockpit/change-calendar/slot-recommendations",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/backup/evidence-compliance/policy",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::PUT,
+                "/api/v1/ops/cockpit/backup/evidence-compliance/policy",
+                "ops.cockpit.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/backup/evidence-compliance/scorecard",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/backup/evidence-compliance/scorecard/export",
                 "ops.cockpit.read",
             ),
             (
