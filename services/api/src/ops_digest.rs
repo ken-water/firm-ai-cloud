@@ -29,6 +29,14 @@ pub fn routes() -> Router<AppState> {
             "/cockpit/handover-digest/items/{item_key}/close",
             post(close_handover_item),
         )
+        .route(
+            "/cockpit/handover-digest/reminders",
+            get(get_handover_reminders),
+        )
+        .route(
+            "/cockpit/handover-digest/reminders/export",
+            get(export_handover_reminders),
+        )
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -90,6 +98,17 @@ struct HandoverDigestExportQuery {
     format: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct HandoverReminderQuery {
+    shift_date: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct HandoverReminderExportQuery {
+    shift_date: Option<String>,
+    format: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct CloseHandoverItemRequest {
     shift_date: Option<String>,
@@ -108,6 +127,8 @@ struct HandoverDigestMetrics {
     pending_approvals: i64,
     restore_evidence_missing_runs: i64,
     closed_items: i64,
+    overdue_open_items: i64,
+    ownership_gap_items: i64,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -124,6 +145,16 @@ struct HandoverCarryoverItem {
     risk_level: String,
     observed_at: DateTime<Utc>,
     source_ref: String,
+    overdue: bool,
+    overdue_days: i64,
+    ownership_violations: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct HandoverOverdueTrendPoint {
+    shift_date: String,
+    open_items: i64,
+    overdue_items: i64,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -132,11 +163,29 @@ struct HandoverDigestResponse {
     digest_key: String,
     shift_date: String,
     metrics: HandoverDigestMetrics,
+    overdue_trend: Vec<HandoverOverdueTrendPoint>,
     items: Vec<HandoverCarryoverItem>,
 }
 
 #[derive(Debug, Serialize)]
 struct HandoverDigestExportResponse {
+    generated_at: DateTime<Utc>,
+    digest_key: String,
+    format: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HandoverReminderResponse {
+    generated_at: DateTime<Utc>,
+    digest_key: String,
+    shift_date: String,
+    total: usize,
+    items: Vec<HandoverCarryoverItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct HandoverReminderExportResponse {
     generated_at: DateTime<Utc>,
     digest_key: String,
     format: String,
@@ -206,6 +255,12 @@ struct PlaybookApprovalCarryoverRow {
     requester: String,
     expires_at: DateTime<Utc>,
     created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct HandoverTrendRow {
+    shift_date: NaiveDate,
+    open_items: i64,
 }
 
 async fn get_weekly_digest(
@@ -280,6 +335,69 @@ async fn export_handover_digest(
     Ok(Json(HandoverDigestExportResponse {
         generated_at: digest.generated_at,
         digest_key: digest.digest_key,
+        format,
+        content,
+    }))
+}
+
+async fn get_handover_reminders(
+    State(state): State<AppState>,
+    Query(query): Query<HandoverReminderQuery>,
+) -> AppResult<Json<HandoverReminderResponse>> {
+    let digest = build_handover_digest(&state, query.shift_date).await?;
+    let items = digest
+        .items
+        .iter()
+        .filter(|item| {
+            item.status == "open" && (item.overdue || !item.ownership_violations.is_empty())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(Json(HandoverReminderResponse {
+        generated_at: digest.generated_at,
+        digest_key: digest.digest_key,
+        shift_date: digest.shift_date,
+        total: items.len(),
+        items,
+    }))
+}
+
+async fn export_handover_reminders(
+    State(state): State<AppState>,
+    Query(query): Query<HandoverReminderExportQuery>,
+) -> AppResult<Json<HandoverReminderExportResponse>> {
+    let reminder = get_handover_reminders(
+        State(state),
+        Query(HandoverReminderQuery {
+            shift_date: query.shift_date,
+        }),
+    )
+    .await?
+    .0;
+    let format = query
+        .format
+        .unwrap_or_else(|| "csv".to_string())
+        .trim()
+        .to_ascii_lowercase();
+
+    let content = match format.as_str() {
+        "json" => serde_json::to_string_pretty(&reminder).map_err(|err| {
+            AppError::Validation(format!(
+                "failed to serialize handover reminder json: {err}"
+            ))
+        })?,
+        "csv" => handover_reminder_to_csv(&reminder),
+        _ => {
+            return Err(AppError::Validation(
+                "format must be one of: csv, json".to_string(),
+            ));
+        }
+    };
+
+    Ok(Json(HandoverReminderExportResponse {
+        generated_at: reminder.generated_at,
+        digest_key: reminder.digest_key,
         format,
         content,
     }))
@@ -704,6 +822,9 @@ async fn build_handover_digest(
             risk_level: risk_level.to_string(),
             observed_at: row.updated_at,
             source_ref: format!("/api/v1/ops/cockpit/incidents/{}", row.alert_id),
+            overdue: false,
+            overdue_days: 0,
+            ownership_violations: Vec::new(),
         });
     }
 
@@ -740,6 +861,9 @@ async fn build_handover_digest(
             risk_level: risk_level.to_string(),
             observed_at: row.updated_at,
             source_ref: format!("/api/v1/tickets/{}", row.id),
+            overdue: false,
+            overdue_days: 0,
+            ownership_violations: Vec::new(),
         });
     }
 
@@ -777,6 +901,9 @@ async fn build_handover_digest(
             risk_level: risk_level.to_string(),
             observed_at: row.started_at,
             source_ref: "/api/v1/ops/cockpit/backup/runs".to_string(),
+            overdue: false,
+            overdue_days: 0,
+            ownership_violations: Vec::new(),
         });
     }
 
@@ -800,6 +927,9 @@ async fn build_handover_digest(
             risk_level: "medium".to_string(),
             observed_at: row.created_at,
             source_ref: "/api/v1/workflow/requests".to_string(),
+            overdue: false,
+            overdue_days: 0,
+            ownership_violations: Vec::new(),
         });
     }
 
@@ -827,6 +957,9 @@ async fn build_handover_digest(
             risk_level: "high".to_string(),
             observed_at: row.created_at,
             source_ref: "/api/v1/workflow/playbooks/approvals".to_string(),
+            overdue: false,
+            overdue_days: 0,
+            ownership_violations: Vec::new(),
         });
     }
 
@@ -836,6 +969,24 @@ async fn build_handover_digest(
             .then_with(|| left.observed_at.cmp(&right.observed_at))
             .then_with(|| left.item_key.cmp(&right.item_key))
     });
+
+    let shift_age_days = (Utc::now().date_naive() - shift_date).num_days().max(0);
+    for item in &mut items {
+        if item.status != "open" {
+            item.overdue = false;
+            item.overdue_days = 0;
+            item.ownership_violations = Vec::new();
+            continue;
+        }
+        let overdue_threshold_days = overdue_threshold_days_by_risk(item.risk_level.as_str());
+        item.overdue = shift_age_days > overdue_threshold_days;
+        item.overdue_days = if item.overdue {
+            shift_age_days - overdue_threshold_days
+        } else {
+            0
+        };
+        item.ownership_violations = detect_ownership_violations(item);
+    }
 
     let failed_continuity_runs = continuity_runs
         .iter()
@@ -853,7 +1004,17 @@ async fn build_handover_digest(
         pending_approvals: (workflow_approvals.len() + playbook_approvals.len()) as i64,
         restore_evidence_missing_runs,
         closed_items: items.iter().filter(|item| item.status == "closed").count() as i64,
+        overdue_open_items: items
+            .iter()
+            .filter(|item| item.status == "open" && item.overdue)
+            .count() as i64,
+        ownership_gap_items: items
+            .iter()
+            .filter(|item| item.status == "open" && !item.ownership_violations.is_empty())
+            .count() as i64,
     };
+
+    let overdue_trend = load_handover_overdue_trend(&state.db, shift_date).await;
 
     let generated_at = items
         .iter()
@@ -866,6 +1027,7 @@ async fn build_handover_digest(
         digest_key: format!("handover-{}", shift_date.format("%Y-%m-%d")),
         shift_date: shift_date.format("%Y-%m-%d").to_string(),
         metrics,
+        overdue_trend,
         items,
     })
 }
@@ -955,6 +1117,81 @@ fn trim_optional(value: Option<String>, max_len: usize) -> Option<String> {
     })
 }
 
+fn overdue_threshold_days_by_risk(risk_level: &str) -> i64 {
+    match risk_level {
+        "critical" => 0,
+        "high" => 1,
+        "medium" => 2,
+        "low" => 3,
+        _ => 2,
+    }
+}
+
+fn detect_ownership_violations(item: &HandoverCarryoverItem) -> Vec<String> {
+    let mut violations = Vec::new();
+    let owner = item.owner.trim();
+    let next_owner = item.next_owner.trim();
+    let next_action = item.next_action.trim();
+
+    if owner.is_empty() {
+        violations.push("owner_missing".to_string());
+    }
+    if next_owner.is_empty() || next_owner.eq_ignore_ascii_case("ops-oncall") {
+        violations.push("next_owner_unassigned".to_string());
+    }
+    if next_action.is_empty() {
+        violations.push("next_action_missing".to_string());
+    }
+
+    violations
+}
+
+async fn load_handover_overdue_trend(
+    db: &sqlx::PgPool,
+    shift_date: NaiveDate,
+) -> Vec<HandoverOverdueTrendPoint> {
+    let trend_start = shift_date - Duration::days(6);
+    let rows: Vec<HandoverTrendRow> = sqlx::query_as(
+        "WITH latest AS (
+            SELECT DISTINCT ON (shift_date, item_key)
+                shift_date, item_key, status
+            FROM ops_handover_item_updates
+            WHERE shift_date >= $1
+              AND shift_date <= $2
+            ORDER BY shift_date, item_key, updated_at DESC, id DESC
+         )
+         SELECT shift_date,
+                COUNT(*) FILTER (WHERE status = 'open') AS open_items
+         FROM latest
+         GROUP BY shift_date
+         ORDER BY shift_date ASC",
+    )
+    .bind(trend_start)
+    .bind(shift_date)
+    .fetch_all(db)
+    .await
+    .unwrap_or_default();
+
+    let mut points = Vec::new();
+    let mut day = trend_start;
+    while day <= shift_date {
+        let open_items = rows
+            .iter()
+            .find(|item| item.shift_date == day)
+            .map(|item| item.open_items)
+            .unwrap_or(0);
+        let shift_age_days = (Utc::now().date_naive() - day).num_days().max(0);
+        let overdue_items = if shift_age_days > 1 { open_items } else { 0 };
+        points.push(HandoverOverdueTrendPoint {
+            shift_date: day.to_string(),
+            open_items,
+            overdue_items,
+        });
+        day += Duration::days(1);
+    }
+    points
+}
+
 fn risk_rank(value: &str) -> i32 {
     match value {
         "critical" => 4,
@@ -1006,12 +1243,33 @@ fn handover_digest_to_csv(digest: &HandoverDigestResponse) -> String {
             digest.metrics.restore_evidence_missing_runs
         ),
         format!("metrics,closed_items,{}", digest.metrics.closed_items),
-        "items,item_key,source_type,source_id,title,owner,next_owner,next_action,status,risk_level,observed_at,source_ref,note".to_string(),
+        format!(
+            "metrics,overdue_open_items,{}",
+            digest.metrics.overdue_open_items
+        ),
+        format!(
+            "metrics,ownership_gap_items,{}",
+            digest.metrics.ownership_gap_items
+        ),
+        "trend,shift_date,open_items,overdue_items".to_string(),
     ];
+
+    for point in &digest.overdue_trend {
+        lines.push(format!(
+            "trend,{},{},{}",
+            escape_csv_cell(point.shift_date.as_str()),
+            point.open_items,
+            point.overdue_items
+        ));
+    }
+
+    lines.push(
+        "items,item_key,source_type,source_id,title,owner,next_owner,next_action,status,risk_level,overdue,overdue_days,ownership_violations,observed_at,source_ref,note".to_string(),
+    );
 
     for item in &digest.items {
         lines.push(format!(
-            "item,{},{},{},{},{},{},{},{},{},{},{},{}",
+            "item,{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             escape_csv_cell(item.item_key.as_str()),
             escape_csv_cell(item.source_type.as_str()),
             item.source_id,
@@ -1021,9 +1279,49 @@ fn handover_digest_to_csv(digest: &HandoverDigestResponse) -> String {
             escape_csv_cell(item.next_action.as_str()),
             escape_csv_cell(item.status.as_str()),
             escape_csv_cell(item.risk_level.as_str()),
+            item.overdue,
+            item.overdue_days,
+            escape_csv_cell(item.ownership_violations.join("|").as_str()),
             escape_csv_cell(item.observed_at.to_rfc3339().as_str()),
             escape_csv_cell(item.source_ref.as_str()),
             escape_csv_cell(item.note.as_deref().unwrap_or("")),
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn handover_reminder_to_csv(reminder: &HandoverReminderResponse) -> String {
+    let mut lines = vec![
+        "section,field,value".to_string(),
+        format!(
+            "meta,digest_key,{}",
+            escape_csv_cell(reminder.digest_key.as_str())
+        ),
+        format!(
+            "meta,generated_at,{}",
+            escape_csv_cell(reminder.generated_at.to_rfc3339().as_str())
+        ),
+        format!(
+            "meta,shift_date,{}",
+            escape_csv_cell(reminder.shift_date.as_str())
+        ),
+        format!("meta,total,{}", reminder.total),
+        "items,item_key,source_type,source_id,risk_level,next_owner,next_action,overdue,overdue_days,ownership_violations".to_string(),
+    ];
+
+    for item in &reminder.items {
+        lines.push(format!(
+            "item,{},{},{},{},{},{},{},{},{}",
+            escape_csv_cell(item.item_key.as_str()),
+            escape_csv_cell(item.source_type.as_str()),
+            item.source_id,
+            escape_csv_cell(item.risk_level.as_str()),
+            escape_csv_cell(item.next_owner.as_str()),
+            escape_csv_cell(item.next_action.as_str()),
+            item.overdue,
+            item.overdue_days,
+            escape_csv_cell(item.ownership_violations.join("|").as_str()),
         ));
     }
 
@@ -1168,7 +1466,10 @@ mod tests {
                 pending_approvals: 3,
                 restore_evidence_missing_runs: 1,
                 closed_items: 0,
+                overdue_open_items: 1,
+                ownership_gap_items: 1,
             },
+            overdue_trend: vec![],
             items: vec![HandoverCarryoverItem {
                 item_key: "incident:10".to_string(),
                 source_type: "incident_command".to_string(),
@@ -1182,6 +1483,9 @@ mod tests {
                 risk_level: "high".to_string(),
                 observed_at: Utc::now(),
                 source_ref: "/api/v1/ops/cockpit/incidents/10".to_string(),
+                overdue: true,
+                overdue_days: 2,
+                ownership_violations: vec!["next_owner_unassigned".to_string()],
             }],
         };
 

@@ -200,6 +200,8 @@ if [[ -z "$OPERATOR_TICKET_ID" ]]; then
 fi
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/export?format=csv"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/reminders"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/reminders/export?format=csv"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/items/ticket:${OPERATOR_TICKET_ID}/close" \
   "{\"shift_date\":\"$(date +%F)\",\"source_type\":\"ticket_backlog\",\"source_id\":${OPERATOR_TICKET_ID},\"next_owner\":\"${OPERATOR_USER}\",\"next_action\":\"handover close for rbac\"}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"
@@ -283,6 +285,8 @@ assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-ca
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/slot-recommendations?operation_kind=playbook.execute.restart-service-safe&risk_level=high&duration_minutes=30&limit=3"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/export?format=json"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/reminders"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/reminders/export?format=json"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete" \
   "{\"date\":\"$(date +%F)\",\"note\":\"viewer should not update checklist\"}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/exception" \

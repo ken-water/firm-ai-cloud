@@ -55,10 +55,13 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     incidentCommandNotice,
     incidentCommands,
     exportingHandoverDigest,
+    exportingHandoverReminders,
     exportingWeeklyDigest,
     exportHandoverDigest,
+    exportHandoverReminders,
     exportWeeklyDigest,
     handoverDigest,
+    handoverReminders,
     handoverDigestNotice,
     handoverDigestShiftDate,
     functionWorkspace,
@@ -69,6 +72,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadChangeCalendarReservations,
     loadChangeCalendarSlotRecommendations,
     loadHandoverDigest,
+    loadHandoverReminders,
     loadIncidentCommandDetail,
     loadIncidentCommands,
     loadNextBestActions,
@@ -88,6 +92,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingIncidentCommandDetail,
     loadingIncidentCommands,
     loadingHandoverDigest,
+    loadingHandoverReminders,
     loadingBackupPolicies,
     loadingBackupPolicyRuns,
     loadingBackupRestoreEvidence,
@@ -1642,11 +1647,20 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <button onClick={() => void loadHandoverDigest()} disabled={loadingHandoverDigest}>
                   {loadingHandoverDigest ? t("cmdb.actions.loading") : "Generate handover"}
                 </button>
+                <button onClick={() => void loadHandoverReminders()} disabled={loadingHandoverReminders}>
+                  {loadingHandoverReminders ? t("cmdb.actions.loading") : "Refresh reminders"}
+                </button>
                 <button onClick={() => void exportHandoverDigest("csv")} disabled={exportingHandoverDigest}>
                   {exportingHandoverDigest ? t("cmdb.actions.loading") : "Export CSV"}
                 </button>
                 <button onClick={() => void exportHandoverDigest("json")} disabled={exportingHandoverDigest}>
                   {exportingHandoverDigest ? t("cmdb.actions.loading") : "Export JSON"}
+                </button>
+                <button onClick={() => void exportHandoverReminders("csv")} disabled={exportingHandoverReminders}>
+                  {exportingHandoverReminders ? t("cmdb.actions.loading") : "Export reminders CSV"}
+                </button>
+                <button onClick={() => void exportHandoverReminders("json")} disabled={exportingHandoverReminders}>
+                  {exportingHandoverReminders ? t("cmdb.actions.loading") : "Export reminders JSON"}
                 </button>
               </div>
             </div>
@@ -1676,8 +1690,67 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   <span className="status-chip status-chip-warn">failed_runs:{handoverDigest.metrics.failed_continuity_runs}</span>
                   <span className="status-chip">pending_approvals:{handoverDigest.metrics.pending_approvals}</span>
                   <span className="status-chip status-chip-danger">evidence_gap:{handoverDigest.metrics.restore_evidence_missing_runs}</span>
+                  <span className="status-chip status-chip-danger">overdue:{handoverDigest.metrics.overdue_open_items}</span>
+                  <span className="status-chip status-chip-warn">ownership_gap:{handoverDigest.metrics.ownership_gap_items}</span>
                   <span className="status-chip status-chip-success">closed:{handoverDigest.metrics.closed_items}</span>
                 </div>
+                {(handoverDigest.overdue_trend ?? []).length > 0 && (
+                  <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                    <p className="section-note" style={{ marginTop: 0 }}>overdue trend by shift date</p>
+                    <div className="toolbar-row">
+                      {(handoverDigest.overdue_trend ?? []).map((point: any) => (
+                        <span key={`handover-trend-${point.shift_date}`} className="status-chip">
+                          {point.shift_date}: open={point.open_items}, overdue={point.overdue_items}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {handoverReminders && (
+                  <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                    <p className="section-note" style={{ marginTop: 0 }}>
+                      reminder_total={handoverReminders.total} | digest_key={handoverReminders.digest_key}
+                    </p>
+                    {(handoverReminders.items ?? []).length === 0 ? (
+                      <p className="inline-note">No overdue or ownership-gap reminder item.</p>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ borderCollapse: "collapse", minWidth: "1020px", width: "100%" }}>
+                          <thead>
+                            <tr>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Item</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner/Action</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Reminder reason</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(handoverReminders.items ?? []).slice(0, 30).map((item: any) => (
+                              <tr key={`handover-reminder-${item.item_key}`}>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                  {item.item_key}
+                                  <div className="inline-note">{item.source_type}#{item.source_id}</div>
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                  {item.next_owner}
+                                  <div className="inline-note">{item.next_action}</div>
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                  {item.overdue ? `overdue by ${item.overdue_days} day(s)` : "not overdue"}
+                                  <div className="inline-note">
+                                    violations={(item.ownership_violations ?? []).length > 0
+                                      ? item.ownership_violations.join("|")
+                                      : "-"}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {(handoverDigest.items ?? []).length === 0 ? (
                   <p>No carryover item.</p>
@@ -1696,7 +1769,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                       </thead>
                       <tbody>
                         {(handoverDigest.items ?? []).slice(0, 40).map((item: any) => (
-                          <tr key={`handover-item-${item.item_key}`}>
+                          <tr
+                            key={`handover-item-${item.item_key}`}
+                            style={item.overdue || (item.ownership_violations ?? []).length > 0
+                              ? { backgroundColor: "#fff7ed" }
+                              : undefined}
+                          >
                             <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                               <strong>{item.item_key}</strong>
                               <div>{item.title}</div>
@@ -1710,6 +1788,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                               next_owner={item.next_owner}
                               <div className="inline-note">{item.next_action}</div>
                               <div className="inline-note">status={item.status}</div>
+                              <div className="inline-note">overdue={item.overdue ? `yes(+${item.overdue_days}d)` : "no"}</div>
+                              <div className="inline-note">
+                                ownership_violations={(item.ownership_violations ?? []).length > 0
+                                  ? item.ownership_violations.join("|")
+                                  : "-"}
+                              </div>
                               <div className="inline-note">note={item.note ?? "-"}</div>
                             </td>
                             <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>

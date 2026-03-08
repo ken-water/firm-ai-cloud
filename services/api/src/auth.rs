@@ -753,6 +753,16 @@ mod tests {
             "ops.cockpit.read",
         );
         assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/handover-digest/reminders",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/handover-digest/reminders/export",
+            "ops.cockpit.read",
+        );
+        assert_permission(
             Method::POST,
             "/api/v1/ops/cockpit/change-calendar/reservations",
             "ops.cockpit.write",
@@ -1051,6 +1061,16 @@ mod tests {
                 Method::POST,
                 "/api/v1/ops/cockpit/change-calendar/reservations",
                 "ops.cockpit.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/handover-digest/reminders",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/handover-digest/reminders/export",
+                "ops.cockpit.read",
             ),
             (
                 Method::GET,

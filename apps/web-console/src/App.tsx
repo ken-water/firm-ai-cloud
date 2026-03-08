@@ -1103,6 +1103,9 @@ type HandoverCarryoverItem = {
   risk_level: string;
   observed_at: string;
   source_ref: string;
+  overdue: boolean;
+  overdue_days: number;
+  ownership_violations: string[];
 };
 
 type HandoverDigestResponse = {
@@ -1116,11 +1119,33 @@ type HandoverDigestResponse = {
     pending_approvals: number;
     restore_evidence_missing_runs: number;
     closed_items: number;
+    overdue_open_items: number;
+    ownership_gap_items: number;
   };
+  overdue_trend: Array<{
+    shift_date: string;
+    open_items: number;
+    overdue_items: number;
+  }>;
   items: HandoverCarryoverItem[];
 };
 
 type HandoverDigestExportResponse = {
+  generated_at: string;
+  digest_key: string;
+  format: "csv" | "json";
+  content: string;
+};
+
+type HandoverReminderResponse = {
+  generated_at: string;
+  digest_key: string;
+  shift_date: string;
+  total: number;
+  items: HandoverCarryoverItem[];
+};
+
+type HandoverReminderExportResponse = {
   generated_at: string;
   digest_key: string;
   format: "csv" | "json";
@@ -2234,8 +2259,11 @@ export function App() {
     return formatLocalDateKey(now);
   });
   const [handoverDigest, setHandoverDigest] = useState<HandoverDigestResponse | null>(null);
+  const [handoverReminders, setHandoverReminders] = useState<HandoverReminderResponse | null>(null);
   const [loadingHandoverDigest, setLoadingHandoverDigest] = useState(false);
+  const [loadingHandoverReminders, setLoadingHandoverReminders] = useState(false);
   const [exportingHandoverDigest, setExportingHandoverDigest] = useState(false);
+  const [exportingHandoverReminders, setExportingHandoverReminders] = useState(false);
   const [closingHandoverItemKey, setClosingHandoverItemKey] = useState<string | null>(null);
   const [handoverDigestShiftDate, setHandoverDigestShiftDate] = useState(() => formatLocalDateKey(new Date()));
   const [runningDailyCockpitActionKey, setRunningDailyCockpitActionKey] = useState<string | null>(null);
@@ -4004,6 +4032,30 @@ export function App() {
     }
   }, [handoverDigestShiftDate]);
 
+  const loadHandoverReminders = useCallback(async () => {
+    setLoadingHandoverReminders(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (handoverDigestShiftDate.trim().length > 0) {
+        params.set("shift_date", handoverDigestShiftDate.trim());
+      }
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/reminders?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: HandoverReminderResponse = await response.json();
+      setHandoverReminders(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setHandoverReminders(null);
+      return null;
+    } finally {
+      setLoadingHandoverReminders(false);
+    }
+  }, [handoverDigestShiftDate]);
+
   const exportHandoverDigest = useCallback(async (format: "csv" | "json") => {
     setExportingHandoverDigest(true);
     setHandoverDigestNotice(null);
@@ -4044,6 +4096,46 @@ export function App() {
     }
   }, [handoverDigestShiftDate]);
 
+  const exportHandoverReminders = useCallback(async (format: "csv" | "json") => {
+    setExportingHandoverReminders(true);
+    setHandoverDigestNotice(null);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        format
+      });
+      if (handoverDigestShiftDate.trim().length > 0) {
+        params.set("shift_date", handoverDigestShiftDate.trim());
+      }
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/reminders/export?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: HandoverReminderExportResponse = await response.json();
+      if (typeof window !== "undefined") {
+        const blob = new Blob(
+          [payload.content],
+          { type: format === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8" }
+        );
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${payload.digest_key}-reminders.${format}`;
+        document.body.append(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+      }
+      setHandoverDigestNotice(`Handover reminders exported as ${payload.digest_key}-reminders.${format}.`);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setExportingHandoverReminders(false);
+    }
+  }, [handoverDigestShiftDate]);
+
   const closeHandoverCarryoverItem = useCallback(async (item: HandoverCarryoverItem) => {
     if (!canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
@@ -4077,7 +4169,7 @@ export function App() {
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
-      await Promise.all([loadHandoverDigest(), loadWeeklyDigest()]);
+      await Promise.all([loadHandoverDigest(), loadHandoverReminders(), loadWeeklyDigest()]);
       setHandoverDigestNotice(`Handover item '${item.item_key}' closed.`);
       return true;
     } catch (err) {
@@ -4086,10 +4178,10 @@ export function App() {
     } finally {
       setClosingHandoverItemKey(null);
     }
-  }, [canWriteCmdb, handoverDigestShiftDate, loadHandoverDigest, loadWeeklyDigest, t]);
+  }, [canWriteCmdb, handoverDigestShiftDate, loadHandoverDigest, loadHandoverReminders, loadWeeklyDigest, t]);
 
   const loadDailyCockpitSnapshot = useCallback(async () => {
-    const [queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, reservations, digest, handover] = await Promise.all([
+    const [queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, reservations, digest, handover, reminders] = await Promise.all([
       loadDailyCockpitQueue(),
       loadNextBestActions(),
       loadOpsChecklist(),
@@ -4100,9 +4192,10 @@ export function App() {
       loadChangeCalendar(),
       loadChangeCalendarReservations(),
       loadWeeklyDigest(),
-      loadHandoverDigest()
+      loadHandoverDigest(),
+      loadHandoverReminders()
     ]);
-    return { queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, reservations, digest, handover };
+    return { queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, reservations, digest, handover, reminders };
   }, [
     loadBackupPolicies,
     loadBackupPolicyRuns,
@@ -4111,6 +4204,7 @@ export function App() {
     loadChangeCalendarReservations,
     loadDailyCockpitQueue,
     loadHandoverDigest,
+    loadHandoverReminders,
     loadIncidentCommands,
     loadNextBestActions,
     loadOpsChecklist,
@@ -8991,8 +9085,10 @@ export function App() {
     exportingHandoverDigest,
     exportingWeeklyDigest,
     exportHandoverDigest,
+    exportHandoverReminders,
     exportWeeklyDigest,
     handoverDigest,
+    handoverReminders,
     handoverDigestNotice,
     handoverDigestShiftDate,
     loadBackupPolicies,
@@ -9002,6 +9098,7 @@ export function App() {
     loadChangeCalendarReservations,
     loadChangeCalendarSlotRecommendations,
     loadHandoverDigest,
+    loadHandoverReminders,
     loadIncidentCommandDetail,
     loadIncidentCommands,
     loadNextBestActions,
@@ -9024,6 +9121,7 @@ export function App() {
     loadingIncidentCommandDetail,
     loadingIncidentCommands,
     loadingHandoverDigest,
+    loadingHandoverReminders,
     loadingBackupPolicies,
     loadingBackupPolicyRuns,
     loadingBackupRestoreEvidence,
@@ -9033,6 +9131,7 @@ export function App() {
     loadingChangeCalendarRecommendations,
     creatingChangeCalendarReservation,
     loadingWeeklyDigest,
+    exportingHandoverReminders,
     runningBackupPolicyActionId,
     loadingAssetStats,
     loadingAssets,
