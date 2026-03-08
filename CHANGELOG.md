@@ -8,12 +8,72 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 ### Added
 
-- v0.1.6 planning document: `docs/32-v0.1.6-operator-simplicity-v2-plan.md`.
-- v0.1.6 issue baseline: GitHub issues `#136` to `#144` (setup presets, action assistant, calendar reservation, handover quality gates, evidence compliance, runbook templates, validation, release closure).
+- None yet.
 
 ### Changed
 
-- v0.1.x master planning document now includes v0.1.6 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
+- None yet.
+
+### Fixed
+
+- None yet.
+
+## [0.1.6] - 2026-03-08
+
+### Added
+
+- v0.1.6 planning and release-gate documentation:
+  - `docs/32-v0.1.6-operator-simplicity-v2-plan.md`
+  - `docs/33-v0.1.6-release-gate-checklist.md`
+- v0.1.6 issue baseline and closure track: GitHub issues `#136` to `#144`.
+- Operator profile preset workflow baseline:
+  - migration: `202603080001_create_setup_operator_profile_runs.sql`
+  - endpoints:
+    - `GET /api/v1/setup/profiles`
+    - `POST /api/v1/setup/profiles/{key}/preview`
+    - `POST /api/v1/setup/profiles/{key}/apply`
+    - `GET /api/v1/setup/profiles/history`
+    - `POST /api/v1/setup/profiles/history/{id}/revert`
+- Cockpit next-best-action assistant:
+  - endpoint: `GET /api/v1/ops/cockpit/next-actions`
+- Change calendar reservation and auto-slot recommendation:
+  - migration: `202603080002_create_change_calendar_reservations.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/change-calendar/reservations`
+    - `POST /api/v1/ops/cockpit/change-calendar/reservations`
+    - `GET /api/v1/ops/cockpit/change-calendar/slot-recommendations`
+- Handover overdue and ownership quality gates:
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/handover-digest/reminders`
+    - `GET /api/v1/ops/cockpit/handover-digest/reminders/export?format=csv|json`
+- Restore evidence compliance policy and weekly scorecard:
+  - migration: `202603080003_create_restore_evidence_compliance_policy.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/backup/evidence-compliance/policy`
+    - `PUT /api/v1/ops/cockpit/backup/evidence-compliance/policy`
+    - `GET /api/v1/ops/cockpit/backup/evidence-compliance/scorecard`
+    - `GET /api/v1/ops/cockpit/backup/evidence-compliance/scorecard/export?format=csv|json`
+- One-click runbook templates with preflight and evidence:
+  - migration: `202603080004_create_ops_runbook_template_executions.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/runbook-templates`
+    - `POST /api/v1/ops/cockpit/runbook-templates/{key}/execute`
+    - `GET /api/v1/ops/cockpit/runbook-templates/executions`
+    - `GET /api/v1/ops/cockpit/runbook-templates/executions/{id}`
+- v0.1.6 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.6-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- v0.1.x planning document now includes v0.1.6 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
+- Web console daily cockpit now adds:
+  - deterministic next-action panel and reservation-assisted scheduling workflow,
+  - handover overdue/ownership reminder panel and export,
+  - evidence SLA compliance policy + scorecard widget/export,
+  - one-click runbook template execution panel with preflight/evidence inputs and timeline.
+- Playbook dry-run/execute path now supports reservation context (`reservation_id`) for change-calendar-aligned execution.
+- RBAC mapping/integration checks now include v0.1.6 cockpit routes (reservation, handover reminders, evidence compliance, runbook templates).
 
 ### Fixed
 
