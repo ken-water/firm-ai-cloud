@@ -45,7 +45,10 @@ pub fn routes() -> Router<AppState> {
             "/cockpit/backup/runs/{id}/restore-evidence",
             post(create_restore_evidence),
         )
-        .route("/cockpit/backup/restore-evidence", get(list_restore_evidence))
+        .route(
+            "/cockpit/backup/restore-evidence",
+            get(list_restore_evidence),
+        )
         .route(
             "/cockpit/backup/restore-evidence/{id}",
             patch(update_restore_evidence),
@@ -63,7 +66,10 @@ pub fn routes() -> Router<AppState> {
             "/cockpit/backup/evidence-compliance/scorecard/export",
             get(export_restore_evidence_compliance_scorecard),
         )
-        .route("/cockpit/backup/scheduler/tick", post(run_backup_scheduler_tick))
+        .route(
+            "/cockpit/backup/scheduler/tick",
+            post(run_backup_scheduler_tick),
+        )
 }
 
 #[derive(Debug, Serialize, FromRow, Clone)]
@@ -427,7 +433,8 @@ async fn create_backup_policy(
     let name = required_trimmed("name", payload.name, MAX_POLICY_NAME_LEN)?;
     let frequency = normalize_backup_frequency(payload.frequency)?;
     let schedule_time_utc = normalize_hhmm(payload.schedule_time_utc, "schedule_time_utc")?;
-    let schedule_weekday = normalize_schedule_weekday(payload.schedule_weekday, frequency.as_str())?;
+    let schedule_weekday =
+        normalize_schedule_weekday(payload.schedule_weekday, frequency.as_str())?;
     let retention_days = normalize_retention_days(payload.retention_days)?;
     let destination_type = normalize_destination_type(payload.destination_type)?;
     let destination_uri = normalize_destination_uri(payload.destination_uri)?;
@@ -436,7 +443,9 @@ async fn create_backup_policy(
     let drill_enabled = payload.drill_enabled.unwrap_or(true);
     let drill_frequency = normalize_drill_frequency(payload.drill_frequency)?;
     let drill_time_utc = normalize_hhmm(
-        payload.drill_time_utc.unwrap_or_else(|| "02:00".to_string()),
+        payload
+            .drill_time_utc
+            .unwrap_or_else(|| "02:00".to_string()),
         "drill_time_utc",
     )?;
     let drill_weekday = normalize_drill_weekday(payload.drill_weekday, drill_frequency.as_str())?;
@@ -688,9 +697,16 @@ async fn run_backup_policy(
     let simulate_failure = payload.simulate_failure.unwrap_or(false);
     let note = normalize_optional_note(payload.note)?;
 
-    let (policy, run, remediation_hints) =
-        execute_backup_run(&state.db, id, run_type.as_str(), actor.as_str(), false, simulate_failure, note.clone())
-            .await?;
+    let (policy, run, remediation_hints) = execute_backup_run(
+        &state.db,
+        id,
+        run_type.as_str(),
+        actor.as_str(),
+        false,
+        simulate_failure,
+        note.clone(),
+    )
+    .await?;
 
     write_audit_log_best_effort(
         &state.db,
@@ -808,10 +824,7 @@ async fn list_backup_policy_runs(
     State(state): State<AppState>,
     Query(query): Query<ListBackupPolicyRunsQuery>,
 ) -> AppResult<Json<ListBackupPolicyRunsResponse>> {
-    let run_type = query
-        .run_type
-        .map(normalize_run_type)
-        .transpose()?;
+    let run_type = query.run_type.map(normalize_run_type).transpose()?;
     let limit = query
         .limit
         .unwrap_or(DEFAULT_RUN_LIMIT)
@@ -851,7 +864,8 @@ async fn list_backup_policy_runs(
         .push(" OFFSET ")
         .push_bind(offset);
 
-    let items: Vec<BackupPolicyRunRecord> = list_builder.build_query_as().fetch_all(&state.db).await?;
+    let items: Vec<BackupPolicyRunRecord> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
 
     Ok(Json(ListBackupPolicyRunsResponse {
         generated_at: Utc::now(),
@@ -871,7 +885,8 @@ async fn create_restore_evidence(
     let actor = resolve_auth_user(&state, &headers).await?;
     let run = load_backup_run(&state.db, id).await?;
     let ticket_ref = trim_optional(payload.ticket_ref, MAX_TICKET_REF_LEN);
-    let artifact_url = required_trimmed("artifact_url", payload.artifact_url, MAX_ARTIFACT_URL_LEN)?;
+    let artifact_url =
+        required_trimmed("artifact_url", payload.artifact_url, MAX_ARTIFACT_URL_LEN)?;
     let note = normalize_optional_note(payload.note)?;
     let verifier = trim_optional(payload.verifier, MAX_VERIFIER_LEN)
         .filter(|value| !value.trim().is_empty())
@@ -1045,10 +1060,7 @@ async fn list_restore_evidence(
     State(state): State<AppState>,
     Query(query): Query<ListRestoreEvidenceQuery>,
 ) -> AppResult<Json<ListRestoreEvidenceResponse>> {
-    let run_status = query
-        .run_status
-        .map(normalize_run_status)
-        .transpose()?;
+    let run_status = query.run_status.map(normalize_run_status).transpose()?;
     let limit = query
         .limit
         .unwrap_or(DEFAULT_EVIDENCE_LIMIT)
@@ -1076,7 +1088,8 @@ async fn list_restore_evidence(
         .push(" OFFSET ")
         .push_bind(offset);
 
-    let items: Vec<BackupRestoreEvidenceRecord> = list_builder.build_query_as().fetch_all(&state.db).await?;
+    let items: Vec<BackupRestoreEvidenceRecord> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
 
     let required_runs: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
@@ -1268,11 +1281,8 @@ async fn build_restore_evidence_compliance_scorecard(
 ) -> AppResult<RestoreEvidenceComplianceScorecardResponse> {
     let policy = load_or_init_restore_evidence_compliance_policy(db).await?;
     let week_end = week_start + Duration::days(6);
-    let range_start = Utc.from_utc_datetime(
-        &week_start
-            .and_hms_opt(0, 0, 0)
-            .expect("valid start of day"),
-    );
+    let range_start =
+        Utc.from_utc_datetime(&week_start.and_hms_opt(0, 0, 0).expect("valid start of day"));
     let range_end_exclusive = Utc.from_utc_datetime(
         &(week_end + Duration::days(1))
             .and_hms_opt(0, 0, 0)
@@ -1410,9 +1420,7 @@ async fn build_restore_evidence_compliance_scorecard(
 
     let mut overdue_items = items
         .iter()
-        .filter(|item| {
-            item.closure_state == "overdue_open" || item.closure_state == "closed_late"
-        })
+        .filter(|item| item.closure_state == "overdue_open" || item.closure_state == "closed_late")
         .cloned()
         .collect::<Vec<_>>();
     overdue_items.sort_by(|left, right| {
@@ -1425,7 +1433,10 @@ async fn build_restore_evidence_compliance_scorecard(
 
     Ok(RestoreEvidenceComplianceScorecardResponse {
         generated_at: as_of,
-        scorecard_key: format!("restore-evidence-compliance-{}", week_start.format("%Y-%m-%d")),
+        scorecard_key: format!(
+            "restore-evidence-compliance-{}",
+            week_start.format("%Y-%m-%d")
+        ),
         week_start: week_start.to_string(),
         week_end: week_end.to_string(),
         as_of,
@@ -1500,7 +1511,10 @@ fn restore_evidence_scorecard_to_csv(
             "policy,policy_key,{}",
             escape_csv_cell(scorecard.policy.policy_key.as_str())
         ),
-        format!("policy,mode,{}", escape_csv_cell(scorecard.policy.mode.as_str())),
+        format!(
+            "policy,mode,{}",
+            escape_csv_cell(scorecard.policy.mode.as_str())
+        ),
         format!("policy,sla_hours,{}", scorecard.policy.sla_hours),
         format!(
             "policy,require_failed_runs,{}",
@@ -1554,7 +1568,12 @@ fn restore_evidence_scorecard_to_csv(
             escape_csv_cell(item.started_at.to_rfc3339().as_str()),
             escape_csv_cell(item.deadline_at.to_rfc3339().as_str()),
             escape_csv_cell(item.closure_state.as_str()),
-            escape_csv_cell(item.closed_at.map(|value| value.to_rfc3339()).unwrap_or_default().as_str()),
+            escape_csv_cell(
+                item.closed_at
+                    .map(|value| value.to_rfc3339())
+                    .unwrap_or_default()
+                    .as_str()
+            ),
             item.evidence_total,
             item.closed_evidence_count,
             escape_csv_cell(
@@ -1693,9 +1712,8 @@ fn parse_optional_as_of(value: Option<String>) -> AppResult<Option<DateTime<Utc>
     if trimmed.is_empty() {
         return Ok(None);
     }
-    let parsed = DateTime::parse_from_rfc3339(trimmed).map_err(|_| {
-        AppError::Validation("as_of must use RFC3339 datetime format".to_string())
-    })?;
+    let parsed = DateTime::parse_from_rfc3339(trimmed)
+        .map_err(|_| AppError::Validation("as_of must use RFC3339 datetime format".to_string()))?;
     Ok(Some(parsed.with_timezone(&Utc)))
 }
 
@@ -1769,32 +1787,37 @@ async fn execute_backup_run(
     let policy = load_backup_policy(db, policy_id).await?;
     let now = Utc::now();
 
-    let status = if simulate_failure { "failed" } else { "succeeded" };
-    let (error_message, remediation_hint, remediation_hints): (Option<String>, Option<String>, Vec<String>) =
-        if simulate_failure {
-            (
-                Some(format!(
-                    "simulated {} failure: verify destination connectivity and credentials",
-                    run_type
-                )),
-                Some(
-                    "Check destination reachability, permissions, and retention budget before retry."
-                        .to_string(),
-                ),
-                vec![
-                    "Validate destination endpoint and credentials.".to_string(),
-                    "Confirm retention policy has enough free capacity.".to_string(),
-                ],
-            )
-        } else {
-            (
-                None,
-                Some("Run completed successfully; keep restore evidence for audit.".to_string()),
-                vec![
-                    "Keep latest backup and drill evidence linked in weekly digest.".to_string(),
-                ],
-            )
-        };
+    let status = if simulate_failure {
+        "failed"
+    } else {
+        "succeeded"
+    };
+    let (error_message, remediation_hint, remediation_hints): (
+        Option<String>,
+        Option<String>,
+        Vec<String>,
+    ) = if simulate_failure {
+        (
+            Some(format!(
+                "simulated {} failure: verify destination connectivity and credentials",
+                run_type
+            )),
+            Some(
+                "Check destination reachability, permissions, and retention budget before retry."
+                    .to_string(),
+            ),
+            vec![
+                "Validate destination endpoint and credentials.".to_string(),
+                "Confirm retention policy has enough free capacity.".to_string(),
+            ],
+        )
+    } else {
+        (
+            None,
+            Some("Run completed successfully; keep restore evidence for audit.".to_string()),
+            vec!["Keep latest backup and drill evidence linked in weekly digest.".to_string()],
+        )
+    };
 
     let run: BackupPolicyRunRecord = sqlx::query_as(
         "INSERT INTO ops_backup_policy_runs (
@@ -1951,7 +1974,10 @@ async fn load_backup_run(db: &sqlx::PgPool, id: i64) -> AppResult<BackupPolicyRu
     item.ok_or_else(|| AppError::NotFound(format!("backup run {id} not found")))
 }
 
-async fn load_restore_evidence(db: &sqlx::PgPool, id: i64) -> AppResult<BackupRestoreEvidenceRecord> {
+async fn load_restore_evidence(
+    db: &sqlx::PgPool,
+    id: i64,
+) -> AppResult<BackupRestoreEvidenceRecord> {
     if id <= 0 {
         return Err(AppError::Validation(
             "restore evidence id must be a positive integer".to_string(),
@@ -2041,7 +2067,9 @@ fn normalize_destination_type(value: String) -> AppResult<String> {
 fn normalize_destination_uri(value: String) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(AppError::Validation("destination_uri is required".to_string()));
+        return Err(AppError::Validation(
+            "destination_uri is required".to_string(),
+        ));
     }
     if trimmed.len() > MAX_DESTINATION_URI_LEN {
         return Err(AppError::Validation(format!(
@@ -2190,11 +2218,14 @@ fn compute_next_backup_at(
         let current_weekday = now.weekday().number_from_monday() as i16;
         let mut day_offset = (target_weekday - current_weekday + 7) % 7;
         let today = now.date_naive();
-        let candidate = Utc.from_utc_datetime(&(today + Duration::days(day_offset as i64)).and_time(time));
+        let candidate =
+            Utc.from_utc_datetime(&(today + Duration::days(day_offset as i64)).and_time(time));
         if day_offset == 0 && candidate <= now {
             day_offset = 7;
         }
-        return Ok(Utc.from_utc_datetime(&(today + Duration::days(day_offset as i64)).and_time(time)));
+        return Ok(
+            Utc.from_utc_datetime(&(today + Duration::days(day_offset as i64)).and_time(time))
+        );
     }
 
     Err(AppError::Validation(
@@ -2217,7 +2248,8 @@ fn compute_next_drill_at(
             let target_weekday = drill_weekday.unwrap_or(3);
             let current_weekday = now.weekday().number_from_monday() as i16;
             let mut day_offset = (target_weekday - current_weekday + 7) % 7;
-            let candidate = Utc.from_utc_datetime(&(today + Duration::days(day_offset as i64)).and_time(time));
+            let candidate =
+                Utc.from_utc_datetime(&(today + Duration::days(day_offset as i64)).and_time(time));
             if day_offset == 0 && candidate <= now {
                 day_offset = 7;
             }
@@ -2248,16 +2280,27 @@ mod tests {
 
     #[test]
     fn validates_destination_type_and_uri() {
-        assert_eq!(normalize_destination_type("S3".to_string()).expect("type"), "s3");
+        assert_eq!(
+            normalize_destination_type("S3".to_string()).expect("type"),
+            "s3"
+        );
         assert!(validate_destination_uri("s3", "s3://bucket/path").is_ok());
         assert!(validate_destination_uri("nfs", "s3://bucket").is_err());
     }
 
     #[test]
     fn computes_next_daily_and_weekly_schedule() {
-        let now = Utc.with_ymd_and_hms(2026, 3, 6, 1, 0, 0).single().expect("now");
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 6, 1, 0, 0)
+            .single()
+            .expect("now");
         let daily = compute_next_backup_at("daily", "02:00", None, now).expect("daily");
-        assert_eq!(daily, Utc.with_ymd_and_hms(2026, 3, 6, 2, 0, 0).single().expect("daily dt"));
+        assert_eq!(
+            daily,
+            Utc.with_ymd_and_hms(2026, 3, 6, 2, 0, 0)
+                .single()
+                .expect("daily dt")
+        );
 
         let weekly = compute_next_backup_at("weekly", "02:00", Some(7), now).expect("weekly");
         assert_eq!(weekly.weekday().number_from_monday(), 7);
@@ -2265,7 +2308,10 @@ mod tests {
 
     #[test]
     fn computes_next_drill_schedule() {
-        let now = Utc.with_ymd_and_hms(2026, 3, 6, 1, 0, 0).single().expect("now");
+        let now = Utc
+            .with_ymd_and_hms(2026, 3, 6, 1, 0, 0)
+            .single()
+            .expect("now");
         let weekly = compute_next_drill_at("weekly", "03:00", Some(7), now).expect("weekly");
         assert_eq!(weekly.weekday().number_from_monday(), 7);
 
@@ -2275,7 +2321,10 @@ mod tests {
 
     #[test]
     fn validates_run_type_and_weekday() {
-        assert_eq!(normalize_run_type("backup".to_string()).expect("run"), "backup");
+        assert_eq!(
+            normalize_run_type("backup".to_string()).expect("run"),
+            "backup"
+        );
         assert!(normalize_run_type("invalid".to_string()).is_err());
         assert!(normalize_schedule_weekday(Some(8), "weekly").is_err());
     }

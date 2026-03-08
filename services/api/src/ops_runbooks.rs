@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::time::{Duration as StdDuration, Instant};
 
 use axum::{
     Json, Router,
@@ -10,6 +11,8 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value, json};
 use sqlx::{FromRow, Postgres, QueryBuilder};
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 use crate::{
     audit::{AuditLogWriteInput, write_audit_log_best_effort},
@@ -25,10 +28,23 @@ const MAX_TICKET_REF_LEN: usize = 128;
 const MAX_ARTIFACT_URL_LEN: usize = 1024;
 const DEFAULT_EXECUTION_LIMIT: u32 = 30;
 const MAX_EXECUTION_LIMIT: u32 = 120;
+const DEFAULT_EXECUTION_POLICY_KEY: &str = "global";
+const EXECUTION_MODE_SIMULATE: &str = "simulate";
+const EXECUTION_MODE_LIVE: &str = "live";
+const EXECUTION_POLICY_MODE_SIMULATE_ONLY: &str = "simulate_only";
+const EXECUTION_POLICY_MODE_HYBRID_LIVE: &str = "hybrid_live";
+const DEFAULT_LIVE_STEP_TIMEOUT_SECONDS: i32 = 10;
+const MIN_LIVE_STEP_TIMEOUT_SECONDS: i32 = 1;
+const MAX_LIVE_STEP_TIMEOUT_SECONDS: i32 = 120;
+const MAX_LIVE_TEMPLATE_COUNT: usize = 32;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/cockpit/runbook-templates", get(list_runbook_templates))
+        .route(
+            "/cockpit/runbook-templates/execution-policy",
+            get(get_runbook_execution_policy).put(update_runbook_execution_policy),
+        )
         .route(
             "/cockpit/runbook-templates/executions",
             get(list_runbook_template_executions),
@@ -49,6 +65,7 @@ struct RunbookTemplateDefinition {
     name: &'static str,
     description: &'static str,
     category: &'static str,
+    supports_live: bool,
     params: Vec<RunbookTemplateParamDefinition>,
     preflight: Vec<RunbookTemplateChecklistDefinition>,
     steps: Vec<RunbookTemplateStepDefinition>,
@@ -115,6 +132,7 @@ struct RunbookTemplateCatalogItem {
     name: String,
     description: String,
     category: String,
+    execution_modes: Vec<String>,
     params: Vec<RunbookTemplateParamItem>,
     preflight: Vec<RunbookTemplateChecklistItem>,
     steps: Vec<RunbookTemplateStepItem>,
@@ -129,6 +147,7 @@ struct ListRunbookTemplatesResponse {
 
 #[derive(Debug, Deserialize)]
 struct ExecuteRunbookTemplateRequest {
+    execution_mode: Option<String>,
     params: Value,
     preflight_confirmations: Vec<String>,
     evidence: RunbookEvidenceInput,
@@ -170,11 +189,13 @@ struct RunbookTemplateExecutionItem {
     template_key: String,
     template_name: String,
     status: String,
+    execution_mode: String,
     actor: String,
     params: Value,
     preflight: Value,
     timeline: Vec<RunbookStepTimelineEvent>,
     evidence: RunbookEvidenceRecord,
+    runtime_summary: Value,
     remediation_hints: Vec<String>,
     note: Option<String>,
     created_at: DateTime<Utc>,
@@ -187,11 +208,13 @@ struct RunbookTemplateExecutionRow {
     template_key: String,
     template_name: String,
     status: String,
+    execution_mode: String,
     actor: String,
     params: Value,
     preflight: Value,
     timeline: Value,
     evidence: Value,
+    runtime_summary: Value,
     remediation_hints: Value,
     note: Option<String>,
     created_at: DateTime<Utc>,
@@ -228,17 +251,171 @@ struct RunbookTemplateExecutionDetailResponse {
     item: RunbookTemplateExecutionItem,
 }
 
+#[derive(Debug, FromRow)]
+struct RunbookExecutionPolicyRow {
+    policy_key: String,
+    mode: String,
+    live_templates: Value,
+    max_live_step_timeout_seconds: i32,
+    allow_simulate_failure: bool,
+    note: Option<String>,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookExecutionPolicyItem {
+    policy_key: String,
+    mode: String,
+    live_templates: Vec<String>,
+    max_live_step_timeout_seconds: i32,
+    allow_simulate_failure: bool,
+    note: Option<String>,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookExecutionPolicyResponse {
+    generated_at: DateTime<Utc>,
+    policy: RunbookExecutionPolicyItem,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateRunbookExecutionPolicyRequest {
+    mode: Option<String>,
+    live_templates: Option<Vec<String>>,
+    max_live_step_timeout_seconds: Option<i32>,
+    allow_simulate_failure: Option<bool>,
+    note: Option<String>,
+}
+
 async fn list_runbook_templates() -> AppResult<Json<ListRunbookTemplatesResponse>> {
     let mut items = built_in_runbook_templates()
         .into_iter()
         .map(|template| runbook_template_to_catalog_item(&template))
         .collect::<Vec<_>>();
-    items.sort_by(|left, right| left.name.cmp(&right.name).then_with(|| left.key.cmp(&right.key)));
+    items.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.key.cmp(&right.key))
+    });
 
     Ok(Json(ListRunbookTemplatesResponse {
         generated_at: Utc::now(),
         total: items.len(),
         items,
+    }))
+}
+
+async fn get_runbook_execution_policy(
+    State(state): State<AppState>,
+) -> AppResult<Json<RunbookExecutionPolicyResponse>> {
+    let row = load_or_seed_execution_policy(&state).await?;
+    let policy = parse_execution_policy_row(row)?;
+    Ok(Json(RunbookExecutionPolicyResponse {
+        generated_at: Utc::now(),
+        policy,
+    }))
+}
+
+async fn update_runbook_execution_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateRunbookExecutionPolicyRequest>,
+) -> AppResult<Json<RunbookExecutionPolicyResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let current = parse_execution_policy_row(load_or_seed_execution_policy(&state).await?)?;
+
+    let mode = payload
+        .mode
+        .map(normalize_execution_policy_mode)
+        .transpose()?
+        .unwrap_or(current.mode.clone());
+    let live_templates = payload
+        .live_templates
+        .map(normalize_live_template_keys)
+        .transpose()?
+        .unwrap_or_else(|| current.live_templates.clone());
+    let max_live_step_timeout_seconds = payload
+        .max_live_step_timeout_seconds
+        .unwrap_or(current.max_live_step_timeout_seconds);
+    let allow_simulate_failure = payload
+        .allow_simulate_failure
+        .unwrap_or(current.allow_simulate_failure);
+    let note = match payload.note {
+        Some(value) => trim_optional(Some(value), MAX_NOTE_LEN),
+        None => current.note.clone(),
+    };
+
+    if !(MIN_LIVE_STEP_TIMEOUT_SECONDS..=MAX_LIVE_STEP_TIMEOUT_SECONDS)
+        .contains(&max_live_step_timeout_seconds)
+    {
+        return Err(AppError::Validation(format!(
+            "max_live_step_timeout_seconds must be between {} and {}",
+            MIN_LIVE_STEP_TIMEOUT_SECONDS, MAX_LIVE_STEP_TIMEOUT_SECONDS
+        )));
+    }
+    if mode == EXECUTION_POLICY_MODE_HYBRID_LIVE && live_templates.is_empty() {
+        return Err(AppError::Validation(
+            "live_templates cannot be empty when mode=hybrid_live".to_string(),
+        ));
+    }
+
+    let row: RunbookExecutionPolicyRow = sqlx::query_as(
+        "INSERT INTO ops_runbook_execution_policies (
+            policy_key, mode, live_templates, max_live_step_timeout_seconds,
+            allow_simulate_failure, note, updated_by
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (policy_key) DO UPDATE
+         SET mode = EXCLUDED.mode,
+             live_templates = EXCLUDED.live_templates,
+             max_live_step_timeout_seconds = EXCLUDED.max_live_step_timeout_seconds,
+             allow_simulate_failure = EXCLUDED.allow_simulate_failure,
+             note = EXCLUDED.note,
+             updated_by = EXCLUDED.updated_by,
+             updated_at = NOW()
+         RETURNING policy_key, mode, live_templates, max_live_step_timeout_seconds,
+                   allow_simulate_failure, note, updated_by, created_at, updated_at",
+    )
+    .bind(DEFAULT_EXECUTION_POLICY_KEY)
+    .bind(mode.as_str())
+    .bind(serde_json::to_value(&live_templates).map_err(|err| {
+        AppError::Validation(format!("failed to serialize live_templates: {err}"))
+    })?)
+    .bind(max_live_step_timeout_seconds)
+    .bind(allow_simulate_failure)
+    .bind(note.clone())
+    .bind(actor.as_str())
+    .fetch_one(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "ops.runbook.execution_policy.update".to_string(),
+            target_type: "ops_runbook_execution_policy".to_string(),
+            target_id: Some(DEFAULT_EXECUTION_POLICY_KEY.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "mode": mode,
+                "live_template_count": live_templates.len(),
+                "max_live_step_timeout_seconds": max_live_step_timeout_seconds,
+                "allow_simulate_failure": allow_simulate_failure
+            }),
+        },
+    )
+    .await;
+
+    let policy = parse_execution_policy_row(row)?;
+    Ok(Json(RunbookExecutionPolicyResponse {
+        generated_at: Utc::now(),
+        policy,
     }))
 }
 
@@ -250,12 +427,444 @@ async fn execute_runbook_template(
 ) -> AppResult<Json<ExecuteRunbookTemplateResponse>> {
     let actor = resolve_auth_user(&state, &headers).await?;
     let template = resolve_template_by_key(key.as_str())?;
+    let execution_policy =
+        parse_execution_policy_row(load_or_seed_execution_policy(&state).await?)?;
+    let execution_mode = normalize_execution_mode(
+        payload
+            .execution_mode
+            .unwrap_or_else(|| EXECUTION_MODE_SIMULATE.to_string()),
+    )?;
+    enforce_execution_mode_policy(&execution_policy, &template, execution_mode.as_str())?;
+
     let normalized_params = normalize_runbook_params(&template, payload.params)?;
+    if execution_mode == EXECUTION_MODE_LIVE
+        && string_param(&normalized_params, "simulate_failure_step").is_some()
+    {
+        return Err(AppError::Validation(
+            "simulate_failure_step is not allowed in live execution mode".to_string(),
+        ));
+    }
+    if execution_mode == EXECUTION_MODE_SIMULATE
+        && !execution_policy.allow_simulate_failure
+        && string_param(&normalized_params, "simulate_failure_step").is_some()
+    {
+        return Err(AppError::Validation(
+            "simulate_failure_step is disabled by execution policy".to_string(),
+        ));
+    }
+
     let preflight_confirmations =
         normalize_preflight_confirmations(&template, payload.preflight_confirmations)?;
     let note = trim_optional(payload.note, MAX_NOTE_LEN);
     let evidence_input = normalize_runbook_evidence_input(payload.evidence)?;
 
+    let outcome = if execution_mode == EXECUTION_MODE_LIVE {
+        execute_live_template(
+            &template,
+            &normalized_params,
+            execution_policy.max_live_step_timeout_seconds,
+        )
+        .await?
+    } else {
+        execute_simulated_template(&template, &normalized_params)
+    };
+    let final_status = outcome.status.clone();
+
+    let evidence = RunbookEvidenceRecord {
+        summary: evidence_input.summary,
+        ticket_ref: evidence_input.ticket_ref,
+        artifact_url: evidence_input.artifact_url,
+        captured_at: Utc::now(),
+        execution_status: final_status.clone(),
+        operator: actor.clone(),
+    };
+
+    let preflight_snapshot = json!({
+        "confirmed": preflight_confirmations,
+        "total_required": template.preflight.len(),
+    });
+
+    let row: RunbookTemplateExecutionRow = sqlx::query_as(
+        "INSERT INTO ops_runbook_template_executions (
+            template_key,
+            template_name,
+            status,
+            execution_mode,
+            actor,
+            params,
+            preflight,
+            timeline,
+            evidence,
+            runtime_summary,
+            remediation_hints,
+            note
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id, template_key, template_name, status, execution_mode, actor, params, preflight,
+                   timeline, evidence, runtime_summary, remediation_hints, note, created_at, updated_at",
+    )
+    .bind(template.key)
+    .bind(template.name)
+    .bind(final_status.as_str())
+    .bind(execution_mode.as_str())
+    .bind(actor.as_str())
+    .bind(Value::Object(normalized_params.clone()))
+    .bind(preflight_snapshot)
+    .bind(serde_json::to_value(&outcome.timeline).map_err(|err| {
+        AppError::Validation(format!("failed to serialize runbook timeline: {err}"))
+    })?)
+    .bind(serde_json::to_value(&evidence).map_err(|err| {
+        AppError::Validation(format!("failed to serialize runbook evidence: {err}"))
+    })?)
+    .bind(outcome.runtime_summary.clone())
+    .bind(serde_json::to_value(&outcome.remediation_hints).map_err(|err| {
+        AppError::Validation(format!("failed to serialize remediation hints: {err}"))
+    })?)
+    .bind(note.clone())
+    .fetch_one(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "ops.runbook.template.execute".to_string(),
+            target_type: "ops_runbook_template_execution".to_string(),
+            target_id: Some(row.id.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "template_key": template.key,
+                "status": final_status,
+                "execution_mode": execution_mode,
+                "step_count": outcome.timeline.len(),
+                "remediation_hint_count": outcome.remediation_hints.len(),
+                "policy_mode": execution_policy.mode,
+            }),
+        },
+    )
+    .await;
+
+    let execution = parse_execution_row(row)?;
+
+    Ok(Json(ExecuteRunbookTemplateResponse {
+        generated_at: execution.created_at,
+        template: runbook_template_to_catalog_item(&template),
+        execution,
+    }))
+}
+
+async fn list_runbook_template_executions(
+    State(state): State<AppState>,
+    Query(query): Query<ListRunbookTemplateExecutionsQuery>,
+) -> AppResult<Json<ListRunbookTemplateExecutionsResponse>> {
+    let template_key = query.template_key.map(normalize_template_key).transpose()?;
+    let status = query.status.map(normalize_execution_status).transpose()?;
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_EXECUTION_LIMIT)
+        .clamp(1, MAX_EXECUTION_LIMIT) as i64;
+    let offset = query.offset.unwrap_or(0) as i64;
+
+    let mut count_builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT COUNT(*) FROM ops_runbook_template_executions e WHERE 1=1");
+    append_execution_filters(&mut count_builder, template_key.clone(), status.clone());
+    let total: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, template_key, template_name, status, execution_mode, actor, params, preflight,
+                timeline, evidence, runtime_summary, remediation_hints, note, created_at, updated_at
+         FROM ops_runbook_template_executions e
+         WHERE 1=1",
+    );
+    append_execution_filters(&mut list_builder, template_key, status);
+    list_builder
+        .push(" ORDER BY e.created_at DESC, e.id DESC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+
+    let rows: Vec<RunbookTemplateExecutionRow> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(parse_execution_row(row)?);
+    }
+
+    Ok(Json(ListRunbookTemplateExecutionsResponse {
+        generated_at: Utc::now(),
+        total,
+        limit: limit as u32,
+        offset: offset as u32,
+        items,
+    }))
+}
+
+async fn get_runbook_template_execution(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> AppResult<Json<RunbookTemplateExecutionDetailResponse>> {
+    if id <= 0 {
+        return Err(AppError::Validation(
+            "execution id must be a positive integer".to_string(),
+        ));
+    }
+
+    let row: Option<RunbookTemplateExecutionRow> = sqlx::query_as(
+        "SELECT id, template_key, template_name, status, execution_mode, actor, params, preflight,
+                timeline, evidence, runtime_summary, remediation_hints, note, created_at, updated_at
+         FROM ops_runbook_template_executions
+         WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let row = row.ok_or_else(|| AppError::NotFound(format!("runbook execution {id} not found")))?;
+    let item = parse_execution_row(row)?;
+
+    Ok(Json(RunbookTemplateExecutionDetailResponse {
+        generated_at: item.updated_at,
+        item,
+    }))
+}
+
+fn append_execution_filters(
+    builder: &mut QueryBuilder<Postgres>,
+    template_key: Option<String>,
+    status: Option<String>,
+) {
+    if let Some(template_key) = template_key {
+        builder
+            .push(" AND e.template_key = ")
+            .push_bind(template_key);
+    }
+    if let Some(status) = status {
+        builder.push(" AND e.status = ").push_bind(status);
+    }
+}
+
+fn parse_execution_row(
+    row: RunbookTemplateExecutionRow,
+) -> AppResult<RunbookTemplateExecutionItem> {
+    let timeline: Vec<RunbookStepTimelineEvent> =
+        serde_json::from_value(row.timeline).map_err(|err| {
+            AppError::Validation(format!("runbook execution timeline data is invalid: {err}"))
+        })?;
+    let evidence: RunbookEvidenceRecord = serde_json::from_value(row.evidence).map_err(|err| {
+        AppError::Validation(format!("runbook execution evidence data is invalid: {err}"))
+    })?;
+    let remediation_hints: Vec<String> =
+        serde_json::from_value(row.remediation_hints).map_err(|err| {
+            AppError::Validation(format!(
+                "runbook execution remediation_hints data is invalid: {err}"
+            ))
+        })?;
+
+    Ok(RunbookTemplateExecutionItem {
+        id: row.id,
+        template_key: row.template_key,
+        template_name: row.template_name,
+        status: row.status,
+        execution_mode: row.execution_mode,
+        actor: row.actor,
+        params: row.params,
+        preflight: row.preflight,
+        timeline,
+        evidence,
+        runtime_summary: row.runtime_summary,
+        remediation_hints,
+        note: row.note,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+
+#[derive(Debug)]
+struct RunbookExecutionOutcome {
+    status: String,
+    timeline: Vec<RunbookStepTimelineEvent>,
+    remediation_hints: Vec<String>,
+    runtime_summary: Value,
+}
+
+#[derive(Debug)]
+struct LiveProbeTarget {
+    host: String,
+    port: u16,
+    raw: String,
+}
+
+async fn load_or_seed_execution_policy(state: &AppState) -> AppResult<RunbookExecutionPolicyRow> {
+    let existing: Option<RunbookExecutionPolicyRow> = sqlx::query_as(
+        "SELECT policy_key, mode, live_templates, max_live_step_timeout_seconds,
+                allow_simulate_failure, note, updated_by, created_at, updated_at
+         FROM ops_runbook_execution_policies
+         WHERE policy_key = $1",
+    )
+    .bind(DEFAULT_EXECUTION_POLICY_KEY)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if let Some(row) = existing {
+        return Ok(row);
+    }
+
+    let row: RunbookExecutionPolicyRow = sqlx::query_as(
+        "INSERT INTO ops_runbook_execution_policies (
+            policy_key, mode, live_templates, max_live_step_timeout_seconds,
+            allow_simulate_failure, note, updated_by
+         )
+         VALUES ($1, $2, '[]'::jsonb, $3, $4, $5, $6)
+         RETURNING policy_key, mode, live_templates, max_live_step_timeout_seconds,
+                   allow_simulate_failure, note, updated_by, created_at, updated_at",
+    )
+    .bind(DEFAULT_EXECUTION_POLICY_KEY)
+    .bind(EXECUTION_POLICY_MODE_SIMULATE_ONLY)
+    .bind(DEFAULT_LIVE_STEP_TIMEOUT_SECONDS)
+    .bind(true)
+    .bind(Some("seeded default policy".to_string()))
+    .bind("system")
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(row)
+}
+
+fn parse_execution_policy_row(
+    row: RunbookExecutionPolicyRow,
+) -> AppResult<RunbookExecutionPolicyItem> {
+    let mode = normalize_execution_policy_mode(row.mode)?;
+    let live_templates: Vec<String> =
+        serde_json::from_value(row.live_templates).map_err(|err| {
+            AppError::Validation(format!(
+                "runbook execution policy live_templates is invalid: {err}"
+            ))
+        })?;
+    let live_templates = normalize_live_template_keys(live_templates)?;
+    if !(MIN_LIVE_STEP_TIMEOUT_SECONDS..=MAX_LIVE_STEP_TIMEOUT_SECONDS)
+        .contains(&row.max_live_step_timeout_seconds)
+    {
+        return Err(AppError::Validation(format!(
+            "runbook execution policy timeout must be between {} and {} seconds",
+            MIN_LIVE_STEP_TIMEOUT_SECONDS, MAX_LIVE_STEP_TIMEOUT_SECONDS
+        )));
+    }
+
+    Ok(RunbookExecutionPolicyItem {
+        policy_key: row.policy_key,
+        mode,
+        live_templates,
+        max_live_step_timeout_seconds: row.max_live_step_timeout_seconds,
+        allow_simulate_failure: row.allow_simulate_failure,
+        note: row.note,
+        updated_by: row.updated_by,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+
+fn normalize_execution_policy_mode(value: String) -> AppResult<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        EXECUTION_POLICY_MODE_SIMULATE_ONLY | EXECUTION_POLICY_MODE_HYBRID_LIVE => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "mode must be one of: simulate_only, hybrid_live".to_string(),
+        )),
+    }
+}
+
+fn normalize_execution_mode(value: String) -> AppResult<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        EXECUTION_MODE_SIMULATE | EXECUTION_MODE_LIVE => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "execution_mode must be one of: simulate, live".to_string(),
+        )),
+    }
+}
+
+fn normalize_live_template_keys(raw: Vec<String>) -> AppResult<Vec<String>> {
+    if raw.len() > MAX_LIVE_TEMPLATE_COUNT {
+        return Err(AppError::Validation(format!(
+            "live_templates count must be <= {}",
+            MAX_LIVE_TEMPLATE_COUNT
+        )));
+    }
+
+    let mut dedup = BTreeSet::new();
+    for key in raw {
+        dedup.insert(normalize_template_key(key)?);
+    }
+
+    let mut normalized = dedup.into_iter().collect::<Vec<_>>();
+    normalized.sort();
+
+    for key in &normalized {
+        let template = resolve_template_by_key(key)?;
+        if !template.supports_live {
+            return Err(AppError::Validation(format!(
+                "template '{}' does not support live execution",
+                key
+            )));
+        }
+    }
+
+    Ok(normalized)
+}
+
+fn enforce_execution_mode_policy(
+    policy: &RunbookExecutionPolicyItem,
+    template: &RunbookTemplateDefinition,
+    execution_mode: &str,
+) -> AppResult<()> {
+    if execution_mode == EXECUTION_MODE_SIMULATE {
+        return Ok(());
+    }
+
+    if policy.mode != EXECUTION_POLICY_MODE_HYBRID_LIVE {
+        return Err(AppError::Validation(
+            "live execution is disabled by execution policy".to_string(),
+        ));
+    }
+    if !template.supports_live {
+        return Err(AppError::Validation(format!(
+            "template '{}' does not support live execution",
+            template.key
+        )));
+    }
+    if !policy
+        .live_templates
+        .iter()
+        .any(|item| item == template.key)
+    {
+        return Err(AppError::Validation(format!(
+            "template '{}' is not allowlisted for live execution",
+            template.key
+        )));
+    }
+
+    Ok(())
+}
+
+fn runbook_template_execution_modes(template: &RunbookTemplateDefinition) -> Vec<String> {
+    if template.supports_live {
+        vec![
+            EXECUTION_MODE_SIMULATE.to_string(),
+            EXECUTION_MODE_LIVE.to_string(),
+        ]
+    } else {
+        vec![EXECUTION_MODE_SIMULATE.to_string()]
+    }
+}
+
+fn execute_simulated_template(
+    template: &RunbookTemplateDefinition,
+    normalized_params: &JsonMap<String, Value>,
+) -> RunbookExecutionOutcome {
     let now = Utc::now();
     let mut timeline = Vec::new();
     let mut remediation_hints = Vec::new();
@@ -264,12 +873,8 @@ async fn execute_runbook_template(
     for (idx, step) in template.steps.iter().enumerate() {
         let started_at = now + Duration::seconds(idx as i64);
         let finished_at = started_at + Duration::seconds(1);
-        let failure_reason = evaluate_step_failure(
-            template.key,
-            step.step_id,
-            &normalized_params,
-            idx,
-        );
+        let failure_reason =
+            evaluate_step_failure(template.key, step.step_id, normalized_params, idx);
 
         if let Some(reason) = failure_reason {
             final_status = "failed".to_string();
@@ -306,204 +911,256 @@ async fn execute_runbook_template(
         );
     }
 
-    let evidence = RunbookEvidenceRecord {
-        summary: evidence_input.summary,
-        ticket_ref: evidence_input.ticket_ref,
-        artifact_url: evidence_input.artifact_url,
-        captured_at: Utc::now(),
-        execution_status: final_status.clone(),
-        operator: actor.clone(),
-    };
-
-    let preflight_snapshot = json!({
-        "confirmed": preflight_confirmations,
-        "total_required": template.preflight.len(),
+    let failed_step_id = timeline
+        .iter()
+        .find(|item| item.status == "failed")
+        .map(|item| item.step_id.clone());
+    let runtime_summary = json!({
+        "mode": EXECUTION_MODE_SIMULATE,
+        "total_steps": template.steps.len(),
+        "executed_steps": timeline.len(),
+        "failed_step_id": failed_step_id,
+        "duration_ms": (timeline.len() as i64) * 1000
     });
 
-    let row: RunbookTemplateExecutionRow = sqlx::query_as(
-        "INSERT INTO ops_runbook_template_executions (
-            template_key,
-            template_name,
-            status,
-            actor,
-            params,
-            preflight,
-            timeline,
-            evidence,
-            remediation_hints,
-            note
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING id, template_key, template_name, status, actor, params, preflight,
-                   timeline, evidence, remediation_hints, note, created_at, updated_at",
-    )
-    .bind(template.key)
-    .bind(template.name)
-    .bind(final_status.as_str())
-    .bind(actor.as_str())
-    .bind(Value::Object(normalized_params.clone()))
-    .bind(preflight_snapshot)
-    .bind(serde_json::to_value(&timeline).map_err(|err| {
-        AppError::Validation(format!("failed to serialize runbook timeline: {err}"))
-    })?)
-    .bind(serde_json::to_value(&evidence).map_err(|err| {
-        AppError::Validation(format!("failed to serialize runbook evidence: {err}"))
-    })?)
-    .bind(serde_json::to_value(&remediation_hints).map_err(|err| {
-        AppError::Validation(format!("failed to serialize remediation hints: {err}"))
-    })?)
-    .bind(note.clone())
-    .fetch_one(&state.db)
-    .await?;
-
-    write_audit_log_best_effort(
-        &state.db,
-        AuditLogWriteInput {
-            actor: actor.clone(),
-            action: "ops.runbook.template.execute".to_string(),
-            target_type: "ops_runbook_template_execution".to_string(),
-            target_id: Some(row.id.to_string()),
-            result: "success".to_string(),
-            message: note,
-            metadata: json!({
-                "template_key": template.key,
-                "status": final_status,
-                "step_count": timeline.len(),
-                "remediation_hint_count": remediation_hints.len(),
-            }),
-        },
-    )
-    .await;
-
-    let execution = parse_execution_row(row)?;
-
-    Ok(Json(ExecuteRunbookTemplateResponse {
-        generated_at: execution.created_at,
-        template: runbook_template_to_catalog_item(&template),
-        execution,
-    }))
+    RunbookExecutionOutcome {
+        status: final_status,
+        timeline,
+        remediation_hints,
+        runtime_summary,
+    }
 }
 
-async fn list_runbook_template_executions(
-    State(state): State<AppState>,
-    Query(query): Query<ListRunbookTemplateExecutionsQuery>,
-) -> AppResult<Json<ListRunbookTemplateExecutionsResponse>> {
-    let template_key = query
-        .template_key
-        .map(normalize_template_key)
-        .transpose()?;
-    let status = query.status.map(normalize_execution_status).transpose()?;
-    let limit = query
-        .limit
-        .unwrap_or(DEFAULT_EXECUTION_LIMIT)
-        .clamp(1, MAX_EXECUTION_LIMIT) as i64;
-    let offset = query.offset.unwrap_or(0) as i64;
-
-    let mut count_builder: QueryBuilder<Postgres> =
-        QueryBuilder::new("SELECT COUNT(*) FROM ops_runbook_template_executions e WHERE 1=1");
-    append_execution_filters(&mut count_builder, template_key.clone(), status.clone());
-    let total: i64 = count_builder
-        .build_query_scalar()
-        .fetch_one(&state.db)
-        .await?;
-
-    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-        "SELECT id, template_key, template_name, status, actor, params, preflight,
-                timeline, evidence, remediation_hints, note, created_at, updated_at
-         FROM ops_runbook_template_executions e
-         WHERE 1=1",
-    );
-    append_execution_filters(&mut list_builder, template_key, status);
-    list_builder
-        .push(" ORDER BY e.created_at DESC, e.id DESC LIMIT ")
-        .push_bind(limit)
-        .push(" OFFSET ")
-        .push_bind(offset);
-
-    let rows: Vec<RunbookTemplateExecutionRow> = list_builder.build_query_as().fetch_all(&state.db).await?;
-    let mut items = Vec::new();
-    for row in rows {
-        items.push(parse_execution_row(row)?);
+async fn execute_live_template(
+    template: &RunbookTemplateDefinition,
+    normalized_params: &JsonMap<String, Value>,
+    max_live_step_timeout_seconds: i32,
+) -> AppResult<RunbookExecutionOutcome> {
+    if template.key != "dependency-check" {
+        return Err(AppError::Validation(format!(
+            "template '{}' live execution adapter is not implemented",
+            template.key
+        )));
     }
 
-    Ok(Json(ListRunbookTemplateExecutionsResponse {
-        generated_at: Utc::now(),
-        total,
-        limit: limit as u32,
-        offset: offset as u32,
-        items,
-    }))
+    let dependency_target =
+        string_param(normalized_params, "dependency_target").ok_or_else(|| {
+            AppError::Validation("parameter 'dependency_target' is required".to_string())
+        })?;
+    let probe_target = parse_dependency_target(dependency_target.as_str())?;
+    let configured_timeout_seconds = number_param(normalized_params, "probe_timeout_seconds")
+        .unwrap_or(max_live_step_timeout_seconds as i64)
+        .clamp(
+            MIN_LIVE_STEP_TIMEOUT_SECONDS as i64,
+            max_live_step_timeout_seconds as i64,
+        ) as u64;
+
+    let mut timeline = Vec::new();
+    let mut remediation_hints = Vec::new();
+    let mut status = "succeeded".to_string();
+    let start_instant = Instant::now();
+    let mut probe_latency_ms: Option<i64> = None;
+
+    let validation_started_at = Utc::now();
+    let validation_finished_at = validation_started_at + Duration::milliseconds(50);
+    timeline.push(RunbookStepTimelineEvent {
+        step_id: "scope_validation".to_string(),
+        name: "Validate dependency scope".to_string(),
+        detail: "Confirm dependency target syntax and authorized probing scope.".to_string(),
+        status: "succeeded".to_string(),
+        started_at: validation_started_at,
+        finished_at: validation_finished_at,
+        output: format!(
+            "resolved target {}:{}",
+            probe_target.host, probe_target.port
+        ),
+        remediation_hint: None,
+    });
+
+    let probe_started_at = Utc::now();
+    let probe_clock = Instant::now();
+    let probe_result = timeout(
+        StdDuration::from_secs(configured_timeout_seconds),
+        TcpStream::connect((probe_target.host.as_str(), probe_target.port)),
+    )
+    .await;
+    let probe_finished_at = Utc::now();
+
+    match probe_result {
+        Ok(Ok(stream)) => {
+            let elapsed_ms = probe_clock.elapsed().as_millis() as i64;
+            probe_latency_ms = Some(elapsed_ms);
+            drop(stream);
+            timeline.push(RunbookStepTimelineEvent {
+                step_id: "reachability_probe".to_string(),
+                name: "Run dependency probe".to_string(),
+                detail: "Execute probe and collect response timing.".to_string(),
+                status: "succeeded".to_string(),
+                started_at: probe_started_at,
+                finished_at: probe_finished_at,
+                output: format!(
+                    "tcp probe succeeded target={}:{} latency_ms={}",
+                    probe_target.host, probe_target.port, elapsed_ms
+                ),
+                remediation_hint: None,
+            });
+        }
+        Ok(Err(err)) => {
+            status = "failed".to_string();
+            remediation_hints.push(
+                "Check network ACL/DNS path and retry with dependency owner support.".to_string(),
+            );
+            timeline.push(RunbookStepTimelineEvent {
+                step_id: "reachability_probe".to_string(),
+                name: "Run dependency probe".to_string(),
+                detail: "Execute probe and collect response timing.".to_string(),
+                status: "failed".to_string(),
+                started_at: probe_started_at,
+                finished_at: probe_finished_at,
+                output: format!(
+                    "tcp probe failed target={}:{} error={}",
+                    probe_target.host, probe_target.port, err
+                ),
+                remediation_hint: Some(
+                    "Check network ACL/DNS path and retry with dependency owner support."
+                        .to_string(),
+                ),
+            });
+        }
+        Err(_) => {
+            status = "failed".to_string();
+            remediation_hints.push(
+                "Dependency probe timed out; validate firewall path and endpoint health."
+                    .to_string(),
+            );
+            timeline.push(RunbookStepTimelineEvent {
+                step_id: "reachability_probe".to_string(),
+                name: "Run dependency probe".to_string(),
+                detail: "Execute probe and collect response timing.".to_string(),
+                status: "failed".to_string(),
+                started_at: probe_started_at,
+                finished_at: probe_finished_at,
+                output: format!(
+                    "tcp probe timeout target={}:{} timeout_seconds={}",
+                    probe_target.host, probe_target.port, configured_timeout_seconds
+                ),
+                remediation_hint: Some(
+                    "Dependency probe timed out; validate firewall path and endpoint health."
+                        .to_string(),
+                ),
+            });
+        }
+    }
+
+    if status == "succeeded" {
+        let summary_started_at = Utc::now();
+        let summary_finished_at = summary_started_at + Duration::milliseconds(25);
+        timeline.push(RunbookStepTimelineEvent {
+            step_id: "readiness_summary".to_string(),
+            name: "Summarize dependency readiness".to_string(),
+            detail: "Publish readiness result with latency and error context.".to_string(),
+            status: "succeeded".to_string(),
+            started_at: summary_started_at,
+            finished_at: summary_finished_at,
+            output: format!(
+                "dependency target {}: {}",
+                probe_target.raw,
+                probe_latency_ms
+                    .map(|value| format!("reachable latency_ms={value}"))
+                    .unwrap_or_else(|| "reachable".to_string())
+            ),
+            remediation_hint: None,
+        });
+    }
+
+    if status == "failed" && remediation_hints.is_empty() {
+        remediation_hints.push(
+            "Review failed live probe output and rerun after dependency path remediation."
+                .to_string(),
+        );
+    }
+
+    let failed_step_id = timeline
+        .iter()
+        .find(|item| item.status == "failed")
+        .map(|item| item.step_id.clone());
+    let runtime_summary = json!({
+        "mode": EXECUTION_MODE_LIVE,
+        "total_steps": template.steps.len(),
+        "executed_steps": timeline.len(),
+        "failed_step_id": failed_step_id,
+        "duration_ms": start_instant.elapsed().as_millis() as i64,
+        "probe_target": format!("{}:{}", probe_target.host, probe_target.port),
+        "probe_latency_ms": probe_latency_ms,
+        "probe_timeout_seconds": configured_timeout_seconds
+    });
+
+    Ok(RunbookExecutionOutcome {
+        status,
+        timeline,
+        remediation_hints,
+        runtime_summary,
+    })
 }
 
-async fn get_runbook_template_execution(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> AppResult<Json<RunbookTemplateExecutionDetailResponse>> {
-    if id <= 0 {
+fn parse_dependency_target(raw: &str) -> AppResult<LiveProbeTarget> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
         return Err(AppError::Validation(
-            "execution id must be a positive integer".to_string(),
+            "dependency_target cannot be empty".to_string(),
         ));
     }
 
-    let row: Option<RunbookTemplateExecutionRow> = sqlx::query_as(
-        "SELECT id, template_key, template_name, status, actor, params, preflight,
-                timeline, evidence, remediation_hints, note, created_at, updated_at
-         FROM ops_runbook_template_executions
-         WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?;
+    if let Some(rest) = trimmed.strip_prefix("http://") {
+        return parse_host_port_target(rest, 80, trimmed);
+    }
+    if let Some(rest) = trimmed.strip_prefix("https://") {
+        return parse_host_port_target(rest, 443, trimmed);
+    }
 
-    let row = row.ok_or_else(|| AppError::NotFound(format!("runbook execution {id} not found")))?;
-    let item = parse_execution_row(row)?;
-
-    Ok(Json(RunbookTemplateExecutionDetailResponse {
-        generated_at: item.updated_at,
-        item,
-    }))
+    parse_host_port_target(trimmed, 0, trimmed)
 }
 
-fn append_execution_filters(
-    builder: &mut QueryBuilder<Postgres>,
-    template_key: Option<String>,
-    status: Option<String>,
-) {
-    if let Some(template_key) = template_key {
-        builder
-            .push(" AND e.template_key = ")
-            .push_bind(template_key);
+fn parse_host_port_target(
+    authority_or_host: &str,
+    default_port: u16,
+    raw: &str,
+) -> AppResult<LiveProbeTarget> {
+    let authority = authority_or_host.split('/').next().unwrap_or("").trim();
+    if authority.is_empty() {
+        return Err(AppError::Validation(
+            "dependency_target host is required".to_string(),
+        ));
     }
-    if let Some(status) = status {
-        builder.push(" AND e.status = ").push_bind(status);
+
+    let (host, port) = if let Some((host, port)) = authority.rsplit_once(':') {
+        let port = port.parse::<u16>().map_err(|_| {
+            AppError::Validation("dependency_target port must be a valid integer".to_string())
+        })?;
+        (host.trim().to_string(), port)
+    } else if default_port > 0 {
+        (authority.to_string(), default_port)
+    } else {
+        return Err(AppError::Validation(
+            "dependency_target must include ':<port>' or use http(s):// scheme".to_string(),
+        ));
+    };
+
+    if host.is_empty() {
+        return Err(AppError::Validation(
+            "dependency_target host is required".to_string(),
+        ));
     }
-}
+    if port == 0 {
+        return Err(AppError::Validation(
+            "dependency_target port must be > 0".to_string(),
+        ));
+    }
 
-fn parse_execution_row(row: RunbookTemplateExecutionRow) -> AppResult<RunbookTemplateExecutionItem> {
-    let timeline: Vec<RunbookStepTimelineEvent> = serde_json::from_value(row.timeline).map_err(|err| {
-        AppError::Validation(format!("runbook execution timeline data is invalid: {err}"))
-    })?;
-    let evidence: RunbookEvidenceRecord = serde_json::from_value(row.evidence).map_err(|err| {
-        AppError::Validation(format!("runbook execution evidence data is invalid: {err}"))
-    })?;
-    let remediation_hints: Vec<String> = serde_json::from_value(row.remediation_hints).map_err(|err| {
-        AppError::Validation(format!("runbook execution remediation_hints data is invalid: {err}"))
-    })?;
-
-    Ok(RunbookTemplateExecutionItem {
-        id: row.id,
-        template_key: row.template_key,
-        template_name: row.template_name,
-        status: row.status,
-        actor: row.actor,
-        params: row.params,
-        preflight: row.preflight,
-        timeline,
-        evidence,
-        remediation_hints,
-        note: row.note,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
+    Ok(LiveProbeTarget {
+        host,
+        port,
+        raw: raw.to_string(),
     })
 }
 
@@ -523,6 +1180,7 @@ fn runbook_template_to_catalog_item(
         name: template.name.to_string(),
         description: template.description.to_string(),
         category: template.category.to_string(),
+        execution_modes: runbook_template_execution_modes(template),
         params: template
             .params
             .iter()
@@ -531,7 +1189,11 @@ fn runbook_template_to_catalog_item(
                 label: param.label.to_string(),
                 field_type: param.field_type.to_string(),
                 required: param.required,
-                options: param.options.iter().map(|item| (*item).to_string()).collect(),
+                options: param
+                    .options
+                    .iter()
+                    .map(|item| (*item).to_string())
+                    .collect(),
                 min_value: param.min_value,
                 max_value: param.max_value,
                 default_value: param.default_value.map(|item| item.to_string()),
@@ -566,6 +1228,7 @@ fn built_in_runbook_templates() -> Vec<RunbookTemplateDefinition> {
             name: "Service restart (safe)",
             description: "Controlled service restart with preflight ownership and health confirmation.",
             category: "operations",
+            supports_live: false,
             params: vec![
                 RunbookTemplateParamDefinition {
                     key: "asset_ref",
@@ -655,6 +1318,7 @@ fn built_in_runbook_templates() -> Vec<RunbookTemplateDefinition> {
             name: "Dependency health check",
             description: "Dependency reachability and readiness verification with remediation context.",
             category: "diagnostics",
+            supports_live: true,
             params: vec![
                 RunbookTemplateParamDefinition {
                     key: "asset_ref",
@@ -744,6 +1408,7 @@ fn built_in_runbook_templates() -> Vec<RunbookTemplateDefinition> {
             name: "Backup verify closeout",
             description: "Backup restore-verification closeout with SLA and evidence linkage.",
             category: "continuity",
+            supports_live: false,
             params: vec![
                 RunbookTemplateParamDefinition {
                     key: "policy_id",
@@ -833,6 +1498,7 @@ fn built_in_runbook_templates() -> Vec<RunbookTemplateDefinition> {
             name: "Maintenance closeout",
             description: "Finalize maintenance execution and publish handover summary.",
             category: "operations",
+            supports_live: false,
             params: vec![
                 RunbookTemplateParamDefinition {
                     key: "change_ticket",
@@ -963,7 +1629,9 @@ fn normalize_single_param(
     let value = match value {
         Some(Value::Null) => None,
         Some(value) => Some(value),
-        None => definition.default_value.map(|default| Value::String(default.to_string())),
+        None => definition
+            .default_value
+            .map(|default| Value::String(default.to_string())),
     };
 
     let Some(value) = value else {
@@ -1026,14 +1694,12 @@ fn normalize_single_param(
         }
         "number" => {
             let number = match value {
-                Value::Number(value) => value
-                    .as_i64()
-                    .ok_or_else(|| {
-                        AppError::Validation(format!(
-                            "parameter '{}' must be an integer",
-                            definition.key
-                        ))
-                    })?,
+                Value::Number(value) => value.as_i64().ok_or_else(|| {
+                    AppError::Validation(format!(
+                        "parameter '{}' must be an integer",
+                        definition.key
+                    ))
+                })?,
                 Value::String(value) => value.trim().parse::<i64>().map_err(|_| {
                     AppError::Validation(format!(
                         "parameter '{}' must be an integer",
@@ -1255,7 +1921,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        evaluate_step_failure, normalize_preflight_confirmations, normalize_runbook_params,
+        evaluate_step_failure, normalize_execution_mode, normalize_live_template_keys,
+        normalize_preflight_confirmations, normalize_runbook_params, parse_dependency_target,
         resolve_template_by_key,
     };
 
@@ -1271,7 +1938,12 @@ mod tests {
             }),
         )
         .expect("normalized");
-        assert_eq!(normalized.get("probe_timeout_seconds").and_then(|value| value.as_i64()), Some(20));
+        assert_eq!(
+            normalized
+                .get("probe_timeout_seconds")
+                .and_then(|value| value.as_i64()),
+            Some(20)
+        );
 
         let err = normalize_runbook_params(
             &template,
@@ -1288,11 +1960,9 @@ mod tests {
     #[test]
     fn requires_all_preflight_confirmations() {
         let template = resolve_template_by_key("service-restart-safe").expect("template");
-        let err = normalize_preflight_confirmations(
-            &template,
-            vec!["confirm_change_window".to_string()],
-        )
-        .expect_err("missing confirmations should fail");
+        let err =
+            normalize_preflight_confirmations(&template, vec!["confirm_change_window".to_string()])
+                .expect_err("missing confirmations should fail");
         assert!(format!("{}", err).contains("missing preflight confirmations"));
     }
 
@@ -1309,12 +1979,51 @@ mod tests {
         )
         .expect("params");
 
-        let failure = evaluate_step_failure(
-            template.key,
-            "stakeholder_signoff",
-            &params,
-            1,
-        );
+        let failure = evaluate_step_failure(template.key, "stakeholder_signoff", &params, 1);
         assert!(failure.is_some());
+    }
+
+    #[test]
+    fn normalizes_live_template_allowlist() {
+        let templates = normalize_live_template_keys(vec![
+            "dependency-check".to_string(),
+            "dependency-check".to_string(),
+        ])
+        .expect("live templates");
+        assert_eq!(templates, vec!["dependency-check".to_string()]);
+
+        let err = normalize_live_template_keys(vec!["backup-verify".to_string()])
+            .expect_err("non-live template should fail");
+        assert!(format!("{}", err).contains("does not support live execution"));
+    }
+
+    #[test]
+    fn parses_dependency_target_with_scheme_and_port() {
+        let target = parse_dependency_target("http://127.0.0.1:8080/health").expect("valid target");
+        assert_eq!(target.host, "127.0.0.1");
+        assert_eq!(target.port, 8080);
+
+        let target = parse_dependency_target("https://example.local/api").expect("https target");
+        assert_eq!(target.host, "example.local");
+        assert_eq!(target.port, 443);
+
+        let target = parse_dependency_target("redis.local:6379").expect("host:port target");
+        assert_eq!(target.host, "redis.local");
+        assert_eq!(target.port, 6379);
+    }
+
+    #[test]
+    fn validates_execution_mode_values() {
+        assert_eq!(
+            normalize_execution_mode("simulate".to_string()).expect("simulate"),
+            "simulate"
+        );
+        assert_eq!(
+            normalize_execution_mode("live".to_string()).expect("live"),
+            "live"
+        );
+
+        let err = normalize_execution_mode("invalid".to_string()).expect_err("should fail");
+        assert!(format!("{}", err).contains("execution_mode must be one of"));
     }
 }

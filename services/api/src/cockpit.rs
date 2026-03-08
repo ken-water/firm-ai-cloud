@@ -1201,7 +1201,10 @@ fn build_incident_next_actions(rows: Vec<IncidentNextActionRow>) -> Vec<NextBest
                     key: "incident-command-follow-up".to_string(),
                     label: "Update Incident Command".to_string(),
                     href: Some("#/overview".to_string()),
-                    api_path: Some(format!("/api/v1/ops/cockpit/incidents/{}/command", row.alert_id)),
+                    api_path: Some(format!(
+                        "/api/v1/ops/cockpit/incidents/{}/command",
+                        row.alert_id
+                    )),
                     method: Some("POST".to_string()),
                     body: Some(json!({
                         "status": "in_progress",

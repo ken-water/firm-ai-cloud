@@ -1519,12 +1519,11 @@ fn trim_optional(value: Option<String>, max_len: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
+        ESCALATION_STATE_BREACHED, ESCALATION_STATE_NEAR_BREACH,
+        TICKET_ESCALATION_POLICY_KEY_DEFAULT, TicketEscalationPolicyRecord,
         evaluate_ticket_escalation_by_age, normalize_escalation_state, normalize_priority,
-        normalize_required_status, supported_priorities, supported_statuses, validate_escalation_pair,
-        TicketEscalationPolicyRecord,
-        ESCALATION_STATE_BREACHED,
-        ESCALATION_STATE_NEAR_BREACH,
-        TICKET_ESCALATION_POLICY_KEY_DEFAULT,
+        normalize_required_status, supported_priorities, supported_statuses,
+        validate_escalation_pair,
     };
     use chrono::Utc;
 

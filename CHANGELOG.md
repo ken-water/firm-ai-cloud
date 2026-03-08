@@ -18,6 +18,42 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.7] - 2026-03-09
+
+### Added
+
+- v0.1.7 planning and release-gate documentation:
+  - `docs/34-v0.1.7-runbook-execution-closure-plan.md`
+  - `docs/35-v0.1.7-release-gate-checklist.md`
+- v0.1.7 issue baseline and closure track: GitHub issues `#145` to `#150`.
+- Runbook execution policy baseline:
+  - migration: `202603090001_create_runbook_execution_policy.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/runbook-templates/execution-policy`
+    - `PUT /api/v1/ops/cockpit/runbook-templates/execution-policy`
+- Runbook execution records now persist execution-mode/runtime metadata:
+  - `execution_mode` (`simulate` / `live`)
+  - `runtime_summary` JSON payload
+- Hybrid live runbook execution baseline:
+  - `POST /api/v1/ops/cockpit/runbook-templates/{key}/execute` now supports `execution_mode`
+  - guarded live adapter for `dependency-check` with bounded TCP probe and runtime latency summary
+- v0.1.7 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.7-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- v0.1.x planning document now includes v0.1.7 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
+- Runbook template catalog response now includes `execution_modes` capability field.
+- Web console runbook panel now adds:
+  - execution-policy read/write controls (role-gated),
+  - per-template execution mode selection,
+  - execution runtime summary rendering in timeline table.
+
+### Fixed
+
+- None yet.
+
 ## [0.1.6] - 2026-03-08
 
 ### Added

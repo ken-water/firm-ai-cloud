@@ -275,11 +275,8 @@ async fn get_change_calendar(
     State(state): State<AppState>,
     Query(query): Query<ChangeCalendarQuery>,
 ) -> AppResult<Json<ChangeCalendarResponse>> {
-    let (start_date, end_date) = parse_change_calendar_range(
-        query.start_date,
-        query.end_date,
-        query.days,
-    )?;
+    let (start_date, end_date) =
+        parse_change_calendar_range(query.start_date, query.end_date, query.days)?;
 
     let items = load_change_calendar_events(&state, start_date, end_date).await?;
 
@@ -348,11 +345,8 @@ async fn list_change_calendar_reservations(
     State(state): State<AppState>,
     Query(query): Query<ChangeCalendarReservationListQuery>,
 ) -> AppResult<Json<ChangeCalendarReservationListResponse>> {
-    let (start_date, end_date) = parse_change_calendar_range(
-        query.start_date,
-        query.end_date,
-        query.days,
-    )?;
+    let (start_date, end_date) =
+        parse_change_calendar_range(query.start_date, query.end_date, query.days)?;
     let status = normalize_optional_status(query.status)?;
     let site = normalize_optional_scope(query.site);
     let department = normalize_optional_scope(query.department);
@@ -386,7 +380,8 @@ async fn list_change_calendar_reservations(
         .push(" ORDER BY start_at ASC, id ASC LIMIT ")
         .push_bind(limit);
 
-    let items: Vec<ChangeCalendarReservationRecord> = builder.build_query_as().fetch_all(&state.db).await?;
+    let items: Vec<ChangeCalendarReservationRecord> =
+        builder.build_query_as().fetch_all(&state.db).await?;
 
     Ok(Json(ChangeCalendarReservationListResponse {
         generated_at: Utc::now(),
@@ -505,7 +500,8 @@ async fn get_change_calendar_slot_recommendations(
 ) -> AppResult<Json<ChangeCalendarSlotRecommendationResponse>> {
     let operation_kind = trim_optional(query.operation_kind, MAX_OPERATION_KIND_LEN)
         .unwrap_or_else(|| "playbook.execute".to_string());
-    let risk_level = normalize_risk_level(query.risk_level.unwrap_or_else(|| "medium".to_string()))?;
+    let risk_level =
+        normalize_risk_level(query.risk_level.unwrap_or_else(|| "medium".to_string()))?;
     let duration_minutes = query
         .duration_minutes
         .unwrap_or(60)
@@ -600,10 +596,7 @@ async fn get_change_calendar_slot_recommendations(
         operation_kind,
         risk_level,
         duration_minutes,
-        scope: ChangeCalendarRecommendationScope {
-            site,
-            department,
-        },
+        scope: ChangeCalendarRecommendationScope { site, department },
         pending_risky_workload: workload,
         total: items.len(),
         items,
@@ -654,8 +647,9 @@ pub async fn evaluate_change_calendar_conflicts(
         conflicts.push(CalendarConflictItem {
             code: "outside_maintenance_window".to_string(),
             title: "Outside maintenance window".to_string(),
-            detail: "Proposed slot is outside configured maintenance windows for high-risk operation."
-                .to_string(),
+            detail:
+                "Proposed slot is outside configured maintenance windows for high-risk operation."
+                    .to_string(),
             severity: "high".to_string(),
             source: "workflow_playbook_execution_policies".to_string(),
         });
@@ -738,12 +732,7 @@ async fn load_change_calendar_events(
                 continue;
             };
             items.push(ChangeCalendarEvent {
-                event_key: format!(
-                    "maintenance:{}:{}:{}",
-                    cursor,
-                    window.day_of_week,
-                    index
-                ),
+                event_key: format!("maintenance:{}:{}:{}", cursor, window.day_of_week, index),
                 event_type: "maintenance_window".to_string(),
                 severity: "medium".to_string(),
                 title: window
@@ -786,8 +775,7 @@ async fn load_change_calendar_events(
     }
 
     let range_start = Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("midnight"));
-    let range_end =
-        Utc.from_utc_datetime(&end_date.and_hms_opt(23, 59, 59).expect("end-of-day"));
+    let range_end = Utc.from_utc_datetime(&end_date.and_hms_opt(23, 59, 59).expect("end-of-day"));
 
     let workflow_approvals: Vec<PendingWorkflowApprovalRow> = sqlx::query_as(
         "SELECT id, title, created_at
@@ -1162,7 +1150,9 @@ fn parse_change_calendar_range(
         NaiveDate::parse_from_str(raw.trim(), "%Y-%m-%d")
             .map_err(|_| AppError::Validation("end_date must use YYYY-MM-DD format".to_string()))?
     } else {
-        let days = days_raw.unwrap_or(DEFAULT_RANGE_DAYS).clamp(1, MAX_RANGE_DAYS);
+        let days = days_raw
+            .unwrap_or(DEFAULT_RANGE_DAYS)
+            .clamp(1, MAX_RANGE_DAYS);
         start_date + Duration::days((days - 1) as i64)
     };
 
@@ -1288,12 +1278,9 @@ mod tests {
 
     #[test]
     fn parses_change_calendar_range_with_days_fallback() {
-        let (start, end) = parse_change_calendar_range(
-            Some("2026-03-01".to_string()),
-            None,
-            Some(3),
-        )
-        .expect("range");
+        let (start, end) =
+            parse_change_calendar_range(Some("2026-03-01".to_string()), None, Some(3))
+                .expect("range");
         assert_eq!(start.to_string(), "2026-03-01");
         assert_eq!(end.to_string(), "2026-03-03");
     }

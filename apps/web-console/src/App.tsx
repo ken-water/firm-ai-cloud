@@ -1253,6 +1253,7 @@ type RunbookTemplateCatalogItem = {
   name: string;
   description: string;
   category: string;
+  execution_modes: ("simulate" | "live")[];
   params: RunbookTemplateParamField[];
   preflight: RunbookTemplateChecklistItem[];
   steps: RunbookTemplateStepItem[];
@@ -1289,6 +1290,7 @@ type RunbookTemplateExecutionItem = {
   template_key: string;
   template_name: string;
   status: "succeeded" | "failed";
+  execution_mode: "simulate" | "live";
   actor: string;
   params: Record<string, unknown>;
   preflight: {
@@ -1297,6 +1299,7 @@ type RunbookTemplateExecutionItem = {
   };
   timeline: RunbookExecutionTimelineEvent[];
   evidence: RunbookExecutionEvidenceRecord;
+  runtime_summary: Record<string, unknown>;
   remediation_hints: string[];
   note: string | null;
   created_at: string;
@@ -1315,6 +1318,31 @@ type RunbookTemplateExecuteResponse = {
   generated_at: string;
   template: RunbookTemplateCatalogItem;
   execution: RunbookTemplateExecutionItem;
+};
+
+type RunbookExecutionPolicyItem = {
+  policy_key: string;
+  mode: "simulate_only" | "hybrid_live";
+  live_templates: string[];
+  max_live_step_timeout_seconds: number;
+  allow_simulate_failure: boolean;
+  note: string | null;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type RunbookExecutionPolicyResponse = {
+  generated_at: string;
+  policy: RunbookExecutionPolicyItem;
+};
+
+type RunbookExecutionPolicyDraft = {
+  mode: "simulate_only" | "hybrid_live";
+  live_templates_csv: string;
+  max_live_step_timeout_seconds: string;
+  allow_simulate_failure: boolean;
+  note: string;
 };
 
 type RunbookEvidenceDraft = {
@@ -2158,6 +2186,14 @@ const defaultRunbookEvidenceDraft: RunbookEvidenceDraft = {
   note: ""
 };
 
+const defaultRunbookExecutionPolicyDraft: RunbookExecutionPolicyDraft = {
+  mode: "simulate_only",
+  live_templates_csv: "",
+  max_live_step_timeout_seconds: "10",
+  allow_simulate_failure: true,
+  note: ""
+};
+
 const defaultWorkflowStepForm: NewWorkflowTemplateStepForm = {
   id: "",
   name: "",
@@ -2258,6 +2294,16 @@ function buildRunbookPreflightDraft(template: RunbookTemplateCatalogItem | null)
     draft[item.key] = false;
   }
   return draft;
+}
+
+function buildRunbookExecutionPolicyDraft(policy: RunbookExecutionPolicyItem): RunbookExecutionPolicyDraft {
+  return {
+    mode: policy.mode,
+    live_templates_csv: (policy.live_templates ?? []).join(","),
+    max_live_step_timeout_seconds: String(policy.max_live_step_timeout_seconds),
+    allow_simulate_failure: policy.allow_simulate_failure,
+    note: policy.note ?? ""
+  };
 }
 
 export function App() {
@@ -2412,7 +2458,11 @@ export function App() {
   const [selectedIncidentAlertId, setSelectedIncidentAlertId] = useState("");
   const [runbookTemplates, setRunbookTemplates] = useState<RunbookTemplateCatalogItem[]>([]);
   const [runbookExecutions, setRunbookExecutions] = useState<RunbookTemplateExecutionItem[]>([]);
+  const [runbookExecutionPolicy, setRunbookExecutionPolicy] = useState<RunbookExecutionPolicyItem | null>(null);
+  const [runbookExecutionPolicyDraft, setRunbookExecutionPolicyDraft] =
+    useState<RunbookExecutionPolicyDraft>(defaultRunbookExecutionPolicyDraft);
   const [selectedRunbookTemplateKey, setSelectedRunbookTemplateKey] = useState("");
+  const [runbookExecutionMode, setRunbookExecutionMode] = useState<"simulate" | "live">("simulate");
   const [runbookParamDraft, setRunbookParamDraft] = useState<Record<string, string>>({});
   const [runbookPreflightDraft, setRunbookPreflightDraft] = useState<Record<string, boolean>>({});
   const [runbookEvidenceDraft, setRunbookEvidenceDraft] = useState<RunbookEvidenceDraft>(defaultRunbookEvidenceDraft);
@@ -2465,7 +2515,9 @@ export function App() {
   const [loadingIncidentCommandDetail, setLoadingIncidentCommandDetail] = useState(false);
   const [loadingRunbookTemplates, setLoadingRunbookTemplates] = useState(false);
   const [loadingRunbookExecutions, setLoadingRunbookExecutions] = useState(false);
+  const [loadingRunbookExecutionPolicy, setLoadingRunbookExecutionPolicy] = useState(false);
   const [executingRunbookTemplate, setExecutingRunbookTemplate] = useState(false);
+  const [savingRunbookExecutionPolicy, setSavingRunbookExecutionPolicy] = useState(false);
   const [savingIncidentCommand, setSavingIncidentCommand] = useState(false);
   const [loadingBackupPolicies, setLoadingBackupPolicies] = useState(false);
   const [loadingBackupPolicyRuns, setLoadingBackupPolicyRuns] = useState(false);
@@ -3581,6 +3633,85 @@ export function App() {
     }
   }, [canWriteCmdb, incidentCommandDraft, loadIncidentCommands, t]);
 
+  const loadRunbookExecutionPolicy = useCallback(async () => {
+    setLoadingRunbookExecutionPolicy(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/execution-policy`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookExecutionPolicyResponse = await response.json();
+      setRunbookExecutionPolicy(payload.policy);
+      setRunbookExecutionPolicyDraft(buildRunbookExecutionPolicyDraft(payload.policy));
+      return payload.policy;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setRunbookExecutionPolicy(null);
+      setRunbookExecutionPolicyDraft(defaultRunbookExecutionPolicyDraft);
+      return null;
+    } finally {
+      setLoadingRunbookExecutionPolicy(false);
+    }
+  }, []);
+
+  const saveRunbookExecutionPolicy = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const maxTimeout = Number.parseInt(runbookExecutionPolicyDraft.max_live_step_timeout_seconds.trim(), 10);
+    if (!Number.isFinite(maxTimeout) || maxTimeout < 1 || maxTimeout > 120) {
+      setError("Max live step timeout must be an integer between 1 and 120.");
+      return null;
+    }
+
+    const liveTemplates = runbookExecutionPolicyDraft.live_templates_csv
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+    if (runbookExecutionPolicyDraft.mode === "hybrid_live" && liveTemplates.length === 0) {
+      setError("At least one live template is required when mode is hybrid_live.");
+      return null;
+    }
+
+    setSavingRunbookExecutionPolicy(true);
+    setRunbookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/execution-policy`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          mode: runbookExecutionPolicyDraft.mode,
+          live_templates: liveTemplates,
+          max_live_step_timeout_seconds: maxTimeout,
+          allow_simulate_failure: runbookExecutionPolicyDraft.allow_simulate_failure,
+          note: trimToNull(runbookExecutionPolicyDraft.note)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookExecutionPolicyResponse = await response.json();
+      setRunbookExecutionPolicy(payload.policy);
+      setRunbookExecutionPolicyDraft(buildRunbookExecutionPolicyDraft(payload.policy));
+      setRunbookNotice(
+        `Runbook execution policy updated: mode=${payload.policy.mode}, live_templates=${payload.policy.live_templates.length}.`
+      );
+      return payload.policy;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setSavingRunbookExecutionPolicy(false);
+    }
+  }, [canWriteCmdb, runbookExecutionPolicyDraft, t]);
+
   const loadRunbookTemplates = useCallback(async () => {
     setLoadingRunbookTemplates(true);
     setError(null);
@@ -3664,6 +3795,17 @@ export function App() {
       setError("Runbook template is required.");
       return null;
     }
+    const supportedModes = (template.execution_modes ?? []).length > 0
+      ? template.execution_modes
+      : ["simulate"];
+    if (!supportedModes.includes(runbookExecutionMode)) {
+      setError(`Runbook execution mode '${runbookExecutionMode}' is not supported by template '${template.key}'.`);
+      return null;
+    }
+    if (runbookExecutionMode === "live" && runbookExecutionPolicy?.mode !== "hybrid_live") {
+      setError("Live execution is disabled by runbook execution policy.");
+      return null;
+    }
 
     const paramsPayload: Record<string, unknown> = {};
     for (const field of template.params ?? []) {
@@ -3716,6 +3858,7 @@ export function App() {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
+            execution_mode: runbookExecutionMode,
             params: paramsPayload,
             preflight_confirmations: preflightConfirmations,
             evidence: {
@@ -3733,8 +3876,9 @@ export function App() {
       const payload: RunbookTemplateExecuteResponse = await response.json();
       await loadRunbookTemplateExecutions();
       setRunbookPreflightDraft(buildRunbookPreflightDraft(template));
+      const durationMs = Number(payload.execution.runtime_summary?.duration_ms ?? 0);
       setRunbookNotice(
-        `Runbook '${payload.template.name}' execution #${payload.execution.id} finished with status '${payload.execution.status}'.`
+        `Runbook '${payload.template.name}' execution #${payload.execution.id} finished with status '${payload.execution.status}' in mode '${payload.execution.execution_mode}'${Number.isFinite(durationMs) && durationMs > 0 ? ` (duration=${durationMs}ms)` : ""}.`
       );
       return payload;
     } catch (err) {
@@ -3750,6 +3894,8 @@ export function App() {
     runbookEvidenceDraft.note,
     runbookEvidenceDraft.summary,
     runbookEvidenceDraft.ticket_ref,
+    runbookExecutionMode,
+    runbookExecutionPolicy?.mode,
     runbookParamDraft,
     runbookPreflightDraft,
     runbookTemplates,
@@ -3762,6 +3908,11 @@ export function App() {
     if (!template) {
       return;
     }
+
+    const supportedModes = (template.execution_modes ?? []).length > 0
+      ? template.execution_modes
+      : ["simulate"];
+    setRunbookExecutionMode((prev) => (supportedModes.includes(prev) ? prev : "simulate"));
 
     setRunbookParamDraft((prev) => {
       const next = buildRunbookParamDraft(template);
@@ -4821,6 +4972,7 @@ export function App() {
       checklist,
       incidents,
       runbooks,
+      runbookPolicy,
       runbookExecutions,
       policies,
       runs,
@@ -4838,6 +4990,7 @@ export function App() {
       loadOpsChecklist(),
       loadIncidentCommands(),
       loadRunbookTemplates(),
+      loadRunbookExecutionPolicy(),
       loadRunbookTemplateExecutions(),
       loadBackupPolicies(),
       loadBackupPolicyRuns(),
@@ -4856,6 +5009,7 @@ export function App() {
       checklist,
       incidents,
       runbooks,
+      runbookPolicy,
       runbookExecutions,
       policies,
       runs,
@@ -4871,6 +5025,7 @@ export function App() {
   }, [
     loadBackupEvidenceCompliancePolicy,
     loadBackupEvidenceComplianceScorecard,
+    loadRunbookExecutionPolicy,
     loadRunbookTemplateExecutions,
     loadRunbookTemplates,
     loadBackupPolicies,
@@ -9760,6 +9915,9 @@ export function App() {
     nextBestActions,
     runbookTemplates,
     runbookExecutions,
+    runbookExecutionPolicy,
+    runbookExecutionPolicyDraft,
+    runbookExecutionMode,
     selectedRunbookTemplateKey,
     runbookParamDraft,
     runbookPreflightDraft,
@@ -9782,6 +9940,7 @@ export function App() {
     handoverDigestShiftDate,
     loadBackupPolicies,
     loadRunbookTemplates,
+    loadRunbookExecutionPolicy,
     loadRunbookTemplateExecutions,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
@@ -9808,6 +9967,7 @@ export function App() {
     runBackupPolicy,
     runBackupSchedulerTick,
     executeRunbookTemplate,
+    saveRunbookExecutionPolicy,
     closeBackupRestoreEvidence,
     loadingDailyCockpit,
     loadingNextBestActions,
@@ -9816,7 +9976,9 @@ export function App() {
     loadingIncidentCommands,
     loadingRunbookTemplates,
     loadingRunbookExecutions,
+    loadingRunbookExecutionPolicy,
     executingRunbookTemplate,
+    savingRunbookExecutionPolicy,
     loadingHandoverDigest,
     loadingHandoverReminders,
     loadingBackupPolicies,
@@ -9874,6 +10036,8 @@ export function App() {
     setHandoverDigestShiftDate,
     setIncidentCommandDraft,
     setSelectedRunbookTemplateKey,
+    setRunbookExecutionMode,
+    setRunbookExecutionPolicyDraft,
     setRunbookParamDraft,
     setRunbookPreflightDraft,
     setRunbookEvidenceDraft,

@@ -56,6 +56,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     nextBestActions,
     runbookTemplates,
     runbookExecutions,
+    runbookExecutionPolicy,
+    runbookExecutionPolicyDraft,
+    runbookExecutionMode,
     selectedRunbookTemplateKey,
     runbookParamDraft,
     runbookPreflightDraft,
@@ -80,6 +83,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     functionWorkspace,
     loadBackupPolicies,
     loadRunbookTemplates,
+    loadRunbookExecutionPolicy,
     loadRunbookTemplateExecutions,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
@@ -102,6 +106,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     runBackupPolicy,
     runBackupSchedulerTick,
     executeRunbookTemplate,
+    saveRunbookExecutionPolicy,
     closeBackupRestoreEvidence,
     runningBackupPolicyActionId,
     loadingDailyCockpit,
@@ -111,7 +116,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingIncidentCommands,
     loadingRunbookTemplates,
     loadingRunbookExecutions,
+    loadingRunbookExecutionPolicy,
     executingRunbookTemplate,
+    savingRunbookExecutionPolicy,
     loadingHandoverDigest,
     loadingHandoverReminders,
     loadingBackupPolicies,
@@ -167,6 +174,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setHandoverDigestShiftDate,
     setIncidentCommandDraft,
     setSelectedRunbookTemplateKey,
+    setRunbookExecutionMode,
+    setRunbookExecutionPolicyDraft,
     setRunbookParamDraft,
     setRunbookPreflightDraft,
     setRunbookEvidenceDraft,
@@ -745,6 +754,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <button onClick={() => void loadRunbookTemplates()} disabled={loadingRunbookTemplates}>
                   {loadingRunbookTemplates ? t("cmdb.actions.loading") : "Refresh templates"}
                 </button>
+                <button onClick={() => void loadRunbookExecutionPolicy()} disabled={loadingRunbookExecutionPolicy}>
+                  {loadingRunbookExecutionPolicy ? t("cmdb.actions.loading") : "Refresh policy"}
+                </button>
                 <button onClick={() => void loadRunbookTemplateExecutions()} disabled={loadingRunbookExecutions}>
                   {loadingRunbookExecutions ? t("cmdb.actions.loading") : "Refresh executions"}
                 </button>
@@ -755,6 +767,86 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
             <p className="section-note">
               Use guided runbook templates with required preflight checklist and evidence closure.
             </p>
+            <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+              <p className="section-note" style={{ marginTop: 0, marginBottom: "0.35rem" }}>
+                execution policy={runbookExecutionPolicy?.mode ?? "not-loaded"}
+                {" | "}live_templates={(runbookExecutionPolicy?.live_templates ?? []).length}
+                {" | "}updated_by={runbookExecutionPolicy?.updated_by ?? "-"}
+              </p>
+              <div className="form-grid">
+                <label className="control-field">
+                  <span>Policy mode</span>
+                  <select
+                    value={runbookExecutionPolicyDraft.mode}
+                    onChange={(event) => setRunbookExecutionPolicyDraft((prev: any) => ({
+                      ...prev,
+                      mode: event.target.value
+                    }))}
+                    disabled={!canWriteCmdb}
+                  >
+                    <option value="simulate_only">simulate_only</option>
+                    <option value="hybrid_live">hybrid_live</option>
+                  </select>
+                </label>
+                <label className="control-field">
+                  <span>Live templates (csv)</span>
+                  <input
+                    value={runbookExecutionPolicyDraft.live_templates_csv}
+                    onChange={(event) => setRunbookExecutionPolicyDraft((prev: any) => ({
+                      ...prev,
+                      live_templates_csv: event.target.value
+                    }))}
+                    disabled={!canWriteCmdb}
+                    placeholder="dependency-check"
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Max live step timeout (seconds)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    value={runbookExecutionPolicyDraft.max_live_step_timeout_seconds}
+                    onChange={(event) => setRunbookExecutionPolicyDraft((prev: any) => ({
+                      ...prev,
+                      max_live_step_timeout_seconds: event.target.value
+                    }))}
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Allow simulate_failure_step</span>
+                  <select
+                    value={runbookExecutionPolicyDraft.allow_simulate_failure ? "true" : "false"}
+                    onChange={(event) => setRunbookExecutionPolicyDraft((prev: any) => ({
+                      ...prev,
+                      allow_simulate_failure: event.target.value === "true"
+                    }))}
+                    disabled={!canWriteCmdb}
+                  >
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </label>
+                <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                  <span>Policy note</span>
+                  <input
+                    value={runbookExecutionPolicyDraft.note}
+                    onChange={(event) => setRunbookExecutionPolicyDraft((prev: any) => ({
+                      ...prev,
+                      note: event.target.value
+                    }))}
+                    disabled={!canWriteCmdb}
+                    placeholder="policy change context"
+                  />
+                </label>
+              </div>
+              <div className="toolbar-row" style={{ marginTop: "0.45rem" }}>
+                <button onClick={() => void saveRunbookExecutionPolicy()} disabled={!canWriteCmdb || savingRunbookExecutionPolicy}>
+                  {savingRunbookExecutionPolicy ? t("cmdb.actions.loading") : "Save execution policy"}
+                </button>
+              </div>
+            </div>
 
             {(runbookTemplates as any[]).length === 0 ? (
               <p>No runbook template loaded.</p>
@@ -780,6 +872,24 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   <label className="control-field">
                     <span>Category</span>
                     <input value={selectedRunbookTemplate?.category ?? "-"} readOnly />
+                  </label>
+                  <label className="control-field">
+                    <span>Supported modes</span>
+                    <input value={(selectedRunbookTemplate?.execution_modes ?? []).join(", ") || "simulate"} readOnly />
+                  </label>
+                  <label className="control-field">
+                    <span>Execution mode</span>
+                    <select
+                      value={runbookExecutionMode}
+                      onChange={(event) => setRunbookExecutionMode(event.target.value)}
+                      disabled={!canWriteCmdb}
+                    >
+                      {((selectedRunbookTemplate?.execution_modes ?? ["simulate"]) as string[]).map((mode: string) => (
+                        <option key={`runbook-execution-mode-${mode}`} value={mode}>
+                          {mode}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                 </div>
 
@@ -909,7 +1019,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                       <thead>
                         <tr>
                           <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Execution</th>
-                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status/Mode</th>
                           <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Remediation hints</th>
                           <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Evidence</th>
                           <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Actor/Time</th>
@@ -927,6 +1037,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                             </td>
                             <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                               {item.status}
+                              <div className="inline-note">mode={item.execution_mode ?? "simulate"}</div>
+                              <div className="inline-note">runtime={JSON.stringify(item.runtime_summary ?? {})}</div>
                               <div className="inline-note">note={item.note ?? "-"}</div>
                             </td>
                             <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>

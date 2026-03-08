@@ -163,12 +163,7 @@ async fn list_incident_commands(
          LEFT JOIN ops_incident_commands c ON c.alert_id = ua.id
          WHERE ua.status IN ('open', 'acknowledged')",
     );
-    append_incident_filters(
-        &mut list_builder,
-        status,
-        site,
-        department,
-    );
+    append_incident_filters(&mut list_builder, status, site, department);
     list_builder
         .push(
             " ORDER BY
@@ -185,7 +180,8 @@ async fn list_incident_commands(
         .push(" OFFSET ")
         .push_bind(offset as i64);
 
-    let items: Vec<IncidentCommandListItem> = list_builder.build_query_as().fetch_all(&state.db).await?;
+    let items: Vec<IncidentCommandListItem> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
 
     Ok(Json(ListIncidentCommandsResponse {
         generated_at: Utc::now(),
@@ -211,9 +207,7 @@ fn append_incident_filters(
         builder.push(" AND ua.site = ").push_bind(site);
     }
     if let Some(department) = department {
-        builder
-            .push(" AND ua.department = ")
-            .push_bind(department);
+        builder.push(" AND ua.department = ").push_bind(department);
     }
 }
 
@@ -406,7 +400,10 @@ async fn ensure_alert_exists(db: &sqlx::PgPool, alert_id: i64) -> AppResult<()> 
     Ok(())
 }
 
-async fn load_incident_item(db: &sqlx::PgPool, alert_id: i64) -> AppResult<IncidentCommandListItem> {
+async fn load_incident_item(
+    db: &sqlx::PgPool,
+    alert_id: i64,
+) -> AppResult<IncidentCommandListItem> {
     let item: Option<IncidentCommandListItem> = sqlx::query_as(
         "SELECT ua.id AS alert_id,
                 ua.alert_source,
@@ -434,7 +431,10 @@ async fn load_incident_item(db: &sqlx::PgPool, alert_id: i64) -> AppResult<Incid
     item.ok_or_else(|| AppError::NotFound(format!("alert {alert_id} not found")))
 }
 
-async fn load_incident_timeline(db: &sqlx::PgPool, alert_id: i64) -> AppResult<Vec<IncidentCommandEvent>> {
+async fn load_incident_timeline(
+    db: &sqlx::PgPool,
+    alert_id: i64,
+) -> AppResult<Vec<IncidentCommandEvent>> {
     let rows: Vec<IncidentCommandEvent> = sqlx::query_as(
         "SELECT id, alert_id, event_type, from_status, to_status, command_owner,
                 eta_at, blocker, summary, note, actor, created_at
@@ -536,10 +536,16 @@ fn validate_incident_transition(current_status: &str, next_status: &str) -> AppR
             INCIDENT_STATUS_BLOCKED | INCIDENT_STATUS_MITIGATED | INCIDENT_STATUS_POSTMORTEM
         ),
         INCIDENT_STATUS_BLOCKED => {
-            matches!(next_status, INCIDENT_STATUS_IN_PROGRESS | INCIDENT_STATUS_MITIGATED)
+            matches!(
+                next_status,
+                INCIDENT_STATUS_IN_PROGRESS | INCIDENT_STATUS_MITIGATED
+            )
         }
         INCIDENT_STATUS_MITIGATED => {
-            matches!(next_status, INCIDENT_STATUS_POSTMORTEM | INCIDENT_STATUS_IN_PROGRESS)
+            matches!(
+                next_status,
+                INCIDENT_STATUS_POSTMORTEM | INCIDENT_STATUS_IN_PROGRESS
+            )
         }
         INCIDENT_STATUS_POSTMORTEM => next_status == INCIDENT_STATUS_IN_PROGRESS,
         _ => false,
@@ -562,7 +568,11 @@ fn validate_incident_required_fields(
         return Err(AppError::Validation("owner is required".to_string()));
     }
 
-    if matches!(status, INCIDENT_STATUS_IN_PROGRESS | INCIDENT_STATUS_BLOCKED) && eta_at.is_none() {
+    if matches!(
+        status,
+        INCIDENT_STATUS_IN_PROGRESS | INCIDENT_STATUS_BLOCKED
+    ) && eta_at.is_none()
+    {
         return Err(AppError::Validation(
             "eta_at is required when status is in_progress or blocked".to_string(),
         ));
@@ -612,6 +622,10 @@ mod tests {
             .expect("present");
         assert_eq!(parsed.to_rfc3339(), "2026-03-07T10:20:30+00:00");
         assert!(parse_optional_eta(Some("not-time".to_string())).is_err());
-        assert!(parse_optional_eta(Some("  ".to_string())).expect("blank").is_none());
+        assert!(
+            parse_optional_eta(Some("  ".to_string()))
+                .expect("blank")
+                .is_none()
+        );
     }
 }

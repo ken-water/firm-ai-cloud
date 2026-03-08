@@ -703,13 +703,7 @@ async fn list_playbook_approval_requests(
          FROM workflow_playbook_approval_requests a
          WHERE 1=1",
     );
-    append_approval_filters(
-        &mut list_builder,
-        playbook_key,
-        status,
-        requester,
-        approver,
-    );
+    append_approval_filters(&mut list_builder, playbook_key, status, requester, approver);
     list_builder
         .push(" ORDER BY a.created_at DESC, a.id DESC LIMIT ")
         .push_bind(limit)
@@ -793,7 +787,9 @@ async fn request_playbook_approval(
     }
 
     let now = Utc::now();
-    let dry_run_expires_at = dry_run.expires_at.unwrap_or(now + Duration::minutes(APPROVAL_TTL_MINUTES));
+    let dry_run_expires_at = dry_run
+        .expires_at
+        .unwrap_or(now + Duration::minutes(APPROVAL_TTL_MINUTES));
     if dry_run_expires_at <= now {
         return Err(AppError::Validation(
             "dry-run has expired; create a new dry-run before requesting approval".to_string(),
@@ -809,7 +805,10 @@ async fn request_playbook_approval(
     }
 
     let note = trim_optional(payload.note, MAX_APPROVAL_NOTE_LEN);
-    let expires_at = std::cmp::min(dry_run_expires_at, now + Duration::minutes(APPROVAL_TTL_MINUTES));
+    let expires_at = std::cmp::min(
+        dry_run_expires_at,
+        now + Duration::minutes(APPROVAL_TTL_MINUTES),
+    );
     let item: PlaybookApprovalRequestRecord = sqlx::query_as(
         "INSERT INTO workflow_playbook_approval_requests (
             dry_run_execution_id, playbook_id, playbook_key, requester, request_note, status, expires_at
@@ -1898,7 +1897,9 @@ fn normalize_timezone_name(value: String) -> AppResult<String> {
 
 fn parse_maintenance_windows_value(value: Value) -> AppResult<Vec<PlaybookMaintenanceWindow>> {
     let windows: Vec<PlaybookMaintenanceWindow> = serde_json::from_value(value).map_err(|err| {
-        AppError::Validation(format!("maintenance_windows is invalid JSON structure: {err}"))
+        AppError::Validation(format!(
+            "maintenance_windows is invalid JSON structure: {err}"
+        ))
     })?;
     normalize_maintenance_windows(windows)
 }
@@ -1967,11 +1968,7 @@ fn normalize_hhmm(value: &str, field: &str) -> AppResult<String> {
             "maintenance window {field} must use HH:MM 24h format"
         ))
     })?;
-    Ok(format!(
-        "{:02}:{:02}",
-        parsed.hour(),
-        parsed.minute()
-    ))
+    Ok(format!("{:02}:{:02}", parsed.hour(), parsed.minute()))
 }
 
 fn parse_hhmm(value: &str) -> Result<NaiveTime, chrono::ParseError> {
@@ -2028,7 +2025,10 @@ fn is_in_maintenance_window(policy: &PlaybookExecutionPolicy, now_utc: DateTime<
     })
 }
 
-fn next_allowed_at_utc(policy: &PlaybookExecutionPolicy, now_utc: DateTime<Utc>) -> Option<DateTime<Utc>> {
+fn next_allowed_at_utc(
+    policy: &PlaybookExecutionPolicy,
+    now_utc: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
     if policy.maintenance_windows.is_empty() {
         return None;
     }
@@ -3338,10 +3338,12 @@ mod tests {
             .expect("valid datetime");
         let runtime = evaluate_policy_runtime(&policy, now);
         assert!(runtime.blocked_reason.is_some());
-        assert!(runtime
-            .blocked_reason
-            .expect("blocked reason")
-            .contains("change-freeze"));
+        assert!(
+            runtime
+                .blocked_reason
+                .expect("blocked reason")
+                .contains("change-freeze")
+        );
     }
 
     #[test]
@@ -3382,7 +3384,8 @@ mod tests {
 
     #[test]
     fn validates_required_approval_token() {
-        let token = required_trimmed_approval_token(Some("  token-1  ".to_string())).expect("token");
+        let token =
+            required_trimmed_approval_token(Some("  token-1  ".to_string())).expect("token");
         assert_eq!(token, "token-1");
         assert!(required_trimmed_approval_token(Some("".to_string())).is_err());
         assert!(required_trimmed_approval_token(Some("x".repeat(129))).is_err());

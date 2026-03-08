@@ -283,8 +283,9 @@ async fn export_weekly_digest(
         .to_ascii_lowercase();
 
     let content = match format.as_str() {
-        "json" => serde_json::to_string_pretty(&digest)
-            .map_err(|err| AppError::Validation(format!("failed to serialize digest json: {err}")))?,
+        "json" => serde_json::to_string_pretty(&digest).map_err(|err| {
+            AppError::Validation(format!("failed to serialize digest json: {err}"))
+        })?,
         "csv" => digest_to_csv(&digest),
         _ => {
             return Err(AppError::Validation(
@@ -383,9 +384,7 @@ async fn export_handover_reminders(
 
     let content = match format.as_str() {
         "json" => serde_json::to_string_pretty(&reminder).map_err(|err| {
-            AppError::Validation(format!(
-                "failed to serialize handover reminder json: {err}"
-            ))
+            AppError::Validation(format!("failed to serialize handover reminder json: {err}"))
         })?,
         "csv" => handover_reminder_to_csv(&reminder),
         _ => {
@@ -619,13 +618,19 @@ async fn build_weekly_digest(
 
     let mut top_risks = Vec::new();
     if open_critical_alerts > 0 {
-        top_risks.push(format!("{open_critical_alerts} critical alerts remain open/acknowledged."));
+        top_risks.push(format!(
+            "{open_critical_alerts} critical alerts remain open/acknowledged."
+        ));
     }
     if backup_failed_policies > 0 {
-        top_risks.push(format!("{backup_failed_policies} backup policies report latest failure."));
+        top_risks.push(format!(
+            "{backup_failed_policies} backup policies report latest failure."
+        ));
     }
     if drill_failed_policies > 0 {
-        top_risks.push(format!("{drill_failed_policies} drill policies report latest failure."));
+        top_risks.push(format!(
+            "{drill_failed_policies} drill policies report latest failure."
+        ));
     }
     if continuity_runs_missing_evidence > 0 {
         top_risks.push(format!(
@@ -633,7 +638,9 @@ async fn build_weekly_digest(
         ));
     }
     if locked_local_accounts > 0 {
-        top_risks.push(format!("{locked_local_accounts} local accounts are currently locked."));
+        top_risks.push(format!(
+            "{locked_local_accounts} local accounts are currently locked."
+        ));
     }
     if top_risks.is_empty() {
         top_risks.push("No critical blocker detected in weekly digest snapshot.".to_string());
@@ -667,7 +674,9 @@ async fn build_weekly_digest(
 
     let mut recommended_actions = Vec::new();
     if open_critical_alerts > 0 {
-        recommended_actions.push("Escalate critical alerts and confirm ownership in ticket queue today.".to_string());
+        recommended_actions.push(
+            "Escalate critical alerts and confirm ownership in ticket queue today.".to_string(),
+        );
     }
     if backup_failed_policies > 0 || drill_failed_policies > 0 {
         recommended_actions.push(
@@ -685,12 +694,13 @@ async fn build_weekly_digest(
         ));
     }
     if workflow_approval_backlog > 0 || playbook_approval_backlog > 0 {
-        recommended_actions.push(
-            "Clear approval queue to reduce high-risk remediation lead time.".to_string(),
-        );
+        recommended_actions
+            .push("Clear approval queue to reduce high-risk remediation lead time.".to_string());
     }
     if recommended_actions.is_empty() {
-        recommended_actions.push("Keep current cadence and rerun digest next week for trend comparison.".to_string());
+        recommended_actions.push(
+            "Keep current cadence and rerun digest next week for trend comparison.".to_string(),
+        );
     }
 
     let digest_key = format!("weekly-{}", week_start.format("%Y-%m-%d"));
@@ -876,7 +886,10 @@ async fn build_handover_digest(
                 row.run_type, row.id
             )
         } else {
-            format!("Review {} run #{} output and handoff remediation plan.", row.run_type, row.id)
+            format!(
+                "Review {} run #{} output and handoff remediation plan.",
+                row.run_type, row.id
+            )
         };
         let (status, next_owner, next_action, note) =
             resolve_handover_item_state(updates.get(&item_key), owner.clone(), default_action);
@@ -1020,7 +1033,9 @@ async fn build_handover_digest(
         .iter()
         .map(|item| item.observed_at)
         .max()
-        .unwrap_or_else(|| Utc.from_utc_datetime(&shift_date.and_hms_opt(0, 0, 0).expect("midnight")));
+        .unwrap_or_else(|| {
+            Utc.from_utc_datetime(&shift_date.and_hms_opt(0, 0, 0).expect("midnight"))
+        });
 
     Ok(HandoverDigestResponse {
         generated_at,
@@ -1213,7 +1228,10 @@ fn escape_csv_cell(value: &str) -> String {
 fn handover_digest_to_csv(digest: &HandoverDigestResponse) -> String {
     let mut lines = vec![
         "section,field,value".to_string(),
-        format!("meta,digest_key,{}", escape_csv_cell(digest.digest_key.as_str())),
+        format!(
+            "meta,digest_key,{}",
+            escape_csv_cell(digest.digest_key.as_str())
+        ),
         format!(
             "meta,generated_at,{}",
             escape_csv_cell(digest.generated_at.to_rfc3339().as_str())
@@ -1347,7 +1365,10 @@ fn digest_to_csv(digest: &WeeklyDigestResponse) -> String {
         "suppressed_alert_threads,{}",
         digest.metrics.suppressed_alert_threads
     ));
-    lines.push(format!("stale_open_tickets,{}", digest.metrics.stale_open_tickets));
+    lines.push(format!(
+        "stale_open_tickets,{}",
+        digest.metrics.stale_open_tickets
+    ));
     lines.push(format!(
         "workflow_approval_backlog,{}",
         digest.metrics.workflow_approval_backlog
@@ -1401,9 +1422,9 @@ mod tests {
     use chrono::{Datelike, Utc};
 
     use super::{
-        default_week_start, digest_to_csv, handover_digest_to_csv, parse_shift_date,
         HandoverCarryoverItem, HandoverDigestMetrics, HandoverDigestResponse, WeeklyDigestMetrics,
-        WeeklyDigestResponse,
+        WeeklyDigestResponse, default_week_start, digest_to_csv, handover_digest_to_csv,
+        parse_shift_date,
     };
 
     #[test]
