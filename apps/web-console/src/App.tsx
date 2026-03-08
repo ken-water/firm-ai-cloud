@@ -1379,6 +1379,73 @@ type SetupTemplateApplyResponse = {
   rollback_hints: string[];
 };
 
+type SetupProfileCatalogItem = {
+  key: string;
+  name: string;
+  description: string;
+  target_scale: string;
+  defaults: Record<string, unknown>;
+};
+
+type SetupProfileCatalogResponse = {
+  items: SetupProfileCatalogItem[];
+  total: number;
+};
+
+type SetupProfileChangeSummary = {
+  domain: string;
+  before: string;
+  after: string;
+  changed: boolean;
+};
+
+type SetupProfilePreviewResponse = {
+  profile: SetupProfileCatalogItem;
+  ready: boolean;
+  summary: SetupProfileChangeSummary[];
+};
+
+type SetupProfileApplyAction = {
+  action_key: string;
+  outcome: string;
+  detail: string;
+};
+
+type SetupProfileApplyResponse = {
+  run_id: number;
+  actor: string;
+  profile_key: string;
+  status: string;
+  actions: SetupProfileApplyAction[];
+  history_hint: string;
+};
+
+type SetupProfileHistoryRecord = {
+  id: number;
+  profile_key: string;
+  profile_name: string;
+  actor: string;
+  status: string;
+  note: string | null;
+  reverted_by: string | null;
+  reverted_at: string | null;
+  created_at: string;
+};
+
+type SetupProfileHistoryResponse = {
+  items: SetupProfileHistoryRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+type SetupProfileRevertResponse = {
+  run_id: number;
+  status: string;
+  reverted_by: string;
+  reverted_at: string;
+};
+
 type AlertSeverity = "critical" | "warning" | "info";
 type AlertStatus = "open" | "acknowledged" | "closed";
 
@@ -2129,6 +2196,18 @@ export function App() {
   const [runningSetupTemplatePreview, setRunningSetupTemplatePreview] = useState(false);
   const [runningSetupTemplateApply, setRunningSetupTemplateApply] = useState(false);
   const [setupTemplateNotice, setSetupTemplateNotice] = useState<string | null>(null);
+  const [setupProfiles, setSetupProfiles] = useState<SetupProfileCatalogItem[]>([]);
+  const [loadingSetupProfiles, setLoadingSetupProfiles] = useState(false);
+  const [selectedSetupProfileKey, setSelectedSetupProfileKey] = useState("");
+  const [setupProfileNote, setSetupProfileNote] = useState("");
+  const [setupProfilePreview, setSetupProfilePreview] = useState<SetupProfilePreviewResponse | null>(null);
+  const [setupProfileApplyResult, setSetupProfileApplyResult] = useState<SetupProfileApplyResponse | null>(null);
+  const [runningSetupProfilePreview, setRunningSetupProfilePreview] = useState(false);
+  const [runningSetupProfileApply, setRunningSetupProfileApply] = useState(false);
+  const [setupProfileHistory, setSetupProfileHistory] = useState<SetupProfileHistoryRecord[]>([]);
+  const [loadingSetupProfileHistory, setLoadingSetupProfileHistory] = useState(false);
+  const [runningSetupProfileRevertId, setRunningSetupProfileRevertId] = useState<number | null>(null);
+  const [setupProfileNotice, setSetupProfileNotice] = useState<string | null>(null);
   const [setupStep, setSetupStep] = useState(0);
   const [setupCompleted, setSetupCompleted] = useState(false);
   const [setupNotice, setSetupNotice] = useState<string | null>(null);
@@ -4299,6 +4378,46 @@ export function App() {
     }
   }, []);
 
+  const loadSetupProfiles = useCallback(async () => {
+    setLoadingSetupProfiles(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/setup/profiles`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: SetupProfileCatalogResponse = await response.json();
+      setSetupProfiles(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setSetupProfiles([]);
+      return [];
+    } finally {
+      setLoadingSetupProfiles(false);
+    }
+  }, []);
+
+  const loadSetupProfileHistory = useCallback(async () => {
+    setLoadingSetupProfileHistory(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/setup/profiles/history?limit=20&offset=0`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: SetupProfileHistoryResponse = await response.json();
+      setSetupProfileHistory(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setSetupProfileHistory([]);
+      return [];
+    } finally {
+      setLoadingSetupProfileHistory(false);
+    }
+  }, []);
+
   const loadSetupPreflight = useCallback(async () => {
     setLoadingSetupPreflight(true);
     setError(null);
@@ -4342,8 +4461,21 @@ export function App() {
   const refreshSetupWizard = useCallback(async () => {
     setSetupNotice(null);
     setSetupTemplateNotice(null);
-    await Promise.all([loadSetupPreflight(), loadSetupChecklist(), loadSetupTemplates()]);
-  }, [loadSetupChecklist, loadSetupPreflight, loadSetupTemplates]);
+    setSetupProfileNotice(null);
+    await Promise.all([
+      loadSetupPreflight(),
+      loadSetupChecklist(),
+      loadSetupTemplates(),
+      loadSetupProfiles(),
+      loadSetupProfileHistory()
+    ]);
+  }, [
+    loadSetupChecklist,
+    loadSetupPreflight,
+    loadSetupProfileHistory,
+    loadSetupProfiles,
+    loadSetupTemplates
+  ]);
 
   const completeSetupWizard = useCallback(async () => {
     const blockingChecks = [...(setupPreflight?.checks ?? []), ...(setupChecklist?.checks ?? [])]
@@ -4487,6 +4619,169 @@ export function App() {
     setupTemplateNote,
     setupTemplateParamsDraft,
     setupTemplatePreview,
+    t
+  ]);
+
+  const previewSetupProfile = useCallback(async () => {
+    if (!selectedSetupProfileKey) {
+      return null;
+    }
+
+    setRunningSetupProfilePreview(true);
+    setSetupProfileNotice(null);
+    setError(null);
+    setSetupProfileApplyResult(null);
+
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/setup/profiles/${encodeURIComponent(selectedSetupProfileKey)}/preview`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            note: trimToNull(setupProfileNote)
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: SetupProfilePreviewResponse = await response.json();
+      setSetupProfilePreview(payload);
+      const changedCount = payload.summary.filter((item) => item.changed).length;
+      setSetupProfileNotice(
+        changedCount > 0
+          ? `Profile preview ready: ${changedCount} domain(s) will change.`
+          : "Profile preview ready: no effective configuration drift detected."
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setSetupProfilePreview(null);
+      return null;
+    } finally {
+      setRunningSetupProfilePreview(false);
+    }
+  }, [selectedSetupProfileKey, setupProfileNote]);
+
+  const applySetupProfile = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    if (!selectedSetupProfileKey) {
+      return null;
+    }
+
+    let preview = setupProfilePreview;
+    if (!preview || preview.profile.key !== selectedSetupProfileKey || !preview.ready) {
+      preview = await previewSetupProfile();
+      if (!preview || !preview.ready) {
+        return null;
+      }
+    }
+
+    setRunningSetupProfileApply(true);
+    setSetupProfileNotice(null);
+    setError(null);
+
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/setup/profiles/${encodeURIComponent(selectedSetupProfileKey)}/apply`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            note: trimToNull(setupProfileNote)
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: SetupProfileApplyResponse = await response.json();
+      setSetupProfileApplyResult(payload);
+      setSetupProfileNotice(`Profile '${payload.profile_key}' applied (run #${payload.run_id}).`);
+      await Promise.all([
+        loadSetupChecklist(),
+        loadSetupPreflight(),
+        loadSetupProfileHistory()
+      ]);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningSetupProfileApply(false);
+    }
+  }, [
+    canWriteCmdb,
+    loadSetupChecklist,
+    loadSetupPreflight,
+    loadSetupProfileHistory,
+    previewSetupProfile,
+    selectedSetupProfileKey,
+    setupProfileNote,
+    setupProfilePreview,
+    t
+  ]);
+
+  const revertSetupProfileRun = useCallback(async (runId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    if (!Number.isFinite(runId) || runId <= 0) {
+      return null;
+    }
+
+    setRunningSetupProfileRevertId(runId);
+    setSetupProfileNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/setup/profiles/history/${runId}/revert`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            note: trimToNull(setupProfileNote)
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: SetupProfileRevertResponse = await response.json();
+      setSetupProfileNotice(
+        `Profile run #${payload.run_id} reverted by ${payload.reverted_by} at ${new Date(payload.reverted_at).toLocaleString()}.`
+      );
+      await Promise.all([
+        loadSetupChecklist(),
+        loadSetupPreflight(),
+        loadSetupProfileHistory()
+      ]);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningSetupProfileRevertId(null);
+    }
+  }, [
+    canWriteCmdb,
+    loadSetupChecklist,
+    loadSetupPreflight,
+    loadSetupProfileHistory,
+    setupProfileNote,
     t
   ]);
 
@@ -7460,11 +7755,29 @@ export function App() {
     });
   }, [setupTemplates]);
   useEffect(() => {
+    if (setupProfiles.length === 0) {
+      setSelectedSetupProfileKey("");
+      return;
+    }
+
+    setSelectedSetupProfileKey((current) => {
+      if (setupProfiles.some((item) => item.key === current)) {
+        return current;
+      }
+      return setupProfiles[0].key;
+    });
+  }, [setupProfiles]);
+  useEffect(() => {
     setSetupTemplateParamsDraft(buildSetupTemplateDraft(selectedSetupTemplate));
     setSetupTemplatePreview(null);
     setSetupTemplateApplyResult(null);
     setSetupTemplateNotice(null);
   }, [buildSetupTemplateDraft, selectedSetupTemplate?.key]);
+  useEffect(() => {
+    setSetupProfilePreview(null);
+    setSetupProfileApplyResult(null);
+    setSetupProfileNotice(null);
+  }, [selectedSetupProfileKey]);
   useEffect(() => {
     if (!authIdentity || !visibleSections.has("section-alert-center")) {
       return;
@@ -8201,6 +8514,7 @@ export function App() {
     alertPolicyPreview,
     alerts,
     alertsTotal,
+    applySetupProfile,
     applySetupTemplate,
     createAlertPolicy,
     canWriteCmdb,
@@ -8212,7 +8526,10 @@ export function App() {
     loadingAlertPolicies,
     loadingSetupChecklist,
     loadingSetupPreflight,
+    loadingSetupProfileHistory,
+    loadingSetupProfiles,
     loadingSetupTemplates,
+    previewSetupProfile,
     previewSetupTemplate,
     previewAlertPolicy,
     previewingAlertPolicy,
@@ -8221,8 +8538,12 @@ export function App() {
     refreshSetupWizard,
     runningSetupTemplateApply,
     runningSetupTemplatePreview,
+    runningSetupProfileApply,
+    runningSetupProfilePreview,
+    runningSetupProfileRevertId,
     selectedAlertId,
     selectedAlertIds,
+    selectedSetupProfileKey,
     selectedSetupTemplateKey,
     setAlertPolicyDraft,
     setAlertQueryFilter,
@@ -8231,12 +8552,20 @@ export function App() {
     setAlertSuppressedFilter,
     setAlertStatusFilter,
     setSelectedSetupTemplateKey,
+    setSelectedSetupProfileKey,
+    setSetupProfileNote,
     setSetupStep,
     setSetupTemplateNote,
     setSetupTemplateParam,
     setupChecklist,
     setupCompleted,
     setupNotice,
+    setupProfileApplyResult,
+    setupProfileHistory,
+    setupProfileNote,
+    setupProfileNotice,
+    setupProfilePreview,
+    setupProfiles,
     setupTemplateApplyResult,
     setupTemplateNote,
     setupTemplateNotice,
@@ -8245,6 +8574,7 @@ export function App() {
     setupPreflight,
     setupStep,
     setupTemplates,
+    revertSetupProfileRun,
     t,
     toggleAlertPolicyEnabled,
     toggleAlertSelection,

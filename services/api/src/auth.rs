@@ -365,6 +365,10 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         return Some("system.admin".to_string());
     }
 
+    if *method == Method::POST && is_setup_profile_preview_path(&normalized) {
+        return Some("ops.setup.read".to_string());
+    }
+
     let base = if matches_scope(&normalized, "/cmdb/discovery/notification-channels")
         || matches_scope(&normalized, "/cmdb/discovery/notification-templates")
         || matches_scope(&normalized, "/cmdb/discovery/notification-subscriptions")
@@ -493,6 +497,11 @@ fn is_alert_subroute_path(path: &str) -> bool {
         .parse::<i64>()
         .ok()
         .is_some_and(|value| value > 0)
+}
+
+fn is_setup_profile_preview_path(path: &str) -> bool {
+    (path.starts_with("/setup/profiles/") || path.starts_with("/profiles/"))
+        && path.ends_with("/preview")
 }
 
 async fn check_permission(
@@ -689,6 +698,12 @@ mod tests {
         assert_permission(Method::GET, "/api/v1/setup/preflight", "ops.setup.read");
         assert_permission(Method::GET, "/api/v1/setup/checklist", "ops.setup.read");
         assert_permission(Method::GET, "/api/v1/setup/templates", "ops.setup.read");
+        assert_permission(Method::GET, "/api/v1/setup/profiles", "ops.setup.read");
+        assert_permission(
+            Method::GET,
+            "/api/v1/setup/profiles/history",
+            "ops.setup.read",
+        );
         assert_permission(
             Method::POST,
             "/api/v1/setup/templates/identity-safe-baseline/preview",
@@ -697,6 +712,21 @@ mod tests {
         assert_permission(
             Method::POST,
             "/api/v1/setup/templates/identity-safe-baseline/apply",
+            "ops.setup.write",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/setup/profiles/smb-small-office/preview",
+            "ops.setup.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/setup/profiles/smb-small-office/apply",
+            "ops.setup.write",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/setup/profiles/history/1/revert",
             "ops.setup.write",
         );
         assert_permission(Method::GET, "/setup/preflight", "ops.setup.read");
@@ -1179,6 +1209,12 @@ mod tests {
             (Method::GET, "/api/v1/setup/preflight", "ops.setup.read"),
             (Method::GET, "/api/v1/setup/checklist", "ops.setup.read"),
             (Method::GET, "/api/v1/setup/templates", "ops.setup.read"),
+            (Method::GET, "/api/v1/setup/profiles", "ops.setup.read"),
+            (
+                Method::GET,
+                "/api/v1/setup/profiles/history",
+                "ops.setup.read",
+            ),
             (
                 Method::POST,
                 "/api/v1/setup/templates/identity-safe-baseline/preview",
@@ -1187,6 +1223,21 @@ mod tests {
             (
                 Method::POST,
                 "/api/v1/setup/templates/identity-safe-baseline/apply",
+                "ops.setup.write",
+            ),
+            (
+                Method::POST,
+                "/api/v1/setup/profiles/smb-small-office/preview",
+                "ops.setup.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/setup/profiles/smb-small-office/apply",
+                "ops.setup.write",
+            ),
+            (
+                Method::POST,
+                "/api/v1/setup/profiles/history/1/revert",
                 "ops.setup.write",
             ),
             (Method::GET, "/api/v1/alerts", "alerts.read"),

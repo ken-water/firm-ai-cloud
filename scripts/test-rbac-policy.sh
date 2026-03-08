@@ -21,6 +21,11 @@ extract_first_id() {
   sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n1
 }
 
+extract_json_number_field() {
+  local field="$1"
+  sed -n "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p" | head -n1
+}
+
 request_code() {
   local user="$1"
   local method="$2"
@@ -112,10 +117,24 @@ log "Validate operator permission matrix"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/preflight"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/checklist"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/templates"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/profiles"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/setup/templates/identity-safe-baseline/preview" \
   "{\"params\":{\"identity_mode\":\"break_glass_only\",\"break_glass_users\":\"${OPERATOR_USER}\"}}"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/setup/templates/identity-safe-baseline/apply" \
   "{\"params\":{\"identity_mode\":\"break_glass_only\",\"break_glass_users\":\"${OPERATOR_USER}\"},\"note\":\"rbac apply\"}"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/setup/profiles/smb-small-office/preview" \
+  "{\"note\":\"rbac profile preview\"}"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/setup/profiles/smb-small-office/apply" \
+  "{\"note\":\"rbac profile apply\"}"
+OPERATOR_PROFILE_RUN_ID="$(cat "$LAST_BODY_FILE" | extract_json_number_field run_id)"
+if [[ -z "$OPERATOR_PROFILE_RUN_ID" ]]; then
+  echo "ERROR: failed to parse operator setup profile run_id" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/profiles/history"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/setup/profiles/history/${OPERATOR_PROFILE_RUN_ID}/revert" \
+  "{\"note\":\"rbac profile revert\"}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/checklists"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete" \
@@ -230,8 +249,16 @@ log "Validate viewer permission matrix"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/preflight"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/checklist"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/templates"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/profiles"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/setup/profiles/history"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/setup/templates/identity-safe-baseline/preview" \
   "{\"params\":{\"identity_mode\":\"break_glass_only\",\"break_glass_users\":\"${VIEWER_USER}\"}}"
+assert_code 200 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/setup/profiles/smb-small-office/preview" \
+  "{\"note\":\"viewer profile preview\"}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/setup/profiles/smb-small-office/apply" \
+  "{\"note\":\"viewer profile apply deny\"}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/setup/profiles/history/${OPERATOR_PROFILE_RUN_ID}/revert" \
+  "{\"note\":\"viewer profile revert deny\"}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/checklists"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies"

@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, env, time::Duration};
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     routing::{get, post},
 };
@@ -29,8 +29,16 @@ const TCP_CHECK_TIMEOUT_MS: u64 = 900;
 const SETUP_TEMPLATE_IDENTITY: &str = "identity-safe-baseline";
 const SETUP_TEMPLATE_MONITORING: &str = "monitoring-zabbix-bootstrap";
 const SETUP_TEMPLATE_NOTIFICATION: &str = "notification-oncall-bootstrap";
+const SETUP_PROFILE_SMALL_OFFICE: &str = "smb-small-office";
+const SETUP_PROFILE_MULTI_SITE_RETAIL: &str = "smb-multi-site-retail";
+const SETUP_PROFILE_REGIONAL_ENTERPRISE: &str = "smb-regional-enterprise";
+const PROFILE_ALERT_POLICY_KEY: &str = "operator-profile-default-alert";
+const PROFILE_BACKUP_POLICY_KEY: &str = "operator-profile-default-backup";
+const PROFILE_ESCALATION_POLICY_KEY: &str = "default-ticket-sla";
 const MAX_TEMPLATE_TEXT_LEN: usize = 512;
 const MAX_TEMPLATE_USERS: usize = 32;
+const DEFAULT_PROFILE_HISTORY_LIMIT: u32 = 20;
+const MAX_PROFILE_HISTORY_LIMIT: u32 = 100;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -39,6 +47,14 @@ pub fn routes() -> Router<AppState> {
         .route("/templates", get(list_setup_templates))
         .route("/templates/{key}/preview", post(preview_setup_template))
         .route("/templates/{key}/apply", post(apply_setup_template))
+        .route("/profiles", get(list_setup_profiles))
+        .route("/profiles/history", get(list_setup_profile_history))
+        .route(
+            "/profiles/history/{id}/revert",
+            post(revert_setup_profile_run),
+        )
+        .route("/profiles/{key}/preview", post(preview_setup_profile))
+        .route("/profiles/{key}/apply", post(apply_setup_profile))
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -137,10 +153,97 @@ struct SetupTemplateApplyResponse {
     rollback_hints: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+struct SetupProfileCatalogItem {
+    key: String,
+    name: String,
+    description: String,
+    target_scale: String,
+    defaults: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupProfileCatalogResponse {
+    items: Vec<SetupProfileCatalogItem>,
+    total: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupProfileChangeSummary {
+    domain: String,
+    before: String,
+    after: String,
+    changed: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupProfilePreviewResponse {
+    profile: SetupProfileCatalogItem,
+    ready: bool,
+    summary: Vec<SetupProfileChangeSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupProfileApplyAction {
+    action_key: String,
+    outcome: String,
+    detail: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupProfileApplyResponse {
+    run_id: i64,
+    actor: String,
+    profile_key: String,
+    status: String,
+    actions: Vec<SetupProfileApplyAction>,
+    history_hint: String,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct SetupProfileHistoryRecord {
+    id: i64,
+    profile_key: String,
+    profile_name: String,
+    actor: String,
+    status: String,
+    note: Option<String>,
+    reverted_by: Option<String>,
+    reverted_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupProfileHistoryResponse {
+    items: Vec<SetupProfileHistoryRecord>,
+    total: i64,
+    limit: u32,
+    offset: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupProfileRevertResponse {
+    run_id: i64,
+    status: String,
+    reverted_by: String,
+    reverted_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Deserialize, Default)]
 struct SetupTemplateRequest {
     params: Option<Value>,
     note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SetupProfileRequest {
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SetupProfileHistoryQuery {
+    limit: Option<u32>,
+    offset: Option<u32>,
 }
 
 #[derive(Debug, FromRow)]
@@ -192,6 +295,125 @@ enum SetupTemplateInput {
     Identity(IdentityTemplateParams),
     Monitoring(MonitoringTemplateParams),
     Notification(NotificationTemplateParams),
+}
+
+#[derive(Debug, Clone)]
+struct SetupOperatorProfileDefinition {
+    key: &'static str,
+    name: &'static str,
+    description: &'static str,
+    target_scale: &'static str,
+    identity_mode: &'static str,
+    break_glass_users: &'static str,
+    alert_dedup_window_seconds: i32,
+    alert_ticket_priority: &'static str,
+    escalation_near_high_minutes: i32,
+    escalation_breach_high_minutes: i32,
+    escalation_near_medium_minutes: i32,
+    escalation_breach_medium_minutes: i32,
+    escalation_owner: &'static str,
+    backup_frequency: &'static str,
+    backup_schedule_time_utc: &'static str,
+    backup_retention_days: i32,
+    backup_destination_uri: &'static str,
+    drill_frequency: &'static str,
+    drill_weekday: Option<i16>,
+    drill_time_utc: &'static str,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct SetupProfileSnapshot {
+    identity: Option<IdentityProfileState>,
+    alert_policy: Option<AlertProfileState>,
+    escalation_policy: Option<EscalationProfileState>,
+    backup_policy: Option<BackupProfileState>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct IdentityProfileState {
+    identity_mode: String,
+    break_glass_users: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct AlertProfileState {
+    is_enabled: bool,
+    dedup_window_seconds: i32,
+    ticket_priority: String,
+    ticket_category: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct EscalationProfileState {
+    is_enabled: bool,
+    near_high_minutes: i32,
+    breach_high_minutes: i32,
+    near_medium_minutes: i32,
+    breach_medium_minutes: i32,
+    escalate_to_assignee: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct BackupProfileState {
+    frequency: String,
+    schedule_time_utc: String,
+    schedule_weekday: Option<i16>,
+    retention_days: i32,
+    destination_type: String,
+    destination_uri: String,
+    drill_enabled: bool,
+    drill_frequency: String,
+    drill_weekday: Option<i16>,
+    drill_time_utc: String,
+}
+
+#[derive(Debug, FromRow)]
+struct SetupProfileRunRow {
+    id: i64,
+    profile_key: String,
+    profile_name: String,
+    status: String,
+    previous_state: Value,
+    applied_state: Value,
+    reverted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, FromRow)]
+struct IdentityProfileStateRow {
+    identity_mode: String,
+    break_glass_users: Value,
+}
+
+#[derive(Debug, FromRow)]
+struct AlertProfileStateRow {
+    is_enabled: bool,
+    dedup_window_seconds: i32,
+    ticket_priority: String,
+    ticket_category: String,
+}
+
+#[derive(Debug, FromRow)]
+struct EscalationProfileStateRow {
+    is_enabled: bool,
+    near_high_minutes: i32,
+    breach_high_minutes: i32,
+    near_medium_minutes: i32,
+    breach_medium_minutes: i32,
+    escalate_to_assignee: String,
+}
+
+#[derive(Debug, FromRow)]
+struct BackupProfileStateRow {
+    frequency: String,
+    schedule_time_utc: String,
+    schedule_weekday: Option<i16>,
+    retention_days: i32,
+    destination_type: String,
+    destination_uri: String,
+    drill_enabled: bool,
+    drill_frequency: String,
+    drill_weekday: Option<i16>,
+    drill_time_utc: String,
 }
 
 async fn get_setup_preflight(
@@ -416,6 +638,1079 @@ async fn apply_setup_template(
         applied_actions,
         rollback_hints: parse_rollback_hints(&template.rollback_hints),
     }))
+}
+
+async fn list_setup_profiles() -> AppResult<Json<SetupProfileCatalogResponse>> {
+    let items = setup_profile_catalog_items();
+    Ok(Json(SetupProfileCatalogResponse {
+        total: items.len(),
+        items,
+    }))
+}
+
+async fn preview_setup_profile(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    Json(_payload): Json<SetupProfileRequest>,
+) -> AppResult<Json<SetupProfilePreviewResponse>> {
+    let definition = resolve_setup_profile_definition(key.as_str())?;
+    let profile = setup_profile_catalog_item(&definition);
+    let current = load_setup_profile_snapshot(&state.db).await?;
+    let target = build_setup_profile_snapshot(&definition);
+
+    Ok(Json(SetupProfilePreviewResponse {
+        profile,
+        ready: true,
+        summary: summarize_setup_profile_changes(&current, &target),
+    }))
+}
+
+async fn apply_setup_profile(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Json(payload): Json<SetupProfileRequest>,
+) -> AppResult<Json<SetupProfileApplyResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let note = trim_optional(payload.note, MAX_TEMPLATE_TEXT_LEN);
+    let definition = resolve_setup_profile_definition(key.as_str())?;
+    let previous_state = load_setup_profile_snapshot(&state.db).await?;
+    let applied_state = build_setup_profile_snapshot(&definition);
+
+    let (run_id, actions) = apply_setup_profile_definition(
+        &state,
+        &definition,
+        actor.as_str(),
+        note.clone(),
+        previous_state.clone(),
+        applied_state.clone(),
+    )
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "setup.profile.apply".to_string(),
+            target_type: "setup_profile".to_string(),
+            target_id: Some(run_id.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "profile_key": definition.key,
+                "profile_name": definition.name,
+                "summary": summarize_setup_profile_changes(&previous_state, &applied_state),
+                "actions": actions,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(SetupProfileApplyResponse {
+        run_id,
+        actor,
+        profile_key: definition.key.to_string(),
+        status: "applied".to_string(),
+        actions,
+        history_hint:
+            "Use /api/v1/setup/profiles/history to review and /revert endpoint for rollback."
+                .to_string(),
+    }))
+}
+
+async fn list_setup_profile_history(
+    State(state): State<AppState>,
+    Query(query): Query<SetupProfileHistoryQuery>,
+) -> AppResult<Json<SetupProfileHistoryResponse>> {
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_PROFILE_HISTORY_LIMIT)
+        .clamp(1, MAX_PROFILE_HISTORY_LIMIT);
+    let offset = query.offset.unwrap_or(0);
+
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setup_operator_profile_runs")
+        .fetch_one(&state.db)
+        .await?;
+    let items: Vec<SetupProfileHistoryRecord> = sqlx::query_as(
+        "SELECT
+            id,
+            profile_key,
+            profile_name,
+            actor,
+            status,
+            note,
+            reverted_by,
+            reverted_at,
+            created_at
+         FROM setup_operator_profile_runs
+         ORDER BY created_at DESC, id DESC
+         LIMIT $1
+         OFFSET $2",
+    )
+    .bind(limit as i64)
+    .bind(offset as i64)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(SetupProfileHistoryResponse {
+        items,
+        total,
+        limit,
+        offset,
+    }))
+}
+
+async fn revert_setup_profile_run(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    headers: HeaderMap,
+    Json(payload): Json<SetupProfileRequest>,
+) -> AppResult<Json<SetupProfileRevertResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let note = trim_optional(payload.note, MAX_TEMPLATE_TEXT_LEN);
+    let run = load_setup_profile_run(&state.db, id).await?;
+    if run.reverted_at.is_some() || run.status == "reverted" {
+        return Err(AppError::Validation(format!(
+            "setup profile run {} has already been reverted",
+            run.id
+        )));
+    }
+
+    let previous_state = deserialize_profile_snapshot(&run.previous_state, "previous_state")?;
+    let applied_state = deserialize_profile_snapshot(&run.applied_state, "applied_state")?;
+
+    let mut tx = state.db.begin().await?;
+    restore_setup_profile_snapshot(&mut tx, actor.as_str(), &previous_state).await?;
+
+    let reverted_at: DateTime<Utc> = sqlx::query_scalar(
+        "UPDATE setup_operator_profile_runs
+         SET status = 'reverted',
+             reverted_by = $2,
+             reverted_at = NOW()
+         WHERE id = $1
+         RETURNING reverted_at",
+    )
+    .bind(run.id)
+    .bind(actor.as_str())
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "setup.profile.revert".to_string(),
+            target_type: "setup_profile".to_string(),
+            target_id: Some(run.id.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "profile_key": run.profile_key,
+                "profile_name": run.profile_name,
+                "reverted_run_id": run.id,
+                "previous_state": previous_state,
+                "applied_state": applied_state,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(SetupProfileRevertResponse {
+        run_id: run.id,
+        status: "reverted".to_string(),
+        reverted_by: actor,
+        reverted_at,
+    }))
+}
+
+fn setup_profile_catalog_items() -> Vec<SetupProfileCatalogItem> {
+    setup_profile_definitions()
+        .into_iter()
+        .map(|definition| setup_profile_catalog_item(&definition))
+        .collect()
+}
+
+fn setup_profile_catalog_item(
+    definition: &SetupOperatorProfileDefinition,
+) -> SetupProfileCatalogItem {
+    SetupProfileCatalogItem {
+        key: definition.key.to_string(),
+        name: definition.name.to_string(),
+        description: definition.description.to_string(),
+        target_scale: definition.target_scale.to_string(),
+        defaults: json!({
+            "identity": {
+                "identity_mode": definition.identity_mode,
+                "break_glass_users": parse_profile_break_glass_users(definition.break_glass_users),
+            },
+            "alert_policy": {
+                "policy_key": PROFILE_ALERT_POLICY_KEY,
+                "dedup_window_seconds": definition.alert_dedup_window_seconds,
+                "ticket_priority": definition.alert_ticket_priority,
+                "ticket_category": "incident",
+            },
+            "escalation_policy": {
+                "policy_key": PROFILE_ESCALATION_POLICY_KEY,
+                "near_high_minutes": definition.escalation_near_high_minutes,
+                "breach_high_minutes": definition.escalation_breach_high_minutes,
+                "near_medium_minutes": definition.escalation_near_medium_minutes,
+                "breach_medium_minutes": definition.escalation_breach_medium_minutes,
+                "escalate_to_assignee": definition.escalation_owner,
+            },
+            "backup_policy": {
+                "policy_key": PROFILE_BACKUP_POLICY_KEY,
+                "frequency": definition.backup_frequency,
+                "schedule_time_utc": definition.backup_schedule_time_utc,
+                "retention_days": definition.backup_retention_days,
+                "destination_uri": definition.backup_destination_uri,
+                "drill_frequency": definition.drill_frequency,
+                "drill_weekday": definition.drill_weekday,
+                "drill_time_utc": definition.drill_time_utc,
+            },
+        }),
+    }
+}
+
+fn setup_profile_definitions() -> Vec<SetupOperatorProfileDefinition> {
+    vec![
+        SetupOperatorProfileDefinition {
+            key: SETUP_PROFILE_SMALL_OFFICE,
+            name: "SMB Small Office",
+            description: "Single-site baseline with conservative ticket dedup and daily local continuity checks.",
+            target_scale: "10-80 assets",
+            identity_mode: "break_glass_only",
+            break_glass_users: "admin,ops.emergency",
+            alert_dedup_window_seconds: 1800,
+            alert_ticket_priority: "high",
+            escalation_near_high_minutes: 30,
+            escalation_breach_high_minutes: 60,
+            escalation_near_medium_minutes: 90,
+            escalation_breach_medium_minutes: 180,
+            escalation_owner: "ops-oncall",
+            backup_frequency: "daily",
+            backup_schedule_time_utc: "01:30",
+            backup_retention_days: 14,
+            backup_destination_uri: "file:///var/lib/cloudops/backups/smb-small-office",
+            drill_frequency: "weekly",
+            drill_weekday: Some(3),
+            drill_time_utc: "02:30",
+        },
+        SetupOperatorProfileDefinition {
+            key: SETUP_PROFILE_MULTI_SITE_RETAIL,
+            name: "SMB Multi-Site Retail",
+            description: "Multi-site default with faster alert dedup and tighter escalation budget for branch incidents.",
+            target_scale: "80-800 assets",
+            identity_mode: "break_glass_only",
+            break_glass_users: "admin,ops.emergency,retail.lead",
+            alert_dedup_window_seconds: 900,
+            alert_ticket_priority: "high",
+            escalation_near_high_minutes: 20,
+            escalation_breach_high_minutes: 40,
+            escalation_near_medium_minutes: 60,
+            escalation_breach_medium_minutes: 120,
+            escalation_owner: "retail-oncall",
+            backup_frequency: "daily",
+            backup_schedule_time_utc: "00:45",
+            backup_retention_days: 21,
+            backup_destination_uri: "file:///var/lib/cloudops/backups/smb-multi-site",
+            drill_frequency: "weekly",
+            drill_weekday: Some(2),
+            drill_time_utc: "01:30",
+        },
+        SetupOperatorProfileDefinition {
+            key: SETUP_PROFILE_REGIONAL_ENTERPRISE,
+            name: "SMB Regional Enterprise",
+            description: "Regional baseline with stronger retention and critical-priority alert ticket defaults.",
+            target_scale: "800-5000 assets",
+            identity_mode: "break_glass_only",
+            break_glass_users: "admin,ops.emergency,platform.lead",
+            alert_dedup_window_seconds: 600,
+            alert_ticket_priority: "critical",
+            escalation_near_high_minutes: 15,
+            escalation_breach_high_minutes: 30,
+            escalation_near_medium_minutes: 45,
+            escalation_breach_medium_minutes: 90,
+            escalation_owner: "regional-escalation",
+            backup_frequency: "daily",
+            backup_schedule_time_utc: "00:15",
+            backup_retention_days: 30,
+            backup_destination_uri: "file:///var/lib/cloudops/backups/smb-regional",
+            drill_frequency: "weekly",
+            drill_weekday: Some(1),
+            drill_time_utc: "01:00",
+        },
+    ]
+}
+
+fn resolve_setup_profile_definition(key: &str) -> AppResult<SetupOperatorProfileDefinition> {
+    let normalized = key.trim().to_ascii_lowercase();
+    setup_profile_definitions()
+        .into_iter()
+        .find(|item| item.key == normalized)
+        .ok_or_else(|| {
+            AppError::Validation(format!("unsupported setup profile key '{}'", key.trim()))
+        })
+}
+
+fn parse_profile_break_glass_users(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(|item| item.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(MAX_TEMPLATE_USERS)
+        .collect()
+}
+
+fn build_setup_profile_snapshot(
+    definition: &SetupOperatorProfileDefinition,
+) -> SetupProfileSnapshot {
+    SetupProfileSnapshot {
+        identity: Some(IdentityProfileState {
+            identity_mode: definition.identity_mode.to_string(),
+            break_glass_users: json!(parse_profile_break_glass_users(
+                definition.break_glass_users
+            )),
+        }),
+        alert_policy: Some(AlertProfileState {
+            is_enabled: true,
+            dedup_window_seconds: definition.alert_dedup_window_seconds,
+            ticket_priority: definition.alert_ticket_priority.to_string(),
+            ticket_category: "incident".to_string(),
+        }),
+        escalation_policy: Some(EscalationProfileState {
+            is_enabled: true,
+            near_high_minutes: definition.escalation_near_high_minutes,
+            breach_high_minutes: definition.escalation_breach_high_minutes,
+            near_medium_minutes: definition.escalation_near_medium_minutes,
+            breach_medium_minutes: definition.escalation_breach_medium_minutes,
+            escalate_to_assignee: definition.escalation_owner.to_string(),
+        }),
+        backup_policy: Some(BackupProfileState {
+            frequency: definition.backup_frequency.to_string(),
+            schedule_time_utc: definition.backup_schedule_time_utc.to_string(),
+            schedule_weekday: if definition.backup_frequency == "weekly" {
+                definition.drill_weekday
+            } else {
+                None
+            },
+            retention_days: definition.backup_retention_days,
+            destination_type: "local".to_string(),
+            destination_uri: definition.backup_destination_uri.to_string(),
+            drill_enabled: true,
+            drill_frequency: definition.drill_frequency.to_string(),
+            drill_weekday: definition.drill_weekday,
+            drill_time_utc: definition.drill_time_utc.to_string(),
+        }),
+    }
+}
+
+async fn load_setup_profile_snapshot(db: &sqlx::PgPool) -> AppResult<SetupProfileSnapshot> {
+    let identity: Option<IdentityProfileState> = sqlx::query_as::<_, IdentityProfileStateRow>(
+        "SELECT identity_mode, break_glass_users
+         FROM setup_identity_preferences
+         WHERE id = 1",
+    )
+    .fetch_optional(db)
+    .await?
+    .map(|row| IdentityProfileState {
+        identity_mode: row.identity_mode,
+        break_glass_users: row.break_glass_users,
+    });
+
+    let alert_policy: Option<AlertProfileState> = sqlx::query_as::<_, AlertProfileStateRow>(
+        "SELECT is_enabled, dedup_window_seconds, ticket_priority, ticket_category
+         FROM alert_ticket_policies
+         WHERE policy_key = $1
+         LIMIT 1",
+    )
+    .bind(PROFILE_ALERT_POLICY_KEY)
+    .fetch_optional(db)
+    .await?
+    .map(|row| AlertProfileState {
+        is_enabled: row.is_enabled,
+        dedup_window_seconds: row.dedup_window_seconds,
+        ticket_priority: row.ticket_priority,
+        ticket_category: row.ticket_category,
+    });
+
+    let escalation_policy: Option<EscalationProfileState> =
+        sqlx::query_as::<_, EscalationProfileStateRow>(
+            "SELECT
+                is_enabled,
+                near_high_minutes,
+                breach_high_minutes,
+                near_medium_minutes,
+                breach_medium_minutes,
+                escalate_to_assignee
+             FROM ticket_escalation_policies
+             WHERE policy_key = $1
+             LIMIT 1",
+        )
+        .bind(PROFILE_ESCALATION_POLICY_KEY)
+        .fetch_optional(db)
+        .await?
+        .map(|row| EscalationProfileState {
+            is_enabled: row.is_enabled,
+            near_high_minutes: row.near_high_minutes,
+            breach_high_minutes: row.breach_high_minutes,
+            near_medium_minutes: row.near_medium_minutes,
+            breach_medium_minutes: row.breach_medium_minutes,
+            escalate_to_assignee: row.escalate_to_assignee,
+        });
+
+    let backup_policy: Option<BackupProfileState> = sqlx::query_as::<_, BackupProfileStateRow>(
+        "SELECT
+            frequency,
+            schedule_time_utc,
+            schedule_weekday,
+            retention_days,
+            destination_type,
+            destination_uri,
+            drill_enabled,
+            drill_frequency,
+            drill_weekday,
+            drill_time_utc
+         FROM ops_backup_policies
+         WHERE policy_key = $1
+         LIMIT 1",
+    )
+    .bind(PROFILE_BACKUP_POLICY_KEY)
+    .fetch_optional(db)
+    .await?
+    .map(|row| BackupProfileState {
+        frequency: row.frequency,
+        schedule_time_utc: row.schedule_time_utc,
+        schedule_weekday: row.schedule_weekday,
+        retention_days: row.retention_days,
+        destination_type: row.destination_type,
+        destination_uri: row.destination_uri,
+        drill_enabled: row.drill_enabled,
+        drill_frequency: row.drill_frequency,
+        drill_weekday: row.drill_weekday,
+        drill_time_utc: row.drill_time_utc,
+    });
+
+    Ok(SetupProfileSnapshot {
+        identity,
+        alert_policy,
+        escalation_policy,
+        backup_policy,
+    })
+}
+
+fn summarize_setup_profile_changes(
+    before: &SetupProfileSnapshot,
+    after: &SetupProfileSnapshot,
+) -> Vec<SetupProfileChangeSummary> {
+    let identity_before = format_identity_profile_summary(before.identity.as_ref());
+    let identity_after = format_identity_profile_summary(after.identity.as_ref());
+    let alert_before = format_alert_profile_summary(before.alert_policy.as_ref());
+    let alert_after = format_alert_profile_summary(after.alert_policy.as_ref());
+    let escalation_before = format_escalation_profile_summary(before.escalation_policy.as_ref());
+    let escalation_after = format_escalation_profile_summary(after.escalation_policy.as_ref());
+    let backup_before = format_backup_profile_summary(before.backup_policy.as_ref());
+    let backup_after = format_backup_profile_summary(after.backup_policy.as_ref());
+
+    vec![
+        SetupProfileChangeSummary {
+            domain: "identity".to_string(),
+            changed: identity_before != identity_after,
+            before: identity_before,
+            after: identity_after,
+        },
+        SetupProfileChangeSummary {
+            domain: "alert_policy".to_string(),
+            changed: alert_before != alert_after,
+            before: alert_before,
+            after: alert_after,
+        },
+        SetupProfileChangeSummary {
+            domain: "escalation_policy".to_string(),
+            changed: escalation_before != escalation_after,
+            before: escalation_before,
+            after: escalation_after,
+        },
+        SetupProfileChangeSummary {
+            domain: "backup_policy".to_string(),
+            changed: backup_before != backup_after,
+            before: backup_before,
+            after: backup_after,
+        },
+    ]
+}
+
+fn format_identity_profile_summary(state: Option<&IdentityProfileState>) -> String {
+    let Some(state) = state else {
+        return "not configured".to_string();
+    };
+    let users = state
+        .break_glass_users
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .filter(|item| !item.is_empty())
+        .unwrap_or_else(|| "-".to_string());
+    format!("mode={}, break_glass_users={users}", state.identity_mode)
+}
+
+fn format_alert_profile_summary(state: Option<&AlertProfileState>) -> String {
+    let Some(state) = state else {
+        return "not configured".to_string();
+    };
+    format!(
+        "enabled={}, dedup={}s, priority={}, category={}",
+        state.is_enabled, state.dedup_window_seconds, state.ticket_priority, state.ticket_category
+    )
+}
+
+fn format_escalation_profile_summary(state: Option<&EscalationProfileState>) -> String {
+    let Some(state) = state else {
+        return "not configured".to_string();
+    };
+    format!(
+        "enabled={}, high={}/{}, medium={}/{}, owner={}",
+        state.is_enabled,
+        state.near_high_minutes,
+        state.breach_high_minutes,
+        state.near_medium_minutes,
+        state.breach_medium_minutes,
+        state.escalate_to_assignee
+    )
+}
+
+fn format_backup_profile_summary(state: Option<&BackupProfileState>) -> String {
+    let Some(state) = state else {
+        return "not configured".to_string();
+    };
+    format!(
+        "freq={}, schedule={}({}), retention={}d, destination={} {}, drill={} {}({})",
+        state.frequency,
+        state.schedule_time_utc,
+        state
+            .schedule_weekday
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        state.retention_days,
+        state.destination_type,
+        state.destination_uri,
+        state.drill_frequency,
+        state.drill_time_utc,
+        state
+            .drill_weekday
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    )
+}
+
+async fn apply_setup_profile_definition(
+    state: &AppState,
+    definition: &SetupOperatorProfileDefinition,
+    actor: &str,
+    note: Option<String>,
+    previous_state: SetupProfileSnapshot,
+    applied_state: SetupProfileSnapshot,
+) -> AppResult<(i64, Vec<SetupProfileApplyAction>)> {
+    let mut tx = state.db.begin().await?;
+
+    let identity = applied_state
+        .identity
+        .as_ref()
+        .ok_or_else(|| AppError::Validation("profile identity state is missing".to_string()))?;
+    let alert_policy = applied_state
+        .alert_policy
+        .as_ref()
+        .ok_or_else(|| AppError::Validation("profile alert policy state is missing".to_string()))?;
+    let escalation_policy = applied_state.escalation_policy.as_ref().ok_or_else(|| {
+        AppError::Validation("profile escalation policy state is missing".to_string())
+    })?;
+    let backup_policy = applied_state.backup_policy.as_ref().ok_or_else(|| {
+        AppError::Validation("profile backup policy state is missing".to_string())
+    })?;
+
+    let actions = vec![
+        upsert_identity_profile_state(&mut tx, actor, identity).await?,
+        upsert_alert_profile_state(&mut tx, actor, alert_policy).await?,
+        upsert_escalation_profile_state(&mut tx, actor, escalation_policy).await?,
+        upsert_backup_profile_state(&mut tx, actor, backup_policy).await?,
+    ];
+
+    let run_id: i64 = sqlx::query_scalar(
+        "INSERT INTO setup_operator_profile_runs (
+            profile_key,
+            profile_name,
+            actor,
+            status,
+            note,
+            previous_state,
+            applied_state
+         )
+         VALUES ($1, $2, $3, 'applied', $4, $5, $6)
+         RETURNING id",
+    )
+    .bind(definition.key)
+    .bind(definition.name)
+    .bind(actor)
+    .bind(note)
+    .bind(serialize_profile_snapshot(&previous_state)?)
+    .bind(serialize_profile_snapshot(&applied_state)?)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok((run_id, actions))
+}
+
+fn serialize_profile_snapshot(snapshot: &SetupProfileSnapshot) -> AppResult<Value> {
+    serde_json::to_value(snapshot)
+        .map_err(|err| AppError::Validation(format!("failed to serialize profile snapshot: {err}")))
+}
+
+fn deserialize_profile_snapshot(value: &Value, field: &str) -> AppResult<SetupProfileSnapshot> {
+    serde_json::from_value(value.clone())
+        .map_err(|err| AppError::Validation(format!("invalid {field} json payload: {err}")))
+}
+
+async fn upsert_identity_profile_state(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: &str,
+    state: &IdentityProfileState,
+) -> AppResult<SetupProfileApplyAction> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM setup_identity_preferences)")
+            .fetch_one(&mut **tx)
+            .await?;
+
+    sqlx::query(
+        "INSERT INTO setup_identity_preferences
+            (id, identity_mode, break_glass_users, updated_by, updated_at)
+         VALUES (1, $1, $2, $3, NOW())
+         ON CONFLICT (id)
+         DO UPDATE SET
+            identity_mode = EXCLUDED.identity_mode,
+            break_glass_users = EXCLUDED.break_glass_users,
+            updated_by = EXCLUDED.updated_by,
+            updated_at = NOW()",
+    )
+    .bind(state.identity_mode.as_str())
+    .bind(state.break_glass_users.clone())
+    .bind(actor)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(SetupProfileApplyAction {
+        action_key: "profile.identity".to_string(),
+        outcome: if exists {
+            "updated".to_string()
+        } else {
+            "created".to_string()
+        },
+        detail: format_identity_profile_summary(Some(state)),
+    })
+}
+
+async fn upsert_alert_profile_state(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: &str,
+    state: &AlertProfileState,
+) -> AppResult<SetupProfileApplyAction> {
+    let existing_id: Option<i64> = sqlx::query_scalar(
+        "SELECT id
+         FROM alert_ticket_policies
+         WHERE policy_key = $1
+         LIMIT 1",
+    )
+    .bind(PROFILE_ALERT_POLICY_KEY)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    if let Some(id) = existing_id {
+        sqlx::query(
+            "UPDATE alert_ticket_policies
+             SET name = $2,
+                 description = $3,
+                 is_system = TRUE,
+                 is_enabled = $4,
+                 match_status = 'open',
+                 dedup_window_seconds = $5,
+                 ticket_priority = $6,
+                 ticket_category = $7,
+                 updated_at = NOW()
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind("Operator Profile Default Alert Policy")
+        .bind("Managed by setup profile apply flow")
+        .bind(state.is_enabled)
+        .bind(state.dedup_window_seconds)
+        .bind(state.ticket_priority.as_str())
+        .bind(state.ticket_category.as_str())
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO alert_ticket_policies (
+                policy_key,
+                name,
+                description,
+                is_system,
+                is_enabled,
+                match_source,
+                match_severity,
+                match_site,
+                match_department,
+                match_status,
+                dedup_window_seconds,
+                ticket_priority,
+                ticket_category,
+                workflow_template_id,
+                created_by
+             )
+             VALUES (
+                $1,
+                $2,
+                $3,
+                TRUE,
+                $4,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                'open',
+                $5,
+                $6,
+                $7,
+                NULL,
+                $8
+             )",
+        )
+        .bind(PROFILE_ALERT_POLICY_KEY)
+        .bind("Operator Profile Default Alert Policy")
+        .bind("Managed by setup profile apply flow")
+        .bind(state.is_enabled)
+        .bind(state.dedup_window_seconds)
+        .bind(state.ticket_priority.as_str())
+        .bind(state.ticket_category.as_str())
+        .bind(actor)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(SetupProfileApplyAction {
+        action_key: "profile.alert_policy".to_string(),
+        outcome: if existing_id.is_some() {
+            "updated".to_string()
+        } else {
+            "created".to_string()
+        },
+        detail: format_alert_profile_summary(Some(state)),
+    })
+}
+
+async fn upsert_escalation_profile_state(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: &str,
+    state: &EscalationProfileState,
+) -> AppResult<SetupProfileApplyAction> {
+    let existing_id: Option<i64> = sqlx::query_scalar(
+        "SELECT id
+         FROM ticket_escalation_policies
+         WHERE policy_key = $1
+         LIMIT 1",
+    )
+    .bind(PROFILE_ESCALATION_POLICY_KEY)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    if let Some(id) = existing_id {
+        sqlx::query(
+            "UPDATE ticket_escalation_policies
+             SET name = $2,
+                 is_enabled = $3,
+                 near_high_minutes = $4,
+                 breach_high_minutes = $5,
+                 near_medium_minutes = $6,
+                 breach_medium_minutes = $7,
+                 escalate_to_assignee = $8,
+                 updated_by = $9,
+                 updated_at = NOW()
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind("Default Ticket SLA Policy")
+        .bind(state.is_enabled)
+        .bind(state.near_high_minutes)
+        .bind(state.breach_high_minutes)
+        .bind(state.near_medium_minutes)
+        .bind(state.breach_medium_minutes)
+        .bind(state.escalate_to_assignee.as_str())
+        .bind(actor)
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO ticket_escalation_policies (
+                policy_key,
+                name,
+                is_enabled,
+                near_critical_minutes,
+                breach_critical_minutes,
+                near_high_minutes,
+                breach_high_minutes,
+                near_medium_minutes,
+                breach_medium_minutes,
+                near_low_minutes,
+                breach_low_minutes,
+                escalate_to_assignee,
+                updated_by
+             )
+             VALUES (
+                $1,
+                $2,
+                $3,
+                30,
+                60,
+                $4,
+                $5,
+                $6,
+                $7,
+                240,
+                480,
+                $8,
+                $9
+             )",
+        )
+        .bind(PROFILE_ESCALATION_POLICY_KEY)
+        .bind("Default Ticket SLA Policy")
+        .bind(state.is_enabled)
+        .bind(state.near_high_minutes)
+        .bind(state.breach_high_minutes)
+        .bind(state.near_medium_minutes)
+        .bind(state.breach_medium_minutes)
+        .bind(state.escalate_to_assignee.as_str())
+        .bind(actor)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(SetupProfileApplyAction {
+        action_key: "profile.escalation_policy".to_string(),
+        outcome: if existing_id.is_some() {
+            "updated".to_string()
+        } else {
+            "created".to_string()
+        },
+        detail: format_escalation_profile_summary(Some(state)),
+    })
+}
+
+async fn upsert_backup_profile_state(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: &str,
+    state: &BackupProfileState,
+) -> AppResult<SetupProfileApplyAction> {
+    let existing_id: Option<i64> = sqlx::query_scalar(
+        "SELECT id
+         FROM ops_backup_policies
+         WHERE policy_key = $1
+         LIMIT 1",
+    )
+    .bind(PROFILE_BACKUP_POLICY_KEY)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    if let Some(id) = existing_id {
+        sqlx::query(
+            "UPDATE ops_backup_policies
+             SET name = $2,
+                 frequency = $3,
+                 schedule_time_utc = $4,
+                 schedule_weekday = $5,
+                 retention_days = $6,
+                 destination_type = $7,
+                 destination_uri = $8,
+                 destination_validated = TRUE,
+                 drill_enabled = $9,
+                 drill_frequency = $10,
+                 drill_weekday = $11,
+                 drill_time_utc = $12,
+                 next_backup_at = CASE
+                     WHEN $3 = 'daily' THEN NOW() + INTERVAL '1 day'
+                     ELSE NOW() + INTERVAL '7 day'
+                 END,
+                 next_drill_at = CASE
+                     WHEN $9 = FALSE THEN NULL
+                     WHEN $10 = 'weekly' THEN NOW() + INTERVAL '7 day'
+                     WHEN $10 = 'monthly' THEN NOW() + INTERVAL '30 day'
+                     ELSE NOW() + INTERVAL '90 day'
+                 END,
+                 updated_by = $13,
+                 updated_at = NOW()
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind("Operator Profile Default Backup Policy")
+        .bind(state.frequency.as_str())
+        .bind(state.schedule_time_utc.as_str())
+        .bind(state.schedule_weekday)
+        .bind(state.retention_days)
+        .bind(state.destination_type.as_str())
+        .bind(state.destination_uri.as_str())
+        .bind(state.drill_enabled)
+        .bind(state.drill_frequency.as_str())
+        .bind(state.drill_weekday)
+        .bind(state.drill_time_utc.as_str())
+        .bind(actor)
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO ops_backup_policies (
+                policy_key,
+                name,
+                frequency,
+                schedule_time_utc,
+                schedule_weekday,
+                retention_days,
+                destination_type,
+                destination_uri,
+                destination_validated,
+                drill_enabled,
+                drill_frequency,
+                drill_weekday,
+                drill_time_utc,
+                next_backup_at,
+                next_drill_at,
+                updated_by
+             )
+             VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                $6,
+                $7,
+                $8,
+                TRUE,
+                $9,
+                $10,
+                $11,
+                $12,
+                CASE
+                    WHEN $3 = 'daily' THEN NOW() + INTERVAL '1 day'
+                    ELSE NOW() + INTERVAL '7 day'
+                END,
+                CASE
+                    WHEN $9 = FALSE THEN NULL
+                    WHEN $10 = 'weekly' THEN NOW() + INTERVAL '7 day'
+                    WHEN $10 = 'monthly' THEN NOW() + INTERVAL '30 day'
+                    ELSE NOW() + INTERVAL '90 day'
+                END,
+                $13
+             )",
+        )
+        .bind(PROFILE_BACKUP_POLICY_KEY)
+        .bind("Operator Profile Default Backup Policy")
+        .bind(state.frequency.as_str())
+        .bind(state.schedule_time_utc.as_str())
+        .bind(state.schedule_weekday)
+        .bind(state.retention_days)
+        .bind(state.destination_type.as_str())
+        .bind(state.destination_uri.as_str())
+        .bind(state.drill_enabled)
+        .bind(state.drill_frequency.as_str())
+        .bind(state.drill_weekday)
+        .bind(state.drill_time_utc.as_str())
+        .bind(actor)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(SetupProfileApplyAction {
+        action_key: "profile.backup_policy".to_string(),
+        outcome: if existing_id.is_some() {
+            "updated".to_string()
+        } else {
+            "created".to_string()
+        },
+        detail: format_backup_profile_summary(Some(state)),
+    })
+}
+
+async fn restore_setup_profile_snapshot(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: &str,
+    snapshot: &SetupProfileSnapshot,
+) -> AppResult<()> {
+    if let Some(identity) = snapshot.identity.as_ref() {
+        upsert_identity_profile_state(tx, actor, identity).await?;
+    } else {
+        sqlx::query("DELETE FROM setup_identity_preferences WHERE id = 1")
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    if let Some(alert_policy) = snapshot.alert_policy.as_ref() {
+        upsert_alert_profile_state(tx, actor, alert_policy).await?;
+    } else {
+        sqlx::query("DELETE FROM alert_ticket_policies WHERE policy_key = $1")
+            .bind(PROFILE_ALERT_POLICY_KEY)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    if let Some(escalation_policy) = snapshot.escalation_policy.as_ref() {
+        upsert_escalation_profile_state(tx, actor, escalation_policy).await?;
+    } else {
+        sqlx::query("DELETE FROM ticket_escalation_policies WHERE policy_key = $1")
+            .bind(PROFILE_ESCALATION_POLICY_KEY)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    if let Some(backup_policy) = snapshot.backup_policy.as_ref() {
+        upsert_backup_profile_state(tx, actor, backup_policy).await?;
+    } else {
+        sqlx::query("DELETE FROM ops_backup_policies WHERE policy_key = $1")
+            .bind(PROFILE_BACKUP_POLICY_KEY)
+            .execute(&mut **tx)
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn load_setup_profile_run(db: &sqlx::PgPool, id: i64) -> AppResult<SetupProfileRunRow> {
+    if id <= 0 {
+        return Err(AppError::Validation(
+            "profile run id must be a positive integer".to_string(),
+        ));
+    }
+    let run: Option<SetupProfileRunRow> = sqlx::query_as(
+        "SELECT
+            id,
+            profile_key,
+            profile_name,
+            status,
+            previous_state,
+            applied_state,
+            reverted_at
+         FROM setup_operator_profile_runs
+         WHERE id = $1
+         LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    run.ok_or_else(|| AppError::NotFound(format!("setup profile run {id} not found")))
 }
 
 fn build_response(category: &str, checks: Vec<SetupCheckItem>) -> SetupChecklistResponse {

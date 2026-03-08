@@ -87,6 +87,54 @@ type SetupTemplateApplyResponse = {
   rollback_hints: string[];
 };
 
+type SetupProfileCatalogItem = {
+  key: string;
+  name: string;
+  description: string;
+  target_scale: string;
+  defaults: Record<string, unknown>;
+};
+
+type SetupProfileChangeSummary = {
+  domain: string;
+  before: string;
+  after: string;
+  changed: boolean;
+};
+
+type SetupProfilePreviewResponse = {
+  profile: SetupProfileCatalogItem;
+  ready: boolean;
+  summary: SetupProfileChangeSummary[];
+};
+
+type SetupProfileApplyAction = {
+  action_key: string;
+  outcome: string;
+  detail: string;
+};
+
+type SetupProfileApplyResponse = {
+  run_id: number;
+  actor: string;
+  profile_key: string;
+  status: string;
+  actions: SetupProfileApplyAction[];
+  history_hint: string;
+};
+
+type SetupProfileHistoryRecord = {
+  id: number;
+  profile_key: string;
+  profile_name: string;
+  actor: string;
+  status: string;
+  note: string | null;
+  reverted_by: string | null;
+  reverted_at: string | null;
+  created_at: string;
+};
+
 export function SetupAlertSections(rawProps: Record<string, unknown>) {
   const {
     alertActionRunningId,
@@ -104,6 +152,7 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     alertPolicyPreview,
     alerts,
     alertsTotal,
+    applySetupProfile,
     applySetupTemplate,
     createAlertPolicy,
     canWriteCmdb,
@@ -115,7 +164,10 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     loadingAlertPolicies,
     loadingSetupChecklist,
     loadingSetupPreflight,
+    loadingSetupProfileHistory,
+    loadingSetupProfiles,
     loadingSetupTemplates,
+    previewSetupProfile,
     previewSetupTemplate,
     previewAlertPolicy,
     previewingAlertPolicy,
@@ -124,8 +176,12 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     refreshSetupWizard,
     runningSetupTemplateApply,
     runningSetupTemplatePreview,
+    runningSetupProfileApply,
+    runningSetupProfilePreview,
+    runningSetupProfileRevertId,
     selectedAlertId,
     selectedAlertIds,
+    selectedSetupProfileKey,
     selectedSetupTemplateKey,
     setAlertPolicyDraft,
     setAlertQueryFilter,
@@ -134,12 +190,20 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     setAlertSuppressedFilter,
     setAlertStatusFilter,
     setSelectedSetupTemplateKey,
+    setSelectedSetupProfileKey,
+    setSetupProfileNote,
     setSetupStep,
     setSetupTemplateNote,
     setSetupTemplateParam,
     setupChecklist,
     setupCompleted,
     setupNotice,
+    setupProfileApplyResult,
+    setupProfileHistory,
+    setupProfileNote,
+    setupProfileNotice,
+    setupProfilePreview,
+    setupProfiles,
     setupTemplateApplyResult,
     setupTemplateNote,
     setupTemplateNotice,
@@ -149,6 +213,7 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     setupStep,
     setupTemplates,
     t,
+    revertSetupProfileRun,
     toggleAlertPolicyEnabled,
     toggleAlertSelection,
     toggleSelectAllAlerts,
@@ -175,6 +240,11 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
   const templateDraft = (setupTemplateParamsDraft as Record<string, string>) ?? {};
   const templatePreview = setupTemplatePreview as SetupTemplatePreviewResponse | null;
   const templateApplyResult = setupTemplateApplyResult as SetupTemplateApplyResponse | null;
+  const profileItems = (setupProfiles as SetupProfileCatalogItem[]) ?? [];
+  const selectedSetupProfile = profileItems.find((item) => item.key === selectedSetupProfileKey) ?? null;
+  const profilePreview = setupProfilePreview as SetupProfilePreviewResponse | null;
+  const profileApplyResult = setupProfileApplyResult as SetupProfileApplyResponse | null;
+  const profileHistory = (setupProfileHistory as SetupProfileHistoryRecord[]) ?? [];
 
   const setupSteps = [
     {
@@ -471,6 +541,165 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
                   </div>
                 )}
               </>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <h3 style={{ marginTop: 0, marginBottom: "0.5rem", fontSize: "1rem" }}>Operator profile presets</h3>
+            <p className="section-note" style={{ marginBottom: "0.6rem" }}>
+              Select a profile to auto-fill identity, alerting, escalation, and backup defaults without manual JSON edits.
+            </p>
+            {setupProfileNotice && <p className="banner banner-success">{setupProfileNotice}</p>}
+            {!canWriteCmdb && (
+              <p className="inline-note">
+                Read-only mode: preview and history are available, apply/revert requires operator or admin role.
+              </p>
+            )}
+            {loadingSetupProfiles ? (
+              <p>Loading setup profiles...</p>
+            ) : profileItems.length === 0 ? (
+              <p>No setup profile preset available.</p>
+            ) : (
+              <>
+                <label className="control-field" style={{ marginBottom: "0.6rem" }}>
+                  <span>Profile</span>
+                  <select
+                    value={selectedSetupProfileKey}
+                    onChange={(event) => setSelectedSetupProfileKey(event.target.value)}
+                  >
+                    {profileItems.map((item) => (
+                      <option key={item.key} value={item.key}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {selectedSetupProfile && (
+                  <p className="section-note" style={{ marginBottom: "0.5rem" }}>
+                    {selectedSetupProfile.description} | target_scale={selectedSetupProfile.target_scale}
+                  </p>
+                )}
+
+                <label className="control-field" style={{ marginTop: "0.5rem" }}>
+                  <span>Note</span>
+                  <input
+                    value={setupProfileNote}
+                    onChange={(event) => setSetupProfileNote(event.target.value)}
+                    placeholder="change reason / rollout context"
+                  />
+                </label>
+
+                <div className="toolbar-row" style={{ marginTop: "0.65rem" }}>
+                  <button
+                    onClick={() => void previewSetupProfile()}
+                    disabled={!selectedSetupProfileKey || runningSetupProfilePreview || runningSetupProfileApply}
+                  >
+                    {runningSetupProfilePreview ? "Previewing..." : "Preview profile"}
+                  </button>
+                  <button
+                    onClick={() => void applySetupProfile()}
+                    disabled={!canWriteCmdb || !selectedSetupProfileKey || runningSetupProfileApply || runningSetupProfilePreview}
+                  >
+                    {runningSetupProfileApply ? "Applying..." : "Apply profile"}
+                  </button>
+                </div>
+
+                {profilePreview && (
+                  <div className="hint-list" style={{ marginTop: "0.75rem" }}>
+                    <div className="hint-row" style={{ fontWeight: 600 }}>
+                      Preview summary
+                      {" "}
+                      <span className={`status-chip ${profilePreview.ready ? "status-chip-success" : "status-chip-warn"}`}>
+                        {profilePreview.ready ? "ready" : "blocked"}
+                      </span>
+                    </div>
+                    {profilePreview.summary.map((item) => (
+                      <div key={`profile-preview-${item.domain}`} className="hint-row">
+                        <strong>{item.domain}</strong> [{item.changed ? "changed" : "unchanged"}]
+                        {" | "}before={item.before}
+                        {" | "}after={item.after}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {profileApplyResult && (
+                  <div className="hint-list" style={{ marginTop: "0.75rem" }}>
+                    <div className="hint-row" style={{ fontWeight: 600 }}>
+                      Applied profile={profileApplyResult.profile_key} by {profileApplyResult.actor} (run #{profileApplyResult.run_id})
+                    </div>
+                    {profileApplyResult.actions.map((action) => (
+                      <div key={`profile-action-${action.action_key}`} className="hint-row">
+                        <strong>{action.action_key}</strong> [{action.outcome}] {action.detail}
+                      </div>
+                    ))}
+                    <div className="hint-row">{profileApplyResult.history_hint}</div>
+                  </div>
+                )}
+              </>
+            )}
+
+            <h4 style={{ marginBottom: "0.4rem", marginTop: "0.8rem" }}>Profile apply history</h4>
+            {loadingSetupProfileHistory ? (
+              <p>Loading setup profile history...</p>
+            ) : profileHistory.length === 0 ? (
+              <p>No setup profile history yet.</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "1000px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={cellStyle}>Run</th>
+                      <th style={cellStyle}>Profile</th>
+                      <th style={cellStyle}>Actor</th>
+                      <th style={cellStyle}>Status</th>
+                      <th style={cellStyle}>Time</th>
+                      <th style={cellStyle}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {profileHistory.map((item) => {
+                      const running = runningSetupProfileRevertId === item.id;
+                      const reverted = item.status === "reverted" || item.reverted_at !== null;
+                      return (
+                        <tr key={`setup-profile-history-${item.id}`}>
+                          <td style={cellStyle}>#{item.id}</td>
+                          <td style={cellStyle}>
+                            {item.profile_name}
+                            <div className="inline-note">{item.profile_key}</div>
+                          </td>
+                          <td style={cellStyle}>
+                            {item.actor}
+                            {item.reverted_by ? <div className="inline-note">reverted_by={item.reverted_by}</div> : null}
+                          </td>
+                          <td style={cellStyle}>
+                            <span className={`status-chip ${reverted ? "status-chip-warn" : "status-chip-success"}`}>
+                              {item.status}
+                            </span>
+                          </td>
+                          <td style={cellStyle}>
+                            {new Date(item.created_at).toLocaleString()}
+                            {item.reverted_at ? (
+                              <div className="inline-note">
+                                reverted_at={new Date(item.reverted_at).toLocaleString()}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td style={cellStyle}>
+                            <button
+                              onClick={() => void revertSetupProfileRun(item.id)}
+                              disabled={!canWriteCmdb || reverted || running || runningSetupProfileRevertId !== null}
+                            >
+                              {running ? "Reverting..." : reverted ? "Reverted" : "Revert run"}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
 
