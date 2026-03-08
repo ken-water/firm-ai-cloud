@@ -45,6 +45,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     dailyCockpitNotice,
     dailyCockpitQueue,
     dailyCockpitSiteFilter,
+    nextBestActions,
     incidentCommandDetail,
     incidentCommandDraft,
     incidentCommandNotice,
@@ -64,6 +65,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadHandoverDigest,
     loadIncidentCommandDetail,
     loadIncidentCommands,
+    loadNextBestActions,
     loadWeeklyDigest,
     loadDailyCockpitSnapshot,
     loadOpsChecklist,
@@ -75,6 +77,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     closeBackupRestoreEvidence,
     runningBackupPolicyActionId,
     loadingDailyCockpit,
+    loadingNextBestActions,
     loadingOpsChecklist,
     loadingIncidentCommandDetail,
     loadingIncidentCommands,
@@ -233,9 +236,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           actions={(
             <button
               onClick={() => void loadDailyCockpitSnapshot()}
-              disabled={loadingDailyCockpit || loadingOpsChecklist}
+              disabled={loadingDailyCockpit || loadingNextBestActions || loadingOpsChecklist}
             >
-              {loadingDailyCockpit || loadingOpsChecklist
+              {loadingDailyCockpit || loadingNextBestActions || loadingOpsChecklist
                 ? t("cmdb.actions.loading")
                 : t("cmdb.dailyCockpit.actions.refresh")}
             </button>
@@ -262,6 +265,81 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 placeholder="platform"
               />
             </label>
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Next best actions</h3>
+              <button onClick={() => void loadNextBestActions()} disabled={loadingNextBestActions}>
+                {loadingNextBestActions ? t("cmdb.actions.loading") : "Refresh next actions"}
+              </button>
+            </div>
+            <p className="section-note">
+              Deterministic suggestions for unresolved incident/escalation/handover risks.
+            </p>
+            {!nextBestActions ? (
+              <p>{loadingNextBestActions ? t("cmdb.actions.loading") : "No suggestions yet."}</p>
+            ) : nextBestActions.items.length === 0 ? (
+              <p>No unresolved risk item needs follow-up in current scope.</p>
+            ) : (
+              <>
+                <p className="section-note">
+                  generated_at={new Date(nextBestActions.generated_at).toLocaleString()} | shift_date={nextBestActions.shift_date} | total={nextBestActions.total}
+                </p>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", minWidth: "1220px", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Suggestion</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Priority</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Reason</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Source signal</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Observed</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nextBestActions.items.slice(0, 40).map((item: any) => {
+                        const actionKey = `${item.suggestion_key}:${item.action.key}`;
+                        const running = runningDailyCockpitActionKey === actionKey;
+                        const disabled = running || (item.action.requires_write && !canWriteCmdb);
+                        return (
+                          <tr key={`next-best-action-${item.suggestion_key}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <strong>{item.suggestion_key}</strong>
+                              <div className="inline-note">domain={item.domain}</div>
+                              <div className="inline-note">risk={item.risk_level}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <span className={`status-chip ${item.risk_level === "critical" ? "status-chip-danger" : item.risk_level === "high" ? "status-chip-warn" : ""}`}>
+                                {item.priority_score}
+                              </span>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.reason}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.source_signal}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {new Date(item.observed_at).toLocaleString()}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <button
+                                onClick={() => void runDailyCockpitAction(item.suggestion_key, item.action)}
+                                disabled={disabled}
+                              >
+                                {running ? t("cmdb.actions.loading") : item.action.label}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
@@ -1522,7 +1600,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                               return (
                                 <button
                                   key={actionKey}
-                                  onClick={() => void runDailyCockpitAction(item, action)}
+                                  onClick={() => void runDailyCockpitAction(item.queue_key, action)}
                                   disabled={disabled}
                                 >
                                   {running ? t("cmdb.actions.loading") : action.label}

@@ -30,6 +30,7 @@ const MAX_CHECKLIST_NOTE_LEN: usize = 1024;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/cockpit/queue", get(get_daily_cockpit_queue))
+        .route("/cockpit/next-actions", get(get_next_best_actions))
         .route("/cockpit/checklists", get(get_ops_checklist))
         .route(
             "/cockpit/checklists/{template_key}/complete",
@@ -49,12 +50,42 @@ struct DailyCockpitQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct NextBestActionQuery {
+    site: Option<String>,
+    department: Option<String>,
+    shift_date: Option<String>,
+    limit: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 struct DailyCockpitQueueResponse {
     generated_at: DateTime<Utc>,
     scope: DailyCockpitScope,
     window: DailyCockpitWindow,
     items: Vec<DailyCockpitQueueItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct NextBestActionResponse {
+    generated_at: DateTime<Utc>,
+    scope: DailyCockpitScope,
+    shift_date: String,
+    total: usize,
+    items: Vec<NextBestActionItem>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct NextBestActionItem {
+    suggestion_key: String,
+    domain: String,
+    priority_score: i32,
+    risk_level: String,
+    reason: String,
+    source_signal: String,
+    observed_at: DateTime<Utc>,
+    entity: Value,
+    action: DailyCockpitAction,
 }
 
 #[derive(Debug, Serialize)]
@@ -140,6 +171,56 @@ struct SyncJobQueueRow {
     last_error: Option<String>,
     site: Option<String>,
     department: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct IncidentNextActionRow {
+    alert_id: i64,
+    title: String,
+    severity: String,
+    command_status: String,
+    command_owner: String,
+    updated_at: DateTime<Utc>,
+    site: Option<String>,
+    department: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct TicketEscalationNextActionRow {
+    id: i64,
+    ticket_no: String,
+    title: String,
+    priority: String,
+    status: String,
+    assignee: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    site: Option<String>,
+    department: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct HandoverNextActionRow {
+    item_key: String,
+    source_type: String,
+    source_id: i64,
+    next_owner: String,
+    next_action: String,
+    note: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct EscalationWindowRow {
+    near_critical_minutes: i32,
+    breach_critical_minutes: i32,
+    near_high_minutes: i32,
+    breach_high_minutes: i32,
+    near_medium_minutes: i32,
+    breach_medium_minutes: i32,
+    near_low_minutes: i32,
+    breach_low_minutes: i32,
+    escalate_to_assignee: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -287,6 +368,85 @@ async fn get_daily_cockpit_queue(
             total,
         },
         items: paged_items,
+    }))
+}
+
+async fn get_next_best_actions(
+    State(state): State<AppState>,
+    Query(query): Query<NextBestActionQuery>,
+) -> AppResult<Json<NextBestActionResponse>> {
+    let limit = query.limit.unwrap_or(24).clamp(1, MAX_LIMIT);
+    let site_scope = normalize_scope_value(query.site);
+    let department_scope = normalize_scope_value(query.department);
+    let shift_date = parse_optional_date(query.shift_date)?;
+    let now = Utc::now();
+
+    let incident_rows = fetch_incident_next_action_rows(
+        &state.db,
+        if site_scope.is_empty() {
+            None
+        } else {
+            Some(site_scope.as_str())
+        },
+        if department_scope.is_empty() {
+            None
+        } else {
+            Some(department_scope.as_str())
+        },
+        MAX_LIMIT as i64,
+    )
+    .await?;
+
+    let escalation_rows = fetch_escalation_next_action_rows(
+        &state.db,
+        if site_scope.is_empty() {
+            None
+        } else {
+            Some(site_scope.as_str())
+        },
+        if department_scope.is_empty() {
+            None
+        } else {
+            Some(department_scope.as_str())
+        },
+        MAX_LIMIT as i64,
+    )
+    .await?;
+    let escalation_window = load_default_escalation_window(&state.db).await?;
+
+    let handover_rows =
+        fetch_handover_next_action_rows(&state.db, shift_date, MAX_LIMIT as i64).await?;
+
+    let mut items = Vec::new();
+    items.extend(build_incident_next_actions(incident_rows));
+    items.extend(build_escalation_next_actions(
+        escalation_rows,
+        &escalation_window,
+        now,
+    ));
+    items.extend(build_handover_next_actions(handover_rows, shift_date));
+    sort_next_best_actions(&mut items);
+    if items.len() > limit as usize {
+        items.truncate(limit as usize);
+    }
+
+    Ok(Json(NextBestActionResponse {
+        generated_at: now,
+        scope: DailyCockpitScope {
+            site: if site_scope.is_empty() {
+                None
+            } else {
+                Some(site_scope)
+            },
+            department: if department_scope.is_empty() {
+                None
+            } else {
+                Some(department_scope)
+            },
+        },
+        shift_date: shift_date.to_string(),
+        total: items.len(),
+        items,
     }))
 }
 
@@ -845,6 +1005,375 @@ async fn fetch_sync_job_rows(
     Ok(rows)
 }
 
+async fn fetch_incident_next_action_rows(
+    db: &sqlx::PgPool,
+    site: Option<&str>,
+    department: Option<&str>,
+    limit: i64,
+) -> AppResult<Vec<IncidentNextActionRow>> {
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT
+            c.alert_id,
+            COALESCE(a.title, concat('alert #', c.alert_id::text)) AS title,
+            COALESCE(a.severity, 'warning') AS severity,
+            c.command_status,
+            c.command_owner,
+            c.updated_at,
+            a.site,
+            a.department
+         FROM ops_incident_commands c
+         LEFT JOIN unified_alerts a ON a.id = c.alert_id
+         WHERE c.command_status IN ('triage', 'in_progress', 'blocked')",
+    );
+
+    if let Some(site) = site {
+        builder.push(" AND a.site = ").push_bind(site);
+    }
+    if let Some(department) = department {
+        builder.push(" AND a.department = ").push_bind(department);
+    }
+    builder
+        .push(" ORDER BY c.updated_at DESC, c.alert_id DESC LIMIT ")
+        .push_bind(limit);
+
+    let rows: Vec<IncidentNextActionRow> = builder.build_query_as().fetch_all(db).await?;
+    Ok(rows)
+}
+
+async fn fetch_escalation_next_action_rows(
+    db: &sqlx::PgPool,
+    site: Option<&str>,
+    department: Option<&str>,
+    limit: i64,
+) -> AppResult<Vec<TicketEscalationNextActionRow>> {
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT
+            t.id,
+            t.ticket_no,
+            t.title,
+            t.priority,
+            t.status,
+            t.assignee,
+            t.created_at,
+            t.updated_at,
+            scope_asset.site,
+            scope_asset.department
+         FROM tickets t
+         LEFT JOIN LATERAL (
+            SELECT a.site, a.department
+            FROM ticket_asset_links l
+            INNER JOIN assets a ON a.id = l.asset_id
+            WHERE l.ticket_id = t.id
+            ORDER BY a.id ASC
+            LIMIT 1
+         ) AS scope_asset ON TRUE
+         WHERE t.status IN ('open', 'in_progress')",
+    );
+
+    if let Some(site) = site {
+        builder.push(
+            " AND EXISTS (
+                SELECT 1
+                FROM ticket_asset_links l2
+                INNER JOIN assets a2 ON a2.id = l2.asset_id
+                WHERE l2.ticket_id = t.id
+                  AND a2.site = ",
+        );
+        builder.push_bind(site).push(")");
+    }
+    if let Some(department) = department {
+        builder.push(
+            " AND EXISTS (
+                SELECT 1
+                FROM ticket_asset_links l3
+                INNER JOIN assets a3 ON a3.id = l3.asset_id
+                WHERE l3.ticket_id = t.id
+                  AND a3.department = ",
+        );
+        builder.push_bind(department).push(")");
+    }
+    builder
+        .push(" ORDER BY t.created_at ASC, t.id ASC LIMIT ")
+        .push_bind(limit);
+
+    let rows: Vec<TicketEscalationNextActionRow> = builder.build_query_as().fetch_all(db).await?;
+    Ok(rows)
+}
+
+async fn fetch_handover_next_action_rows(
+    db: &sqlx::PgPool,
+    shift_date: NaiveDate,
+    limit: i64,
+) -> AppResult<Vec<HandoverNextActionRow>> {
+    let rows: Vec<HandoverNextActionRow> = sqlx::query_as(
+        "SELECT item_key, source_type, source_id, next_owner, next_action, note, updated_at
+         FROM ops_handover_item_updates
+         WHERE shift_date = $1
+           AND status = 'open'
+         ORDER BY updated_at DESC, id DESC
+         LIMIT $2",
+    )
+    .bind(shift_date)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+async fn load_default_escalation_window(db: &sqlx::PgPool) -> AppResult<EscalationWindowRow> {
+    let row: Option<EscalationWindowRow> = sqlx::query_as(
+        "SELECT
+            near_critical_minutes,
+            breach_critical_minutes,
+            near_high_minutes,
+            breach_high_minutes,
+            near_medium_minutes,
+            breach_medium_minutes,
+            near_low_minutes,
+            breach_low_minutes,
+            escalate_to_assignee
+         FROM ticket_escalation_policies
+         WHERE policy_key = 'default-ticket-sla'
+         LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row.unwrap_or(EscalationWindowRow {
+        near_critical_minutes: 30,
+        breach_critical_minutes: 60,
+        near_high_minutes: 60,
+        breach_high_minutes: 120,
+        near_medium_minutes: 120,
+        breach_medium_minutes: 240,
+        near_low_minutes: 240,
+        breach_low_minutes: 480,
+        escalate_to_assignee: "ops-escalation".to_string(),
+    }))
+}
+
+fn build_incident_next_actions(rows: Vec<IncidentNextActionRow>) -> Vec<NextBestActionItem> {
+    rows.into_iter()
+        .map(|row| {
+            let severity_score = match row.severity.as_str() {
+                "critical" => 940,
+                "warning" => 860,
+                "info" => 800,
+                _ => 760,
+            };
+            let status_boost = match row.command_status.as_str() {
+                "blocked" => 40,
+                "in_progress" => 25,
+                "triage" => 15,
+                _ => 0,
+            };
+            let priority_score = (severity_score + status_boost).min(999);
+            let risk_level = if row.command_status == "blocked" || row.severity == "critical" {
+                "critical"
+            } else {
+                "high"
+            };
+
+            NextBestActionItem {
+                suggestion_key: format!("incident:{}", row.alert_id),
+                domain: "incident".to_string(),
+                priority_score,
+                risk_level: risk_level.to_string(),
+                reason: format!(
+                    "Incident command status '{}' for alert #{} is unresolved.",
+                    row.command_status, row.alert_id
+                ),
+                source_signal: format!(
+                    "ops_incident_commands.command_status={} + unified_alerts.severity={}",
+                    row.command_status, row.severity
+                ),
+                observed_at: row.updated_at,
+                entity: json!({
+                    "alert_id": row.alert_id,
+                    "title": row.title,
+                    "severity": row.severity,
+                    "command_status": row.command_status,
+                    "owner": row.command_owner,
+                    "site": row.site,
+                    "department": row.department,
+                }),
+                action: DailyCockpitAction {
+                    key: "incident-command-follow-up".to_string(),
+                    label: "Update Incident Command".to_string(),
+                    href: Some("#/overview".to_string()),
+                    api_path: Some(format!("/api/v1/ops/cockpit/incidents/{}/command", row.alert_id)),
+                    method: Some("POST".to_string()),
+                    body: Some(json!({
+                        "status": "in_progress",
+                        "owner": row.command_owner,
+                        "summary": "updated from next-best-action assistant"
+                    })),
+                    requires_write: true,
+                },
+            }
+        })
+        .collect()
+}
+
+fn build_escalation_next_actions(
+    rows: Vec<TicketEscalationNextActionRow>,
+    window: &EscalationWindowRow,
+    now: DateTime<Utc>,
+) -> Vec<NextBestActionItem> {
+    rows.into_iter()
+        .filter_map(|row| {
+            let age_minutes = (now - row.created_at).num_minutes().max(0);
+            let (near_minutes, breach_minutes) =
+                escalation_threshold_for_priority(window, row.priority.as_str());
+            if age_minutes < near_minutes as i64 {
+                return None;
+            }
+
+            let base_score = match row.priority.as_str() {
+                "critical" => 930,
+                "high" => 860,
+                "medium" => 780,
+                "low" => 720,
+                _ => 700,
+            };
+            let breach_boost = if age_minutes >= breach_minutes as i64 {
+                60
+            } else {
+                20
+            };
+            let priority_score = (base_score + breach_boost + age_minutes.min(90) as i32).min(999);
+            let risk_level = if age_minutes >= breach_minutes as i64 {
+                "critical"
+            } else if matches!(row.priority.as_str(), "critical" | "high") {
+                "high"
+            } else {
+                "medium"
+            };
+
+            Some(NextBestActionItem {
+                suggestion_key: format!("escalation:{}", row.id),
+                domain: "escalation".to_string(),
+                priority_score,
+                risk_level: risk_level.to_string(),
+                reason: format!(
+                    "Ticket {} has aged {} minutes (near={}, breach={}).",
+                    row.ticket_no, age_minutes, near_minutes, breach_minutes
+                ),
+                source_signal: format!(
+                    "tickets.priority={} + ticket_escalation_policies.default-ticket-sla owner={}",
+                    row.priority, window.escalate_to_assignee
+                ),
+                observed_at: row.updated_at,
+                entity: json!({
+                    "ticket_id": row.id,
+                    "ticket_no": row.ticket_no,
+                    "title": row.title,
+                    "priority": row.priority,
+                    "status": row.status,
+                    "assignee": row.assignee,
+                    "age_minutes": age_minutes,
+                    "near_minutes": near_minutes,
+                    "breach_minutes": breach_minutes,
+                    "site": row.site,
+                    "department": row.department,
+                }),
+                action: DailyCockpitAction {
+                    key: "run-ticket-escalation-dry-run".to_string(),
+                    label: "Run Escalation Dry-Run".to_string(),
+                    href: Some("#/tickets".to_string()),
+                    api_path: Some("/api/v1/tickets/escalation/run".to_string()),
+                    method: Some("POST".to_string()),
+                    body: Some(json!({
+                        "dry_run": true,
+                        "note": format!("next-best-action for {}", row.ticket_no)
+                    })),
+                    requires_write: true,
+                },
+            })
+        })
+        .collect()
+}
+
+fn build_handover_next_actions(
+    rows: Vec<HandoverNextActionRow>,
+    shift_date: NaiveDate,
+) -> Vec<NextBestActionItem> {
+    rows.into_iter()
+        .map(|row| {
+            let (priority_score, risk_level) = match row.source_type.as_str() {
+                "incident_command" => (840, "high"),
+                "continuity_run" => (860, "critical"),
+                "playbook_approval" => (800, "high"),
+                "ticket_backlog" => (780, "medium"),
+                _ => (760, "medium"),
+            };
+
+            NextBestActionItem {
+                suggestion_key: format!("handover:{}", row.item_key),
+                domain: "handover".to_string(),
+                priority_score,
+                risk_level: risk_level.to_string(),
+                reason: format!(
+                    "Carryover item '{}' remains open for shift {}.",
+                    row.item_key, shift_date
+                ),
+                source_signal: format!(
+                    "ops_handover_item_updates.status=open + source_type={}",
+                    row.source_type
+                ),
+                observed_at: row.updated_at,
+                entity: json!({
+                    "item_key": row.item_key,
+                    "source_type": row.source_type,
+                    "source_id": row.source_id,
+                    "next_owner": row.next_owner,
+                    "next_action": row.next_action,
+                    "note": row.note,
+                    "shift_date": shift_date.to_string(),
+                }),
+                action: DailyCockpitAction {
+                    key: "close-handover-item".to_string(),
+                    label: "Close Handover Item".to_string(),
+                    href: Some("#/overview".to_string()),
+                    api_path: Some(format!(
+                        "/api/v1/ops/cockpit/handover-digest/items/{}/close",
+                        row.item_key
+                    )),
+                    method: Some("POST".to_string()),
+                    body: Some(json!({
+                        "shift_date": shift_date.to_string(),
+                        "source_type": row.source_type,
+                        "source_id": row.source_id,
+                        "next_owner": row.next_owner,
+                        "next_action": row.next_action,
+                        "note": row.note,
+                    })),
+                    requires_write: true,
+                },
+            }
+        })
+        .collect()
+}
+
+fn escalation_threshold_for_priority(window: &EscalationWindowRow, priority: &str) -> (i32, i32) {
+    match priority.trim().to_ascii_lowercase().as_str() {
+        "critical" => (window.near_critical_minutes, window.breach_critical_minutes),
+        "high" => (window.near_high_minutes, window.breach_high_minutes),
+        "medium" => (window.near_medium_minutes, window.breach_medium_minutes),
+        _ => (window.near_low_minutes, window.breach_low_minutes),
+    }
+}
+
+fn sort_next_best_actions(items: &mut [NextBestActionItem]) {
+    items.sort_by(|left, right| {
+        right
+            .priority_score
+            .cmp(&left.priority_score)
+            .then_with(|| left.domain.cmp(&right.domain))
+            .then_with(|| left.suggestion_key.cmp(&right.suggestion_key))
+    });
+}
+
 async fn build_stale_stream_item(
     db: &sqlx::PgPool,
     site: Option<&str>,
@@ -1289,9 +1818,10 @@ mod tests {
     use chrono::{Datelike, Duration, NaiveDate, Utc};
 
     use super::{
-        DailyCockpitAction, DailyCockpitQueueItem, MAX_CHECKLIST_NOTE_LEN, OpsChecklistEntryRow,
-        OpsChecklistTemplateRow, build_ops_checklist_response, normalize_optional_note,
-        parse_optional_date, score_alert_item, score_ticket_item, sort_daily_queue_items,
+        DailyCockpitAction, DailyCockpitQueueItem, MAX_CHECKLIST_NOTE_LEN, NextBestActionItem,
+        OpsChecklistEntryRow, OpsChecklistTemplateRow, build_ops_checklist_response,
+        normalize_optional_note, parse_optional_date, score_alert_item, score_ticket_item,
+        sort_daily_queue_items, sort_next_best_actions,
     };
 
     fn test_item(key: &str, score: i32, observed_at_offset_minutes: i64) -> DailyCockpitQueueItem {
@@ -1339,6 +1869,84 @@ mod tests {
         assert_eq!(items[1].queue_key, "d");
         assert_eq!(items[2].queue_key, "a");
         assert_eq!(items[3].queue_key, "b");
+    }
+
+    #[test]
+    fn next_best_action_sort_is_deterministic() {
+        let now = Utc::now();
+        let mut items = vec![
+            NextBestActionItem {
+                suggestion_key: "handover:item-2".to_string(),
+                domain: "handover".to_string(),
+                priority_score: 820,
+                risk_level: "high".to_string(),
+                reason: "r".to_string(),
+                source_signal: "s".to_string(),
+                observed_at: now,
+                entity: serde_json::json!({}),
+                action: DailyCockpitAction {
+                    key: "noop".to_string(),
+                    label: "noop".to_string(),
+                    href: None,
+                    api_path: None,
+                    method: None,
+                    body: None,
+                    requires_write: false,
+                },
+            },
+            NextBestActionItem {
+                suggestion_key: "incident:11".to_string(),
+                domain: "incident".to_string(),
+                priority_score: 920,
+                risk_level: "critical".to_string(),
+                reason: "r".to_string(),
+                source_signal: "s".to_string(),
+                observed_at: now,
+                entity: serde_json::json!({}),
+                action: DailyCockpitAction {
+                    key: "noop".to_string(),
+                    label: "noop".to_string(),
+                    href: None,
+                    api_path: None,
+                    method: None,
+                    body: None,
+                    requires_write: false,
+                },
+            },
+            NextBestActionItem {
+                suggestion_key: "incident:10".to_string(),
+                domain: "incident".to_string(),
+                priority_score: 920,
+                risk_level: "critical".to_string(),
+                reason: "r".to_string(),
+                source_signal: "s".to_string(),
+                observed_at: now,
+                entity: serde_json::json!({}),
+                action: DailyCockpitAction {
+                    key: "noop".to_string(),
+                    label: "noop".to_string(),
+                    href: None,
+                    api_path: None,
+                    method: None,
+                    body: None,
+                    requires_write: false,
+                },
+            },
+        ];
+
+        sort_next_best_actions(&mut items);
+        let keys = items
+            .into_iter()
+            .map(|item| item.suggestion_key)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            vec![
+                "incident:10".to_string(),
+                "incident:11".to_string(),
+                "handover:item-2".to_string()
+            ]
+        );
     }
 
     #[test]

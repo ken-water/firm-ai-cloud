@@ -136,6 +136,7 @@ assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/profiles/hist
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/setup/profiles/history/${OPERATOR_PROFILE_RUN_ID}/revert" \
   "{\"note\":\"rbac profile revert\"}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/next-actions"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/checklists"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete" \
   "{\"date\":\"$(date +%F)\",\"note\":\"operator completed checklist\"}"
@@ -260,6 +261,7 @@ assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/setup/profiles/smb-s
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/setup/profiles/history/${OPERATOR_PROFILE_RUN_ID}/revert" \
   "{\"note\":\"viewer profile revert deny\"}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/queue"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/next-actions"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/checklists"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/policies"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/runs"

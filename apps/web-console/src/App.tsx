@@ -763,6 +763,29 @@ type DailyCockpitQueueResponse = {
   items: DailyCockpitQueueItem[];
 };
 
+type NextBestActionItem = {
+  suggestion_key: string;
+  domain: string;
+  priority_score: number;
+  risk_level: string;
+  reason: string;
+  source_signal: string;
+  observed_at: string;
+  entity: Record<string, unknown>;
+  action: DailyCockpitAction;
+};
+
+type NextBestActionResponse = {
+  generated_at: string;
+  scope: {
+    site: string | null;
+    department: string | null;
+  };
+  shift_date: string;
+  total: number;
+  items: NextBestActionItem[];
+};
+
 type OpsChecklistItem = {
   template_key: string;
   title: string;
@@ -2072,6 +2095,7 @@ export function App() {
   const [playbookExecutionResult, setPlaybookExecutionResult] = useState<PlaybookExecutionDetail | null>(null);
   const [playbookNotice, setPlaybookNotice] = useState<string | null>(null);
   const [dailyCockpitQueue, setDailyCockpitQueue] = useState<DailyCockpitQueueResponse | null>(null);
+  const [nextBestActions, setNextBestActions] = useState<NextBestActionResponse | null>(null);
   const [opsChecklist, setOpsChecklist] = useState<OpsChecklistResponse | null>(null);
   const [incidentCommands, setIncidentCommands] = useState<IncidentCommandRecord[]>([]);
   const [incidentCommandDraft, setIncidentCommandDraft] = useState<IncidentCommandDraft>(defaultIncidentCommandDraft);
@@ -2102,6 +2126,7 @@ export function App() {
   const [changeCalendarConflictResult, setChangeCalendarConflictResult] =
     useState<ChangeCalendarConflictResponse | null>(null);
   const [loadingDailyCockpit, setLoadingDailyCockpit] = useState(false);
+  const [loadingNextBestActions, setLoadingNextBestActions] = useState(false);
   const [loadingOpsChecklist, setLoadingOpsChecklist] = useState(false);
   const [loadingIncidentCommands, setLoadingIncidentCommands] = useState(false);
   const [loadingIncidentCommandDetail, setLoadingIncidentCommandDetail] = useState(false);
@@ -2997,6 +3022,39 @@ export function App() {
     }
   }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter, t]);
 
+  const loadNextBestActions = useCallback(async () => {
+    setLoadingNextBestActions(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "40"
+      });
+      if (dailyCockpitSiteFilter.trim().length > 0) {
+        params.set("site", dailyCockpitSiteFilter.trim());
+      }
+      if (dailyCockpitDepartmentFilter.trim().length > 0) {
+        params.set("department", dailyCockpitDepartmentFilter.trim());
+      }
+      if (handoverDigestShiftDate.trim().length > 0) {
+        params.set("shift_date", handoverDigestShiftDate.trim());
+      }
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/next-actions?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: NextBestActionResponse = await response.json();
+      setNextBestActions(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setNextBestActions(null);
+      return null;
+    } finally {
+      setLoadingNextBestActions(false);
+    }
+  }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter, handoverDigestShiftDate]);
+
   const loadOpsChecklist = useCallback(async () => {
     setLoadingOpsChecklist(true);
     setError(null);
@@ -3798,8 +3856,9 @@ export function App() {
   }, [canWriteCmdb, handoverDigestShiftDate, loadHandoverDigest, loadWeeklyDigest, t]);
 
   const loadDailyCockpitSnapshot = useCallback(async () => {
-    const [queue, checklist, incidents, policies, runs, evidence, calendar, digest, handover] = await Promise.all([
+    const [queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, digest, handover] = await Promise.all([
       loadDailyCockpitQueue(),
+      loadNextBestActions(),
       loadOpsChecklist(),
       loadIncidentCommands(),
       loadBackupPolicies(),
@@ -3809,7 +3868,7 @@ export function App() {
       loadWeeklyDigest(),
       loadHandoverDigest()
     ]);
-    return { queue, checklist, incidents, policies, runs, evidence, calendar, digest, handover };
+    return { queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, digest, handover };
   }, [
     loadBackupPolicies,
     loadBackupPolicyRuns,
@@ -3818,14 +3877,18 @@ export function App() {
     loadDailyCockpitQueue,
     loadHandoverDigest,
     loadIncidentCommands,
+    loadNextBestActions,
     loadOpsChecklist,
     loadWeeklyDigest
   ]);
 
   const runDailyCockpitAction = useCallback(async (
-    item: DailyCockpitQueueItem,
+    itemKey: string,
     action: DailyCockpitAction
   ) => {
+    if (!itemKey || itemKey.trim().length === 0) {
+      return;
+    }
     if (action.requires_write && !canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
       return;
@@ -3842,7 +3905,8 @@ export function App() {
       return;
     }
 
-    setRunningDailyCockpitActionKey(`${item.queue_key}:${action.key}`);
+    const normalizedItemKey = itemKey.trim();
+    setRunningDailyCockpitActionKey(`${normalizedItemKey}:${action.key}`);
     setError(null);
     try {
       const response = await apiFetch(`${API_BASE_URL}${action.api_path}`, {
@@ -8670,6 +8734,7 @@ export function App() {
     dailyCockpitNotice,
     dailyCockpitQueue,
     dailyCockpitSiteFilter,
+    nextBestActions,
     incidentCommandDetail,
     incidentCommandDraft,
     incidentCommandNotice,
@@ -8688,6 +8753,7 @@ export function App() {
     loadHandoverDigest,
     loadIncidentCommandDetail,
     loadIncidentCommands,
+    loadNextBestActions,
     loadWeeklyDigest,
     completeOpsChecklistItem,
     departmentWorkspace,
@@ -8702,6 +8768,7 @@ export function App() {
     runBackupSchedulerTick,
     closeBackupRestoreEvidence,
     loadingDailyCockpit,
+    loadingNextBestActions,
     loadingOpsChecklist,
     loadingIncidentCommandDetail,
     loadingIncidentCommands,

@@ -739,6 +739,11 @@ mod tests {
         assert_permission(Method::GET, "/api/v1/ops/cockpit/queue", "ops.cockpit.read");
         assert_permission(
             Method::GET,
+            "/api/v1/ops/cockpit/next-actions",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::GET,
             "/api/v1/ops/cockpit/checklists",
             "ops.cockpit.read",
         );
@@ -1012,6 +1017,11 @@ mod tests {
                 "workflow.playbooks.write",
             ),
             (Method::GET, "/api/v1/ops/cockpit/queue", "ops.cockpit.read"),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/next-actions",
+                "ops.cockpit.read",
+            ),
             (
                 Method::GET,
                 "/api/v1/ops/cockpit/checklists",
