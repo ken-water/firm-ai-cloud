@@ -180,6 +180,16 @@ assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar?days=7"
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/conflicts" \
   "{\"start_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"end_at\":\"$(date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)\",\"operation_kind\":\"playbook.execute.restart-service-safe\",\"risk_level\":\"high\"}"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/reservations?days=7"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/slot-recommendations?operation_kind=playbook.execute.restart-service-safe&risk_level=high&duration_minutes=30&limit=3"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/reservations" \
+  "{\"start_at\":\"$(date -u -d '+3 hours' +%Y-%m-%dT%H:%M:%SZ)\",\"end_at\":\"$(date -u -d '+4 hours' +%Y-%m-%dT%H:%M:%SZ)\",\"operation_kind\":\"playbook.execute.restart-service-safe\",\"risk_level\":\"high\",\"owner\":\"${OPERATOR_USER}\",\"site\":\"dc-a\",\"department\":\"platform\",\"note\":\"rbac calendar reservation\"}"
+OPERATOR_CALENDAR_RESERVATION_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
+if [[ -z "$OPERATOR_CALENDAR_RESERVATION_ID" ]]; then
+  echo "ERROR: failed to parse operator calendar reservation ID" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
 assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/tickets" \
   "{\"title\":\"rbac-op-ticket-${STAMP}\",\"priority\":\"high\",\"category\":\"incident\",\"assignee\":\"oncall-a\"}"
 OPERATOR_TICKET_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
@@ -269,6 +279,8 @@ assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/re
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest/export?format=json"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar?days=7"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/reservations?days=7"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/slot-recommendations?operation_kind=playbook.execute.restart-service-safe&risk_level=high&duration_minutes=30&limit=3"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/export?format=json"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/checklists/daily-alert-queue-review/complete" \
@@ -289,6 +301,8 @@ assert_code 403 "$VIEWER_USER" PATCH "${API_BASE_URL}/api/v1/ops/cockpit/backup/
   "{\"note\":\"viewer should not patch evidence\",\"close_evidence\":true}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/conflicts" \
   "{\"start_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"end_at\":\"$(date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)\",\"operation_kind\":\"playbook.execute.restart-service-safe\",\"risk_level\":\"high\"}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/reservations" \
+  "{\"start_at\":\"$(date -u -d '+5 hours' +%Y-%m-%dT%H:%M:%SZ)\",\"end_at\":\"$(date -u -d '+6 hours' +%Y-%m-%dT%H:%M:%SZ)\",\"operation_kind\":\"playbook.execute.restart-service-safe\",\"risk_level\":\"high\",\"owner\":\"${VIEWER_USER}\",\"site\":\"dc-a\",\"department\":\"platform\"}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/handover-digest/items/ticket:${OPERATOR_TICKET_ID}/close" \
   "{\"shift_date\":\"$(date +%F)\",\"source_type\":\"ticket_backlog\",\"source_id\":${OPERATOR_TICKET_ID},\"next_owner\":\"${VIEWER_USER}\",\"next_action\":\"viewer should not close handover\"}"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/cmdb/assets"

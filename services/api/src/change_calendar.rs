@@ -16,6 +16,16 @@ use crate::{
 
 const DEFAULT_RANGE_DAYS: u32 = 14;
 const MAX_RANGE_DAYS: u32 = 31;
+const MAX_OPERATION_KIND_LEN: usize = 128;
+const MAX_OWNER_LEN: usize = 128;
+const MAX_SCOPE_LEN: usize = 128;
+const MAX_NOTE_LEN: usize = 1024;
+const MAX_RESERVATION_LIMIT: u32 = 200;
+const DEFAULT_RESERVATION_LIMIT: u32 = 80;
+const MAX_SLOT_RECOMMENDATION_LIMIT: u32 = 20;
+const DEFAULT_SLOT_RECOMMENDATION_LIMIT: u32 = 5;
+const MAX_SLOT_DURATION_MINUTES: u32 = 8 * 60;
+const MIN_SLOT_DURATION_MINUTES: u32 = 15;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -23,6 +33,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/cockpit/change-calendar/conflicts",
             post(check_change_calendar_conflicts),
+        )
+        .route(
+            "/cockpit/change-calendar/reservations",
+            get(list_change_calendar_reservations).post(create_change_calendar_reservation),
+        )
+        .route(
+            "/cockpit/change-calendar/slot-recommendations",
+            get(get_change_calendar_slot_recommendations),
         )
 }
 
@@ -39,6 +57,40 @@ struct ChangeCalendarConflictRequest {
     end_at: String,
     operation_kind: Option<String>,
     risk_level: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ChangeCalendarReservationListQuery {
+    start_date: Option<String>,
+    end_date: Option<String>,
+    days: Option<u32>,
+    status: Option<String>,
+    site: Option<String>,
+    department: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChangeCalendarReservationCreateRequest {
+    start_at: String,
+    end_at: String,
+    operation_kind: String,
+    risk_level: String,
+    owner: String,
+    site: Option<String>,
+    department: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ChangeCalendarSlotRecommendationQuery {
+    operation_kind: Option<String>,
+    risk_level: Option<String>,
+    duration_minutes: Option<u32>,
+    from_time: Option<String>,
+    site: Option<String>,
+    department: Option<String>,
+    limit: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -60,6 +112,71 @@ struct ChangeCalendarResponse {
     range: ChangeCalendarRange,
     total: usize,
     items: Vec<ChangeCalendarEvent>,
+}
+
+#[derive(Debug, Serialize, Clone, FromRow)]
+struct ChangeCalendarReservationRecord {
+    id: i64,
+    operation_kind: String,
+    risk_level: String,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    site: Option<String>,
+    department: Option<String>,
+    owner: String,
+    note: Option<String>,
+    status: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChangeCalendarReservationListResponse {
+    generated_at: DateTime<Utc>,
+    range: ChangeCalendarRange,
+    total: usize,
+    items: Vec<ChangeCalendarReservationRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChangeCalendarReservationCreateResponse {
+    generated_at: DateTime<Utc>,
+    reservation: ChangeCalendarReservationRecord,
+    decision_reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChangeCalendarSlotRecommendationResponse {
+    generated_at: DateTime<Utc>,
+    operation_kind: String,
+    risk_level: String,
+    duration_minutes: u32,
+    scope: ChangeCalendarRecommendationScope,
+    pending_risky_workload: PendingRiskyWorkloadSummary,
+    total: usize,
+    items: Vec<ChangeCalendarSlotRecommendationItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChangeCalendarRecommendationScope {
+    site: Option<String>,
+    department: Option<String>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct PendingRiskyWorkloadSummary {
+    unresolved_incidents: i64,
+    high_priority_tickets: i64,
+    pending_approvals: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct ChangeCalendarSlotRecommendationItem {
+    rank: usize,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    score: i32,
+    rationale: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,6 +258,19 @@ struct BackupScheduleRow {
     next_drill_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, FromRow)]
+struct ReservationEventRow {
+    id: i64,
+    operation_kind: String,
+    risk_level: String,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    site: Option<String>,
+    department: Option<String>,
+    owner: String,
+    note: Option<String>,
+}
+
 async fn get_change_calendar(
     State(state): State<AppState>,
     Query(query): Query<ChangeCalendarQuery>,
@@ -211,6 +341,272 @@ async fn check_change_calendar_conflicts(
         decision_reason: evaluation.decision_reason,
         conflicts: evaluation.conflicts,
         recommended_slot: evaluation.recommended_slot,
+    }))
+}
+
+async fn list_change_calendar_reservations(
+    State(state): State<AppState>,
+    Query(query): Query<ChangeCalendarReservationListQuery>,
+) -> AppResult<Json<ChangeCalendarReservationListResponse>> {
+    let (start_date, end_date) = parse_change_calendar_range(
+        query.start_date,
+        query.end_date,
+        query.days,
+    )?;
+    let status = normalize_optional_status(query.status)?;
+    let site = normalize_optional_scope(query.site);
+    let department = normalize_optional_scope(query.department);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_RESERVATION_LIMIT)
+        .clamp(1, MAX_RESERVATION_LIMIT) as i64;
+
+    let range_start = Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("midnight"));
+    let range_end = Utc.from_utc_datetime(&end_date.and_hms_opt(23, 59, 59).expect("end-of-day"));
+
+    let mut builder = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "SELECT id, operation_kind, risk_level, start_at, end_at, site, department, owner, note, status, created_at, updated_at
+         FROM ops_change_calendar_reservations
+         WHERE start_at <= ",
+    );
+    builder
+        .push_bind(range_end)
+        .push(" AND end_at >= ")
+        .push_bind(range_start);
+    if let Some(status) = status.as_deref() {
+        builder.push(" AND status = ").push_bind(status);
+    }
+    if let Some(site) = site.as_deref() {
+        builder.push(" AND site = ").push_bind(site);
+    }
+    if let Some(department) = department.as_deref() {
+        builder.push(" AND department = ").push_bind(department);
+    }
+    builder
+        .push(" ORDER BY start_at ASC, id ASC LIMIT ")
+        .push_bind(limit);
+
+    let items: Vec<ChangeCalendarReservationRecord> = builder.build_query_as().fetch_all(&state.db).await?;
+
+    Ok(Json(ChangeCalendarReservationListResponse {
+        generated_at: Utc::now(),
+        range: ChangeCalendarRange {
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        },
+        total: items.len(),
+        items,
+    }))
+}
+
+async fn create_change_calendar_reservation(
+    State(state): State<AppState>,
+    Json(payload): Json<ChangeCalendarReservationCreateRequest>,
+) -> AppResult<Json<ChangeCalendarReservationCreateResponse>> {
+    let start_at = DateTime::parse_from_rfc3339(payload.start_at.trim())
+        .map_err(|_| AppError::Validation("start_at must use RFC3339 format".to_string()))?
+        .with_timezone(&Utc);
+    let end_at = DateTime::parse_from_rfc3339(payload.end_at.trim())
+        .map_err(|_| AppError::Validation("end_at must use RFC3339 format".to_string()))?
+        .with_timezone(&Utc);
+    if end_at <= start_at {
+        return Err(AppError::Validation(
+            "end_at must be later than start_at".to_string(),
+        ));
+    }
+
+    let operation_kind = required_trimmed(
+        "operation_kind",
+        payload.operation_kind,
+        MAX_OPERATION_KIND_LEN,
+    )?;
+    let risk_level = normalize_risk_level(payload.risk_level)?;
+    let owner = required_trimmed("owner", payload.owner, MAX_OWNER_LEN)?;
+    let site = trim_optional(payload.site, MAX_SCOPE_LEN);
+    let department = trim_optional(payload.department, MAX_SCOPE_LEN);
+    let note = trim_optional(payload.note, MAX_NOTE_LEN);
+
+    let overlap_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM ops_change_calendar_reservations
+         WHERE status = 'reserved'
+           AND start_at < $2
+           AND end_at > $1
+           AND ($3::text IS NULL OR site = $3)
+           AND ($4::text IS NULL OR department = $4)",
+    )
+    .bind(start_at)
+    .bind(end_at)
+    .bind(site.as_deref())
+    .bind(department.as_deref())
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+    if overlap_count > 0 {
+        return Err(AppError::Validation(format!(
+            "reservation conflicts with {overlap_count} existing reserved slot(s) in selected scope"
+        )));
+    }
+
+    let evaluation = evaluate_change_calendar_conflicts(
+        &state.db,
+        start_at,
+        end_at,
+        operation_kind.as_str(),
+        risk_level.as_str(),
+    )
+    .await?;
+    let blocking_conflicts = evaluation
+        .conflicts
+        .iter()
+        .filter(|item| item.code != "approval_backlog")
+        .collect::<Vec<_>>();
+    if !blocking_conflicts.is_empty() {
+        let details = blocking_conflicts
+            .iter()
+            .map(|item| format!("[{}] {}: {}", item.severity, item.title, item.detail))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        return Err(AppError::Validation(format!(
+            "reservation rejected: {} {}",
+            evaluation.decision_reason, details
+        )));
+    }
+
+    let reservation: ChangeCalendarReservationRecord = sqlx::query_as(
+        "INSERT INTO ops_change_calendar_reservations (
+            operation_kind, risk_level, start_at, end_at, site, department, owner, note, status
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'reserved')
+         RETURNING id, operation_kind, risk_level, start_at, end_at, site, department,
+                   owner, note, status, created_at, updated_at",
+    )
+    .bind(operation_kind)
+    .bind(risk_level)
+    .bind(start_at)
+    .bind(end_at)
+    .bind(site)
+    .bind(department)
+    .bind(owner)
+    .bind(note)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(ChangeCalendarReservationCreateResponse {
+        generated_at: Utc::now(),
+        reservation,
+        decision_reason: evaluation.decision_reason,
+    }))
+}
+
+async fn get_change_calendar_slot_recommendations(
+    State(state): State<AppState>,
+    Query(query): Query<ChangeCalendarSlotRecommendationQuery>,
+) -> AppResult<Json<ChangeCalendarSlotRecommendationResponse>> {
+    let operation_kind = trim_optional(query.operation_kind, MAX_OPERATION_KIND_LEN)
+        .unwrap_or_else(|| "playbook.execute".to_string());
+    let risk_level = normalize_risk_level(query.risk_level.unwrap_or_else(|| "medium".to_string()))?;
+    let duration_minutes = query
+        .duration_minutes
+        .unwrap_or(60)
+        .clamp(MIN_SLOT_DURATION_MINUTES, MAX_SLOT_DURATION_MINUTES);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_SLOT_RECOMMENDATION_LIMIT)
+        .clamp(1, MAX_SLOT_RECOMMENDATION_LIMIT) as usize;
+    let from_time = parse_optional_rfc3339(query.from_time)?;
+    let site = normalize_optional_scope(query.site);
+    let department = normalize_optional_scope(query.department);
+    let policy = load_playbook_policy(&state.db).await?;
+    let windows = parse_maintenance_windows(policy.maintenance_windows);
+    let timezone = parse_timezone(policy.timezone_name.as_str());
+    let workload = load_pending_risky_workload(&state.db).await;
+
+    let candidate_starts =
+        collect_candidate_slot_starts(&windows, timezone, from_time, duration_minutes as i64);
+    let mut items = Vec::new();
+    for start_at in candidate_starts.into_iter().take(120) {
+        let end_at = start_at + Duration::minutes(duration_minutes as i64);
+        let overlap_count = count_reservation_overlaps(
+            &state.db,
+            start_at,
+            end_at,
+            site.as_deref(),
+            department.as_deref(),
+        )
+        .await
+        .unwrap_or(0);
+        if overlap_count > 0 {
+            continue;
+        }
+
+        let evaluation = evaluate_change_calendar_conflicts(
+            &state.db,
+            start_at,
+            end_at,
+            operation_kind.as_str(),
+            risk_level.as_str(),
+        )
+        .await?;
+        let has_blocking_conflict = evaluation
+            .conflicts
+            .iter()
+            .any(|item| item.code != "approval_backlog");
+        if has_blocking_conflict {
+            continue;
+        }
+
+        let age_minutes = (start_at - from_time).num_minutes().max(0) as i32;
+        let workload_penalty = ((workload.unresolved_incidents
+            + workload.high_priority_tickets
+            + workload.pending_approvals)
+            .min(100) as i32)
+            * 3;
+        let score = 2000 - age_minutes - workload_penalty;
+        items.push(ChangeCalendarSlotRecommendationItem {
+            rank: 0,
+            start_at,
+            end_at,
+            score,
+            rationale: vec![
+                "slot is inside maintenance policy windows".to_string(),
+                format!(
+                    "pending workload: incidents={}, high_priority_tickets={}, approvals={}",
+                    workload.unresolved_incidents,
+                    workload.high_priority_tickets,
+                    workload.pending_approvals
+                ),
+                format!("calendar decision: {}", evaluation.decision_reason),
+            ],
+        });
+    }
+
+    items.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.start_at.cmp(&right.start_at))
+            .then_with(|| left.end_at.cmp(&right.end_at))
+    });
+    if items.len() > limit {
+        items.truncate(limit);
+    }
+    for (idx, item) in items.iter_mut().enumerate() {
+        item.rank = idx + 1;
+    }
+
+    Ok(Json(ChangeCalendarSlotRecommendationResponse {
+        generated_at: Utc::now(),
+        operation_kind,
+        risk_level,
+        duration_minutes,
+        scope: ChangeCalendarRecommendationScope {
+            site,
+            department,
+        },
+        pending_risky_workload: workload,
+        total: items.len(),
+        items,
     }))
 }
 
@@ -495,6 +891,40 @@ async fn load_change_calendar_events(
         }
     }
 
+    let reservation_rows: Vec<ReservationEventRow> = sqlx::query_as(
+        "SELECT id, operation_kind, risk_level, start_at, end_at, site, department, owner, note
+         FROM ops_change_calendar_reservations
+         WHERE status = 'reserved'
+           AND start_at <= $2
+           AND end_at >= $1
+         ORDER BY start_at ASC, id ASC
+         LIMIT 240",
+    )
+    .bind(range_start)
+    .bind(range_end)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    for row in reservation_rows {
+        items.push(ChangeCalendarEvent {
+            event_key: format!("reservation:{}", row.id),
+            event_type: "operation_reservation".to_string(),
+            severity: row.risk_level.clone(),
+            title: format!("{} reserved by {}", row.operation_kind, row.owner),
+            starts_at: row.start_at,
+            ends_at: row.end_at,
+            source_type: "reservation".to_string(),
+            source_id: row.id.to_string(),
+            details: format!(
+                "risk={} scope={}/{} note={}",
+                row.risk_level,
+                row.site.as_deref().unwrap_or("-"),
+                row.department.as_deref().unwrap_or("-"),
+                row.note.as_deref().unwrap_or("-")
+            ),
+        });
+    }
+
     items.sort_by(|left, right| {
         left.starts_at
             .cmp(&right.starts_at)
@@ -519,6 +949,198 @@ async fn load_playbook_policy(db: &sqlx::PgPool) -> AppResult<PlaybookPolicyRow>
         maintenance_windows: Value::Array(vec![]),
         change_freeze_enabled: false,
     }))
+}
+
+async fn load_pending_risky_workload(db: &sqlx::PgPool) -> PendingRiskyWorkloadSummary {
+    let unresolved_incidents: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM ops_incident_commands c
+         LEFT JOIN unified_alerts a ON a.id = c.alert_id
+         WHERE c.command_status IN ('triage', 'in_progress', 'blocked')
+           AND COALESCE(a.severity, 'warning') IN ('critical', 'warning')",
+    )
+    .fetch_one(db)
+    .await
+    .unwrap_or(0);
+
+    let high_priority_tickets: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM tickets
+         WHERE status IN ('open', 'in_progress')
+           AND priority IN ('critical', 'high')",
+    )
+    .fetch_one(db)
+    .await
+    .unwrap_or(0);
+
+    let pending_approvals_workflow: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM workflow_requests
+         WHERE status = 'pending_approval'",
+    )
+    .fetch_one(db)
+    .await
+    .unwrap_or(0);
+
+    let pending_approvals_playbook: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM workflow_playbook_approval_requests
+         WHERE status = 'pending'
+           AND expires_at > NOW()",
+    )
+    .fetch_one(db)
+    .await
+    .unwrap_or(0);
+
+    PendingRiskyWorkloadSummary {
+        unresolved_incidents,
+        high_priority_tickets,
+        pending_approvals: pending_approvals_workflow + pending_approvals_playbook,
+    }
+}
+
+async fn count_reservation_overlaps(
+    db: &sqlx::PgPool,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    site: Option<&str>,
+    department: Option<&str>,
+) -> AppResult<i64> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM ops_change_calendar_reservations
+         WHERE status = 'reserved'
+           AND start_at < $2
+           AND end_at > $1
+           AND ($3::text IS NULL OR site = $3)
+           AND ($4::text IS NULL OR department = $4)",
+    )
+    .bind(start_at)
+    .bind(end_at)
+    .bind(site)
+    .bind(department)
+    .fetch_one(db)
+    .await?;
+    Ok(count)
+}
+
+fn collect_candidate_slot_starts(
+    windows: &[MaintenanceWindow],
+    timezone: Tz,
+    from_time: DateTime<Utc>,
+    duration_minutes: i64,
+) -> Vec<DateTime<Utc>> {
+    if windows.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates = Vec::new();
+    let local_from = from_time.with_timezone(&timezone).naive_local();
+    for day_offset in 0i64..21i64 {
+        let candidate_date = local_from.date() + Duration::days(day_offset);
+        let weekday = candidate_date.weekday().number_from_monday() as u8;
+        for window in windows.iter().filter(|item| item.day_of_week == weekday) {
+            let Ok(window_start) = NaiveTime::parse_from_str(window.start.as_str(), "%H:%M") else {
+                continue;
+            };
+            let Ok(window_end) = NaiveTime::parse_from_str(window.end.as_str(), "%H:%M") else {
+                continue;
+            };
+            if window_end <= window_start {
+                continue;
+            }
+
+            let mut cursor = candidate_date.and_time(window_start);
+            let end_bound = candidate_date.and_time(window_end);
+            while cursor + Duration::minutes(duration_minutes) <= end_bound {
+                if cursor > local_from {
+                    let local_dt = match timezone.from_local_datetime(&cursor) {
+                        LocalResult::Single(value) => value,
+                        LocalResult::Ambiguous(earliest, _) => earliest,
+                        LocalResult::None => {
+                            cursor += Duration::minutes(60);
+                            continue;
+                        }
+                    };
+                    candidates.push(local_dt.with_timezone(&Utc));
+                }
+                cursor += Duration::minutes(60);
+            }
+        }
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    candidates
+}
+
+fn required_trimmed(field: &str, value: String, max_len: usize) -> AppResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(format!("{field} is required")));
+    }
+    if trimmed.len() > max_len {
+        return Err(AppError::Validation(format!(
+            "{field} length must be <= {max_len}"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn trim_optional(value: Option<String>, max_len: usize) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else if trimmed.len() > max_len {
+            Some(trimmed[..max_len].to_string())
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn normalize_risk_level(value: String) -> AppResult<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "low" | "medium" | "high" | "critical" => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "risk_level must be one of: low, medium, high, critical".to_string(),
+        )),
+    }
+}
+
+fn normalize_optional_scope(value: Option<String>) -> Option<String> {
+    trim_optional(value, MAX_SCOPE_LEN)
+}
+
+fn normalize_optional_status(value: Option<String>) -> AppResult<Option<String>> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    match normalized.as_str() {
+        "reserved" | "cancelled" => Ok(Some(normalized)),
+        _ => Err(AppError::Validation(
+            "status must be one of: reserved, cancelled".to_string(),
+        )),
+    }
+}
+
+fn parse_optional_rfc3339(value: Option<String>) -> AppResult<DateTime<Utc>> {
+    let Some(raw) = value else {
+        return Ok(Utc::now());
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Utc::now());
+    }
+    DateTime::parse_from_rfc3339(trimmed)
+        .map(|value| value.with_timezone(&Utc))
+        .map_err(|_| AppError::Validation("from_time must use RFC3339 format".to_string()))
 }
 
 fn parse_change_calendar_range(
@@ -651,8 +1273,12 @@ fn find_next_maintenance_slot(
 
 #[cfg(test)]
 mod tests {
-    use super::{ChangeCalendarEvent, parse_change_calendar_range};
+    use super::{
+        ChangeCalendarEvent, MaintenanceWindow, collect_candidate_slot_starts,
+        normalize_optional_status, parse_change_calendar_range,
+    };
     use chrono::{DateTime, Utc};
+    use chrono_tz::UTC as TzUtc;
 
     fn ts(value: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(value)
@@ -732,5 +1358,31 @@ mod tests {
             .map(|item| item.event_key)
             .collect::<Vec<_>>();
         assert_eq!(keys, vec!["k0", "k1", "k2"]);
+    }
+
+    #[test]
+    fn normalizes_optional_reservation_status_filter() {
+        assert_eq!(
+            normalize_optional_status(Some(" reserved ".to_string())).expect("status"),
+            Some("reserved".to_string())
+        );
+        assert!(normalize_optional_status(Some("invalid".to_string())).is_err());
+    }
+
+    #[test]
+    fn slot_recommendation_candidates_are_deterministic() {
+        let windows = vec![MaintenanceWindow {
+            day_of_week: 1,
+            start: "00:00".to_string(),
+            end: "03:00".to_string(),
+            label: Some("monday-window".to_string()),
+        }];
+        let from_time = DateTime::parse_from_rfc3339("2026-03-01T23:00:00Z")
+            .expect("valid")
+            .with_timezone(&Utc);
+        let first = collect_candidate_slot_starts(&windows, TzUtc, from_time, 60);
+        let second = collect_candidate_slot_starts(&windows, TzUtc, from_time, 60);
+        assert_eq!(first, second);
+        assert!(!first.is_empty());
     }
 }

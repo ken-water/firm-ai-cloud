@@ -669,6 +669,7 @@ type PlaybookDryRunResponse = {
     expires_at: string;
     instruction: string;
   } | null;
+  reservation_context: ChangeCalendarReservationRecord | null;
 };
 
 type PlaybookMaintenanceWindow = {
@@ -993,6 +994,68 @@ type ChangeCalendarConflictDraft = {
   end_at_local: string;
   operation_kind: string;
   risk_level: "low" | "medium" | "high" | "critical";
+};
+
+type ChangeCalendarReservationRecord = {
+  id: number;
+  operation_kind: string;
+  risk_level: "low" | "medium" | "high" | "critical";
+  start_at: string;
+  end_at: string;
+  site: string | null;
+  department: string | null;
+  owner: string;
+  note: string | null;
+  status: "reserved" | "cancelled";
+  created_at: string;
+  updated_at: string;
+};
+
+type ChangeCalendarReservationListResponse = {
+  generated_at: string;
+  range: {
+    start_date: string;
+    end_date: string;
+  };
+  total: number;
+  items: ChangeCalendarReservationRecord[];
+};
+
+type ChangeCalendarReservationDraft = {
+  start_at_local: string;
+  end_at_local: string;
+  operation_kind: string;
+  risk_level: "low" | "medium" | "high" | "critical";
+  owner: string;
+  site: string;
+  department: string;
+  note: string;
+};
+
+type ChangeCalendarSlotRecommendationItem = {
+  rank: number;
+  start_at: string;
+  end_at: string;
+  score: number;
+  rationale: string[];
+};
+
+type ChangeCalendarSlotRecommendationResponse = {
+  generated_at: string;
+  operation_kind: string;
+  risk_level: "low" | "medium" | "high" | "critical";
+  duration_minutes: number;
+  scope: {
+    site: string | null;
+    department: string | null;
+  };
+  pending_risky_workload: {
+    unresolved_incidents: number;
+    high_priority_tickets: number;
+    pending_approvals: number;
+  };
+  total: number;
+  items: ChangeCalendarSlotRecommendationItem[];
 };
 
 type WeeklyDigestResponse = {
@@ -1862,6 +1925,17 @@ const defaultChangeCalendarConflictDraft: ChangeCalendarConflictDraft = {
   risk_level: "high"
 };
 
+const defaultChangeCalendarReservationDraft: ChangeCalendarReservationDraft = {
+  start_at_local: formatLocalDateTimeInput(new Date()),
+  end_at_local: formatLocalDateTimeInput(new Date(Date.now() + 60 * 60 * 1000)),
+  operation_kind: "playbook.execute.restart-service-safe",
+  risk_level: "high",
+  owner: "ops-oncall",
+  site: "",
+  department: "",
+  note: ""
+};
+
 const defaultIncidentCommandDraft: IncidentCommandDraft = {
   alert_id: "",
   status: "triage",
@@ -2083,6 +2157,7 @@ export function App() {
   const [playbookCategoryFilter, setPlaybookCategoryFilter] = useState("all");
   const [playbookQuery, setPlaybookQuery] = useState("");
   const [playbookAssetRef, setPlaybookAssetRef] = useState("");
+  const [playbookReservationId, setPlaybookReservationId] = useState("");
   const [playbookParamsDraft, setPlaybookParamsDraft] = useState<Record<string, string>>({});
   const [playbookConfirmationToken, setPlaybookConfirmationToken] = useState("");
   const [selectedPlaybookApprovalId, setSelectedPlaybookApprovalId] = useState("");
@@ -2125,6 +2200,11 @@ export function App() {
     useState<ChangeCalendarConflictDraft>(defaultChangeCalendarConflictDraft);
   const [changeCalendarConflictResult, setChangeCalendarConflictResult] =
     useState<ChangeCalendarConflictResponse | null>(null);
+  const [changeCalendarReservationDraft, setChangeCalendarReservationDraft] =
+    useState<ChangeCalendarReservationDraft>(defaultChangeCalendarReservationDraft);
+  const [changeCalendarReservations, setChangeCalendarReservations] = useState<ChangeCalendarReservationRecord[]>([]);
+  const [changeCalendarSlotRecommendations, setChangeCalendarSlotRecommendations] =
+    useState<ChangeCalendarSlotRecommendationResponse | null>(null);
   const [loadingDailyCockpit, setLoadingDailyCockpit] = useState(false);
   const [loadingNextBestActions, setLoadingNextBestActions] = useState(false);
   const [loadingOpsChecklist, setLoadingOpsChecklist] = useState(false);
@@ -2136,6 +2216,9 @@ export function App() {
   const [loadingBackupRestoreEvidence, setLoadingBackupRestoreEvidence] = useState(false);
   const [loadingChangeCalendar, setLoadingChangeCalendar] = useState(false);
   const [checkingChangeCalendarConflict, setCheckingChangeCalendarConflict] = useState(false);
+  const [loadingChangeCalendarReservations, setLoadingChangeCalendarReservations] = useState(false);
+  const [loadingChangeCalendarRecommendations, setLoadingChangeCalendarRecommendations] = useState(false);
+  const [creatingChangeCalendarReservation, setCreatingChangeCalendarReservation] = useState(false);
   const [savingBackupPolicy, setSavingBackupPolicy] = useState(false);
   const [savingBackupRestoreEvidence, setSavingBackupRestoreEvidence] = useState(false);
   const [runningBackupPolicyActionId, setRunningBackupPolicyActionId] = useState<string | null>(null);
@@ -3346,6 +3429,156 @@ export function App() {
     }
   }, [changeCalendarEndDate, changeCalendarStartDate]);
 
+  const loadChangeCalendarReservations = useCallback(async () => {
+    setLoadingChangeCalendarReservations(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      const startDate = changeCalendarStartDate.trim();
+      const endDate = changeCalendarEndDate.trim();
+      if (startDate) {
+        params.set("start_date", startDate);
+      }
+      if (endDate) {
+        params.set("end_date", endDate);
+      }
+      params.set("status", "reserved");
+      params.set("limit", "120");
+
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/reservations?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: ChangeCalendarReservationListResponse = await response.json();
+      setChangeCalendarReservations(payload.items);
+      return payload.items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setChangeCalendarReservations([]);
+      return [];
+    } finally {
+      setLoadingChangeCalendarReservations(false);
+    }
+  }, [changeCalendarEndDate, changeCalendarStartDate]);
+
+  const loadChangeCalendarSlotRecommendations = useCallback(async () => {
+    setLoadingChangeCalendarRecommendations(true);
+    setError(null);
+    try {
+      const startAt = localDateTimeInputToUtcRfc3339(changeCalendarReservationDraft.start_at_local);
+      const endAt = localDateTimeInputToUtcRfc3339(changeCalendarReservationDraft.end_at_local);
+      if (!startAt || !endAt) {
+        throw new Error("Recommendation requires valid draft start/end.");
+      }
+      const startMs = Date.parse(startAt);
+      const endMs = Date.parse(endAt);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+        throw new Error("Recommendation requires end time later than start time.");
+      }
+      const durationMinutes = Math.max(15, Math.round((endMs - startMs) / 60000));
+
+      const params = new URLSearchParams({
+        operation_kind: changeCalendarReservationDraft.operation_kind.trim() || "playbook.execute",
+        risk_level: changeCalendarReservationDraft.risk_level,
+        duration_minutes: String(durationMinutes),
+        limit: "5"
+      });
+      if (changeCalendarReservationDraft.site.trim().length > 0) {
+        params.set("site", changeCalendarReservationDraft.site.trim());
+      }
+      if (changeCalendarReservationDraft.department.trim().length > 0) {
+        params.set("department", changeCalendarReservationDraft.department.trim());
+      }
+
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/slot-recommendations?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: ChangeCalendarSlotRecommendationResponse = await response.json();
+      setChangeCalendarSlotRecommendations(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setChangeCalendarSlotRecommendations(null);
+      return null;
+    } finally {
+      setLoadingChangeCalendarRecommendations(false);
+    }
+  }, [changeCalendarReservationDraft]);
+
+  const createChangeCalendarReservation = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const startAt = localDateTimeInputToUtcRfc3339(changeCalendarReservationDraft.start_at_local);
+    const endAt = localDateTimeInputToUtcRfc3339(changeCalendarReservationDraft.end_at_local);
+    if (!startAt || !endAt) {
+      setError("Reservation requires valid start/end date-time.");
+      return null;
+    }
+    if (Date.parse(endAt) <= Date.parse(startAt)) {
+      setError("Reservation requires end time later than start time.");
+      return null;
+    }
+    if (changeCalendarReservationDraft.operation_kind.trim().length === 0) {
+      setError("Operation kind is required for reservation.");
+      return null;
+    }
+    if (changeCalendarReservationDraft.owner.trim().length === 0) {
+      setError("Owner is required for reservation.");
+      return null;
+    }
+
+    setCreatingChangeCalendarReservation(true);
+    setChangeCalendarNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/reservations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          start_at: startAt,
+          end_at: endAt,
+          operation_kind: changeCalendarReservationDraft.operation_kind.trim(),
+          risk_level: changeCalendarReservationDraft.risk_level,
+          owner: changeCalendarReservationDraft.owner.trim(),
+          site: trimToNull(changeCalendarReservationDraft.site),
+          department: trimToNull(changeCalendarReservationDraft.department),
+          note: trimToNull(changeCalendarReservationDraft.note)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: { reservation: ChangeCalendarReservationRecord; decision_reason: string } = await response.json();
+      setPlaybookReservationId(String(payload.reservation.id));
+      setChangeCalendarNotice(
+        `Reservation #${payload.reservation.id} created: ${payload.decision_reason}`
+      );
+      await Promise.all([loadChangeCalendar(), loadChangeCalendarReservations()]);
+      return payload.reservation;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setCreatingChangeCalendarReservation(false);
+    }
+  }, [
+    canWriteCmdb,
+    changeCalendarReservationDraft,
+    loadChangeCalendar,
+    loadChangeCalendarReservations,
+    t
+  ]);
+
   const checkChangeCalendarConflicts = useCallback(async () => {
     if (!canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
@@ -3856,7 +4089,7 @@ export function App() {
   }, [canWriteCmdb, handoverDigestShiftDate, loadHandoverDigest, loadWeeklyDigest, t]);
 
   const loadDailyCockpitSnapshot = useCallback(async () => {
-    const [queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, digest, handover] = await Promise.all([
+    const [queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, reservations, digest, handover] = await Promise.all([
       loadDailyCockpitQueue(),
       loadNextBestActions(),
       loadOpsChecklist(),
@@ -3865,15 +4098,17 @@ export function App() {
       loadBackupPolicyRuns(),
       loadBackupRestoreEvidence(),
       loadChangeCalendar(),
+      loadChangeCalendarReservations(),
       loadWeeklyDigest(),
       loadHandoverDigest()
     ]);
-    return { queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, digest, handover };
+    return { queue, nextActions, checklist, incidents, policies, runs, evidence, calendar, reservations, digest, handover };
   }, [
     loadBackupPolicies,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadChangeCalendar,
+    loadChangeCalendarReservations,
     loadDailyCockpitQueue,
     loadHandoverDigest,
     loadIncidentCommands,
@@ -6313,6 +6548,8 @@ export function App() {
       setError(params.error);
       return;
     }
+    const reservationId = Number.parseInt(playbookReservationId.trim(), 10);
+    const normalizedReservationId = Number.isFinite(reservationId) && reservationId > 0 ? reservationId : null;
 
     setRunningPlaybookDryRun(true);
     setPlaybookNotice(null);
@@ -6327,7 +6564,8 @@ export function App() {
           },
           body: JSON.stringify({
             params: params.value,
-            asset_ref: trimToNull(playbookAssetRef)
+            asset_ref: trimToNull(playbookAssetRef),
+            reservation_id: normalizedReservationId
           })
         }
       );
@@ -6359,6 +6597,7 @@ export function App() {
     loadPlaybookExecutions,
     playbookAssetRef,
     playbookCatalog,
+    playbookReservationId,
     playbookParamsDraft,
     selectedPlaybookKey,
     t
@@ -6384,6 +6623,8 @@ export function App() {
       setError(params.error);
       return;
     }
+    const reservationId = Number.parseInt(playbookReservationId.trim(), 10);
+    const normalizedReservationId = Number.isFinite(reservationId) && reservationId > 0 ? reservationId : null;
 
     const requiresConfirmation = selectedPlaybook.requires_confirmation
       || selectedPlaybook.risk_level === "high"
@@ -6417,6 +6658,7 @@ export function App() {
           body: JSON.stringify({
             params: params.value,
             asset_ref: trimToNull(playbookAssetRef),
+            reservation_id: normalizedReservationId,
             dry_run_id: dryRunId,
             confirmation_token: trimToNull(playbookConfirmationToken),
             approval_id: requiresConfirmation ? approvalId : null,
@@ -6458,6 +6700,7 @@ export function App() {
     playbookDryRunResponse?.execution.id,
     playbookMaintenanceOverrideConfirmed,
     playbookMaintenanceOverrideReason,
+    playbookReservationId,
     playbookParamsDraft,
     selectedPlaybookApprovalId,
     selectedPlaybookKey,
@@ -8269,6 +8512,7 @@ export function App() {
     playbookNotice,
     playbookParamsDraft,
     playbookQuery,
+    playbookReservationId,
     rejectWorkflowRequest,
     rejectingWorkflowRequestId,
     removeWorkflowStepFromDraft,
@@ -8292,6 +8536,7 @@ export function App() {
     setPlaybookMaintenanceOverrideReason,
     setPlaybookParamsDraft,
     setPlaybookQuery,
+    setPlaybookReservationId,
     setSelectedPlaybookApprovalId,
     setSelectedPlaybookKey,
     setNewTicket,
@@ -8716,6 +8961,9 @@ export function App() {
     changeCalendar,
     changeCalendarConflictDraft,
     changeCalendarConflictResult,
+    changeCalendarReservationDraft,
+    changeCalendarReservations,
+    changeCalendarSlotRecommendations,
     changeCalendarEndDate,
     changeCalendarNotice,
     changeCalendarStartDate,
@@ -8725,6 +8973,7 @@ export function App() {
     canWriteCmdb,
     closeHandoverCarryoverItem,
     checkChangeCalendarConflicts,
+    createChangeCalendarReservation,
     closingHandoverItemKey,
     cockpitCriticalAssets,
     cockpitOperationalAssets,
@@ -8750,6 +8999,8 @@ export function App() {
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadChangeCalendar,
+    loadChangeCalendarReservations,
+    loadChangeCalendarSlotRecommendations,
     loadHandoverDigest,
     loadIncidentCommandDetail,
     loadIncidentCommands,
@@ -8778,6 +9029,9 @@ export function App() {
     loadingBackupRestoreEvidence,
     loadingChangeCalendar,
     checkingChangeCalendarConflict,
+    loadingChangeCalendarReservations,
+    loadingChangeCalendarRecommendations,
+    creatingChangeCalendarReservation,
     loadingWeeklyDigest,
     runningBackupPolicyActionId,
     loadingAssetStats,
@@ -8808,6 +9062,7 @@ export function App() {
     setBackupRestoreEvidenceDraft,
     setBackupRestoreRunStatusFilter,
     setChangeCalendarConflictDraft,
+    setChangeCalendarReservationDraft,
     setChangeCalendarEndDate,
     setChangeCalendarStartDate,
     setDailyCockpitDepartmentFilter,

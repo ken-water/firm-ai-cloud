@@ -183,6 +183,7 @@ struct PlaybookDryRunResponse {
     execution: PlaybookExecutionDetail,
     risk_summary: DryRunRiskSummary,
     confirmation: Option<DryRunConfirmationChallenge>,
+    reservation_context: Option<PlaybookReservationContext>,
 }
 
 #[derive(Debug, Serialize)]
@@ -312,6 +313,7 @@ struct PlaybookApprovalRequestListQuery {
 struct PlaybookRunRequest {
     params: Option<Value>,
     asset_ref: Option<String>,
+    reservation_id: Option<i64>,
     related_ticket_id: Option<i64>,
     related_alert_id: Option<i64>,
 }
@@ -320,6 +322,7 @@ struct PlaybookRunRequest {
 struct PlaybookExecuteRequest {
     params: Option<Value>,
     asset_ref: Option<String>,
+    reservation_id: Option<i64>,
     dry_run_id: Option<i64>,
     confirmation_token: Option<String>,
     approval_id: Option<i64>,
@@ -368,6 +371,20 @@ struct PlaybookRecord {
     is_system: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, FromRow, Clone)]
+struct PlaybookReservationContext {
+    id: i64,
+    operation_kind: String,
+    risk_level: String,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    owner: String,
+    status: String,
+    site: Option<String>,
+    department: Option<String>,
+    note: Option<String>,
 }
 
 #[derive(Debug, FromRow)]
@@ -985,10 +1002,16 @@ async fn dry_run_playbook(
     let schema = parse_parameter_schema(playbook.params.clone())?;
     let normalized_params = normalize_playbook_params(payload.params, &schema)?;
     let asset_ref = trim_optional(payload.asset_ref, MAX_ASSET_REF_LEN);
+    let reservation_id = normalize_optional_positive_id(payload.reservation_id, "reservation_id")?;
     let related_ticket_id =
         normalize_optional_positive_id(payload.related_ticket_id, "related_ticket_id")?;
     let related_alert_id =
         normalize_optional_positive_id(payload.related_alert_id, "related_alert_id")?;
+    let reservation_context = if let Some(id) = reservation_id {
+        Some(load_change_calendar_reservation_context(&state.db, id).await?)
+    } else {
+        None
+    };
     let planned_steps = parse_execution_plan_steps(playbook.execution_plan.clone())?;
 
     let confirmation_required = playbook_requires_confirmation(&playbook);
@@ -1020,6 +1043,7 @@ async fn dry_run_playbook(
         "summary": dry_run_risk_summary_text(playbook.risk_level.as_str(), confirmation_required),
         "requires_confirmation": confirmation_required,
         "confirmation_token": confirmation_token,
+        "reservation_context": reservation_context,
         "next_actions": [
             {
                 "label": "execute_playbook",
@@ -1074,7 +1098,8 @@ async fn dry_run_playbook(
             "playbook_key": playbook.key,
             "risk_level": playbook.risk_level,
             "confirmation_required": confirmation_required,
-            "mode": "dry_run"
+            "mode": "dry_run",
+            "reservation_id": reservation_context.as_ref().map(|item| item.id)
         }),
     )
     .await;
@@ -1092,6 +1117,7 @@ async fn dry_run_playbook(
             summary: dry_run_risk_summary_text(playbook.risk_level.as_str(), confirmation_required),
         },
         confirmation,
+        reservation_context,
     }))
 }
 
@@ -1109,10 +1135,16 @@ async fn execute_playbook(
     let schema = parse_parameter_schema(playbook.params.clone())?;
     let normalized_params = normalize_playbook_params(payload.params, &schema)?;
     let asset_ref = trim_optional(payload.asset_ref, MAX_ASSET_REF_LEN);
+    let reservation_id = normalize_optional_positive_id(payload.reservation_id, "reservation_id")?;
     let related_ticket_id =
         normalize_optional_positive_id(payload.related_ticket_id, "related_ticket_id")?;
     let related_alert_id =
         normalize_optional_positive_id(payload.related_alert_id, "related_alert_id")?;
+    let reservation_context = if let Some(id) = reservation_id {
+        Some(load_change_calendar_reservation_context(&state.db, id).await?)
+    } else {
+        None
+    };
     let planned_steps = parse_execution_plan_steps(playbook.execution_plan.clone())?;
 
     let override_input = MaintenanceOverrideInput {
@@ -1161,6 +1193,7 @@ async fn execute_playbook(
     let result = json!({
         "mode": "execute",
         "summary": "Playbook execution completed with audit trail.",
+        "reservation_context": reservation_context,
         "next_actions": [
             {
                 "label": "open_workflow_page",
@@ -1222,7 +1255,8 @@ async fn execute_playbook(
             "playbook_key": playbook.key,
             "risk_level": playbook.risk_level,
             "mode": "execute",
-            "confirmation_required": confirmation_required
+            "confirmation_required": confirmation_required,
+            "reservation_id": reservation_context.as_ref().map(|item| item.id)
         }),
     )
     .await;
@@ -1336,6 +1370,7 @@ async fn replay_playbook_execution(
             let request = PlaybookRunRequest {
                 params: Some(source.params.clone()),
                 asset_ref: source.asset_ref.clone(),
+                reservation_id: None,
                 related_ticket_id: source.related_ticket_id,
                 related_alert_id: source.related_alert_id,
             };
@@ -1353,6 +1388,7 @@ async fn replay_playbook_execution(
             let request = PlaybookExecuteRequest {
                 params: Some(source.params.clone()),
                 asset_ref: source.asset_ref.clone(),
+                reservation_id: None,
                 dry_run_id: payload.dry_run_id,
                 confirmation_token: payload.confirmation_token,
                 approval_id: payload.approval_id,
@@ -1625,6 +1661,22 @@ async fn load_playbook_by_key(db: &sqlx::PgPool, key: &str) -> AppResult<Playboo
     .await?;
 
     item.ok_or_else(|| AppError::NotFound(format!("playbook '{key}' not found")))
+}
+
+async fn load_change_calendar_reservation_context(
+    db: &sqlx::PgPool,
+    id: i64,
+) -> AppResult<PlaybookReservationContext> {
+    let item: Option<PlaybookReservationContext> = sqlx::query_as(
+        "SELECT id, operation_kind, risk_level, start_at, end_at, owner, status, site, department, note
+         FROM ops_change_calendar_reservations
+         WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+
+    item.ok_or_else(|| AppError::Validation(format!("reservation_id {id} is not found")))
 }
 
 async fn load_playbook_execution_detail(

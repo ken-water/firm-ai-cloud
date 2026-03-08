@@ -77,6 +77,7 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   playbookNotice,
   playbookParamsDraft,
   playbookQuery,
+  playbookReservationId,
   rejectPlaybookApprovalRequest,
   rejectWorkflowRequest,
   rejectingPlaybookApprovalId,
@@ -108,6 +109,7 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
   setPlaybookMaintenanceOverrideReason,
   setPlaybookParamsDraft,
   setPlaybookQuery,
+  setPlaybookReservationId,
   setSelectedPlaybookApprovalId,
   setSelectedPlaybookKey,
   setNewTicket,
@@ -867,6 +869,14 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
                 placeholder="asset-101"
               />
             </label>
+            <label className="control-field">
+              <span>Reservation ID (optional)</span>
+              <input
+                value={playbookReservationId}
+                onChange={(event) => setPlaybookReservationId(event.target.value)}
+                placeholder="123"
+              />
+            </label>
           </div>
 
           {loadingPlaybookCatalog && playbookCatalog.length === 0 ? (
@@ -1130,6 +1140,15 @@ export function WorkflowTicketSections(rawProps: Record<string, unknown>) {
                           token: playbookDryRunResponse.confirmation.token,
                           expiresAt: new Date(playbookDryRunResponse.confirmation.expires_at).toLocaleString()
                         })}
+                      </p>
+                    )}
+                    {playbookDryRunResponse.reservation_context && (
+                      <p className="inline-note">
+                        reservation=#{playbookDryRunResponse.reservation_context.id}
+                        {" | "}slot={new Date(playbookDryRunResponse.reservation_context.start_at).toLocaleString()}
+                        {" -> "} {new Date(playbookDryRunResponse.reservation_context.end_at).toLocaleString()}
+                        {" | "}owner={playbookDryRunResponse.reservation_context.owner}
+                        {" | "}status={playbookDryRunResponse.reservation_context.status}
                       </p>
                     )}
                     <ol style={{ marginTop: "0.35rem" }}>

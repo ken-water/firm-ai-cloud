@@ -25,6 +25,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     changeCalendar,
     changeCalendarConflictDraft,
     changeCalendarConflictResult,
+    changeCalendarReservationDraft,
+    changeCalendarReservations,
+    changeCalendarSlotRecommendations,
     changeCalendarEndDate,
     changeCalendarNotice,
     changeCalendarStartDate,
@@ -33,6 +36,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     canAccessAdmin,
     canWriteCmdb,
     checkChangeCalendarConflicts,
+    createChangeCalendarReservation,
     closeHandoverCarryoverItem,
     closingHandoverItemKey,
     cockpitCriticalAssets,
@@ -62,6 +66,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadChangeCalendar,
+    loadChangeCalendarReservations,
+    loadChangeCalendarSlotRecommendations,
     loadHandoverDigest,
     loadIncidentCommandDetail,
     loadIncidentCommands,
@@ -87,6 +93,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingBackupRestoreEvidence,
     loadingChangeCalendar,
     checkingChangeCalendarConflict,
+    loadingChangeCalendarReservations,
+    loadingChangeCalendarRecommendations,
+    creatingChangeCalendarReservation,
     loadingWeeklyDigest,
     loadingAssetStats,
     loadingAssets,
@@ -116,6 +125,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setBackupRestoreEvidenceDraft,
     setBackupRestoreRunStatusFilter,
     setChangeCalendarConflictDraft,
+    setChangeCalendarReservationDraft,
     setChangeCalendarEndDate,
     setChangeCalendarStartDate,
     setDailyCockpitDepartmentFilter,
@@ -1187,8 +1197,17 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <button onClick={() => void loadChangeCalendar()} disabled={loadingChangeCalendar}>
                   {loadingChangeCalendar ? t("cmdb.actions.loading") : "Refresh calendar"}
                 </button>
+                <button onClick={() => void loadChangeCalendarReservations()} disabled={loadingChangeCalendarReservations}>
+                  {loadingChangeCalendarReservations ? t("cmdb.actions.loading") : "Refresh reservations"}
+                </button>
                 <button onClick={() => void checkChangeCalendarConflicts()} disabled={!canWriteCmdb || checkingChangeCalendarConflict}>
                   {checkingChangeCalendarConflict ? t("cmdb.actions.loading") : "Check conflict"}
+                </button>
+                <button onClick={() => void loadChangeCalendarSlotRecommendations()} disabled={!canWriteCmdb || loadingChangeCalendarRecommendations}>
+                  {loadingChangeCalendarRecommendations ? t("cmdb.actions.loading") : "Auto suggest slots"}
+                </button>
+                <button onClick={() => void createChangeCalendarReservation()} disabled={!canWriteCmdb || creatingChangeCalendarReservation}>
+                  {creatingChangeCalendarReservation ? t("cmdb.actions.loading") : "Reserve slot"}
                 </button>
               </div>
             </div>
@@ -1215,10 +1234,17 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <span>Operation kind</span>
                 <input
                   value={changeCalendarConflictDraft.operation_kind}
-                  onChange={(event) => setChangeCalendarConflictDraft((prev: any) => ({
-                    ...prev,
-                    operation_kind: event.target.value
-                  }))}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setChangeCalendarConflictDraft((prev: any) => ({
+                      ...prev,
+                      operation_kind: value
+                    }));
+                    setChangeCalendarReservationDraft((prev: any) => ({
+                      ...prev,
+                      operation_kind: value
+                    }));
+                  }}
                   placeholder="playbook.execute.restart-service-safe"
                 />
               </label>
@@ -1226,10 +1252,17 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <span>Risk level</span>
                 <select
                   value={changeCalendarConflictDraft.risk_level}
-                  onChange={(event) => setChangeCalendarConflictDraft((prev: any) => ({
-                    ...prev,
-                    risk_level: event.target.value
-                  }))}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setChangeCalendarConflictDraft((prev: any) => ({
+                      ...prev,
+                      risk_level: value
+                    }));
+                    setChangeCalendarReservationDraft((prev: any) => ({
+                      ...prev,
+                      risk_level: value
+                    }));
+                  }}
                 >
                   <option value="low">low</option>
                   <option value="medium">medium</option>
@@ -1242,10 +1275,17 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <input
                   type="datetime-local"
                   value={changeCalendarConflictDraft.start_at_local}
-                  onChange={(event) => setChangeCalendarConflictDraft((prev: any) => ({
-                    ...prev,
-                    start_at_local: event.target.value
-                  }))}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setChangeCalendarConflictDraft((prev: any) => ({
+                      ...prev,
+                      start_at_local: value
+                    }));
+                    setChangeCalendarReservationDraft((prev: any) => ({
+                      ...prev,
+                      start_at_local: value
+                    }));
+                  }}
                 />
               </label>
               <label className="control-field">
@@ -1253,10 +1293,61 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <input
                   type="datetime-local"
                   value={changeCalendarConflictDraft.end_at_local}
-                  onChange={(event) => setChangeCalendarConflictDraft((prev: any) => ({
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setChangeCalendarConflictDraft((prev: any) => ({
+                      ...prev,
+                      end_at_local: value
+                    }));
+                    setChangeCalendarReservationDraft((prev: any) => ({
+                      ...prev,
+                      end_at_local: value
+                    }));
+                  }}
+                />
+              </label>
+              <label className="control-field">
+                <span>Reservation owner</span>
+                <input
+                  value={changeCalendarReservationDraft.owner}
+                  onChange={(event) => setChangeCalendarReservationDraft((prev: any) => ({
                     ...prev,
-                    end_at_local: event.target.value
+                    owner: event.target.value
                   }))}
+                  placeholder="ops-oncall"
+                />
+              </label>
+              <label className="control-field">
+                <span>Reservation site</span>
+                <input
+                  value={changeCalendarReservationDraft.site}
+                  onChange={(event) => setChangeCalendarReservationDraft((prev: any) => ({
+                    ...prev,
+                    site: event.target.value
+                  }))}
+                  placeholder="dc-a"
+                />
+              </label>
+              <label className="control-field">
+                <span>Reservation department</span>
+                <input
+                  value={changeCalendarReservationDraft.department}
+                  onChange={(event) => setChangeCalendarReservationDraft((prev: any) => ({
+                    ...prev,
+                    department: event.target.value
+                  }))}
+                  placeholder="platform"
+                />
+              </label>
+              <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Reservation note</span>
+                <input
+                  value={changeCalendarReservationDraft.note}
+                  onChange={(event) => setChangeCalendarReservationDraft((prev: any) => ({
+                    ...prev,
+                    note: event.target.value
+                  }))}
+                  placeholder="purpose/change ticket/context"
                 />
               </label>
             </div>
@@ -1291,6 +1382,115 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                     ))}
                   </ul>
                 )}
+              </div>
+            )}
+            {changeCalendarSlotRecommendations && (
+              <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                <p className="section-note" style={{ marginTop: 0 }}>
+                  recommendations={changeCalendarSlotRecommendations.total}
+                  {" | "}duration={changeCalendarSlotRecommendations.duration_minutes}m
+                  {" | "}workload(incidents={changeCalendarSlotRecommendations.pending_risky_workload.unresolved_incidents},
+                  tickets={changeCalendarSlotRecommendations.pending_risky_workload.high_priority_tickets},
+                  approvals={changeCalendarSlotRecommendations.pending_risky_workload.pending_approvals})
+                </p>
+                {(changeCalendarSlotRecommendations.items ?? []).length === 0 ? (
+                  <p className="inline-note">No conflict-free slot found in current window.</p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Rank</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Slot</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Score</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Rationale</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(changeCalendarSlotRecommendations.items ?? []).map((item: any) => (
+                          <tr key={`calendar-recommendation-${item.rank}-${item.start_at}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              #{item.rank}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {new Date(item.start_at).toLocaleString()}
+                              <div className="inline-note">to {new Date(item.end_at).toLocaleString()}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.score}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {(item.rationale ?? []).join(" | ")}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <button
+                                onClick={() => {
+                                  const start = new Date(item.start_at);
+                                  const end = new Date(item.end_at);
+                                  const startLocal = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}T${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`;
+                                  const endLocal = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}T${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+                                  setChangeCalendarConflictDraft((prev: any) => ({
+                                    ...prev,
+                                    start_at_local: startLocal,
+                                    end_at_local: endLocal
+                                  }));
+                                  setChangeCalendarReservationDraft((prev: any) => ({
+                                    ...prev,
+                                    start_at_local: startLocal,
+                                    end_at_local: endLocal
+                                  }));
+                                }}
+                              >
+                                Use slot
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+            {(changeCalendarReservations ?? []).length > 0 && (
+              <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                <p className="section-note" style={{ marginTop: 0 }}>
+                  reserved_slots={(changeCalendarReservations ?? []).length}
+                </p>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", minWidth: "1020px", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Reservation</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Slot</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Scope</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(changeCalendarReservations ?? []).slice(0, 30).map((item: any) => (
+                        <tr key={`calendar-reservation-${item.id}`}>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            #{item.id} {item.operation_kind}
+                            <div className="inline-note">risk={item.risk_level} status={item.status}</div>
+                            <div className="inline-note">{item.note ?? "-"}</div>
+                          </td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            {new Date(item.start_at).toLocaleString()}
+                            <div className="inline-note">to {new Date(item.end_at).toLocaleString()}</div>
+                          </td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            {item.site ?? "-"} / {item.department ?? "-"}
+                          </td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            {item.owner}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
             {!changeCalendar || (changeCalendar.items ?? []).length === 0 ? (
