@@ -112,6 +112,7 @@ curl -fsS -X POST -H "x-auth-user: admin" \
 
 OPERATOR_USER="rbac-operator-${STAMP}"
 VIEWER_USER="rbac-viewer-${STAMP}"
+OPERATOR_RUNBOOK_EXECUTION_ID=""
 
 log "Validate operator permission matrix"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/setup/preflight"
@@ -180,6 +181,17 @@ assert_code 200 "$OPERATOR_USER" PUT "${API_BASE_URL}/api/v1/ops/cockpit/backup/
   "{\"mode\":\"advisory\",\"sla_hours\":24,\"require_failed_runs\":true,\"require_drill_runs\":true,\"note\":\"rbac evidence policy update\"}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/scorecard"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/scorecard/export?format=csv"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates"
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/executions?limit=5"
+assert_code 200 "$OPERATOR_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/service-restart-safe/execute" \
+  "{\"params\":{\"asset_ref\":\"rbac-op-asset-${STAMP}\",\"service_name\":\"nginx\",\"restart_scope\":\"rolling\"},\"preflight_confirmations\":[\"confirm_change_window\",\"confirm_owner_ack\",\"confirm_rollback_ready\"],\"evidence\":{\"summary\":\"rbac runbook execution summary\",\"ticket_ref\":\"RBAC-RUNBOOK-${STAMP}\",\"artifact_url\":\"https://example.invalid/rbac/runbook/${STAMP}\"},\"note\":\"rbac runbook execute\"}"
+OPERATOR_RUNBOOK_EXECUTION_ID="$(cat "$LAST_BODY_FILE" | extract_first_id)"
+if [[ -z "$OPERATOR_RUNBOOK_EXECUTION_ID" ]]; then
+  echo "ERROR: failed to parse operator runbook execution ID" >&2
+  cat "$LAST_BODY_FILE" >&2 || true
+  exit 1
+fi
+assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/executions/${OPERATOR_RUNBOOK_EXECUTION_ID}"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest/export?format=csv"
 assert_code 200 "$OPERATOR_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar?days=7"
@@ -286,6 +298,11 @@ assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/re
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/policy"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/scorecard"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/scorecard/export?format=json"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates"
+assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/executions?limit=5"
+if [[ -n "$OPERATOR_RUNBOOK_EXECUTION_ID" ]]; then
+  assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/executions/${OPERATOR_RUNBOOK_EXECUTION_ID}"
+fi
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/weekly-digest/export?format=json"
 assert_code 200 "$VIEWER_USER" GET "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar?days=7"
@@ -313,6 +330,8 @@ assert_code 403 "$VIEWER_USER" PATCH "${API_BASE_URL}/api/v1/ops/cockpit/backup/
   "{\"note\":\"viewer should not patch evidence\",\"close_evidence\":true}"
 assert_code 403 "$VIEWER_USER" PUT "${API_BASE_URL}/api/v1/ops/cockpit/backup/evidence-compliance/policy" \
   "{\"mode\":\"enforced\",\"sla_hours\":12,\"require_failed_runs\":true,\"require_drill_runs\":true,\"note\":\"viewer deny evidence policy update\"}"
+assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/service-restart-safe/execute" \
+  "{\"params\":{\"asset_ref\":\"rbac-viewer-asset-${STAMP}\",\"service_name\":\"nginx\",\"restart_scope\":\"rolling\"},\"preflight_confirmations\":[\"confirm_change_window\",\"confirm_owner_ack\",\"confirm_rollback_ready\"],\"evidence\":{\"summary\":\"viewer should not execute\",\"ticket_ref\":\"RBAC-VIEWER-RUNBOOK-${STAMP}\"}}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/conflicts" \
   "{\"start_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"end_at\":\"$(date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)\",\"operation_kind\":\"playbook.execute.restart-service-safe\",\"risk_level\":\"high\"}"
 assert_code 403 "$VIEWER_USER" POST "${API_BASE_URL}/api/v1/ops/cockpit/change-calendar/reservations" \

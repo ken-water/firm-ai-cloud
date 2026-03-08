@@ -1224,6 +1224,106 @@ type HandoverReminderExportResponse = {
   content: string;
 };
 
+type RunbookTemplateParamField = {
+  key: string;
+  label: string;
+  field_type: "string" | "number" | "enum";
+  required: boolean;
+  options: string[];
+  min_value: number | null;
+  max_value: number | null;
+  default_value: string | null;
+  placeholder: string | null;
+};
+
+type RunbookTemplateChecklistItem = {
+  key: string;
+  label: string;
+  detail: string;
+};
+
+type RunbookTemplateStepItem = {
+  step_id: string;
+  name: string;
+  detail: string;
+};
+
+type RunbookTemplateCatalogItem = {
+  key: string;
+  name: string;
+  description: string;
+  category: string;
+  params: RunbookTemplateParamField[];
+  preflight: RunbookTemplateChecklistItem[];
+  steps: RunbookTemplateStepItem[];
+};
+
+type RunbookTemplateCatalogResponse = {
+  generated_at: string;
+  total: number;
+  items: RunbookTemplateCatalogItem[];
+};
+
+type RunbookExecutionTimelineEvent = {
+  step_id: string;
+  name: string;
+  detail: string;
+  status: "succeeded" | "failed";
+  started_at: string;
+  finished_at: string;
+  output: string;
+  remediation_hint: string | null;
+};
+
+type RunbookExecutionEvidenceRecord = {
+  summary: string;
+  ticket_ref: string | null;
+  artifact_url: string | null;
+  captured_at: string;
+  execution_status: "succeeded" | "failed";
+  operator: string;
+};
+
+type RunbookTemplateExecutionItem = {
+  id: number;
+  template_key: string;
+  template_name: string;
+  status: "succeeded" | "failed";
+  actor: string;
+  params: Record<string, unknown>;
+  preflight: {
+    confirmed: string[];
+    total_required: number;
+  };
+  timeline: RunbookExecutionTimelineEvent[];
+  evidence: RunbookExecutionEvidenceRecord;
+  remediation_hints: string[];
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type RunbookTemplateExecutionListResponse = {
+  generated_at: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: RunbookTemplateExecutionItem[];
+};
+
+type RunbookTemplateExecuteResponse = {
+  generated_at: string;
+  template: RunbookTemplateCatalogItem;
+  execution: RunbookTemplateExecutionItem;
+};
+
+type RunbookEvidenceDraft = {
+  summary: string;
+  ticket_ref: string;
+  artifact_url: string;
+  note: string;
+};
+
 type IncidentCommandStatus = "triage" | "in_progress" | "blocked" | "mitigated" | "postmortem";
 
 type IncidentCommandRecord = {
@@ -2051,6 +2151,13 @@ const defaultIncidentCommandDraft: IncidentCommandDraft = {
   note: ""
 };
 
+const defaultRunbookEvidenceDraft: RunbookEvidenceDraft = {
+  summary: "",
+  ticket_ref: "",
+  artifact_url: "",
+  note: ""
+};
+
 const defaultWorkflowStepForm: NewWorkflowTemplateStepForm = {
   id: "",
   name: "",
@@ -2130,6 +2237,28 @@ const lifecycleStatuses: LifecycleStatus[] = [
 ];
 
 const defaultImpactRelationTypes = ["contains", "depends_on", "runs_service", "owned_by"];
+
+function buildRunbookParamDraft(template: RunbookTemplateCatalogItem | null): Record<string, string> {
+  if (!template) {
+    return {};
+  }
+  const draft: Record<string, string> = {};
+  for (const field of template.params ?? []) {
+    draft[field.key] = field.default_value ?? "";
+  }
+  return draft;
+}
+
+function buildRunbookPreflightDraft(template: RunbookTemplateCatalogItem | null): Record<string, boolean> {
+  if (!template) {
+    return {};
+  }
+  const draft: Record<string, boolean> = {};
+  for (const item of template.preflight ?? []) {
+    draft[item.key] = false;
+  }
+  return draft;
+}
 
 export function App() {
   const { t, i18n } = useTranslation();
@@ -2281,6 +2410,12 @@ export function App() {
   const [incidentCommandDraft, setIncidentCommandDraft] = useState<IncidentCommandDraft>(defaultIncidentCommandDraft);
   const [incidentCommandDetail, setIncidentCommandDetail] = useState<IncidentCommandDetailResponse | null>(null);
   const [selectedIncidentAlertId, setSelectedIncidentAlertId] = useState("");
+  const [runbookTemplates, setRunbookTemplates] = useState<RunbookTemplateCatalogItem[]>([]);
+  const [runbookExecutions, setRunbookExecutions] = useState<RunbookTemplateExecutionItem[]>([]);
+  const [selectedRunbookTemplateKey, setSelectedRunbookTemplateKey] = useState("");
+  const [runbookParamDraft, setRunbookParamDraft] = useState<Record<string, string>>({});
+  const [runbookPreflightDraft, setRunbookPreflightDraft] = useState<Record<string, boolean>>({});
+  const [runbookEvidenceDraft, setRunbookEvidenceDraft] = useState<RunbookEvidenceDraft>(defaultRunbookEvidenceDraft);
   const [backupPolicies, setBackupPolicies] = useState<BackupPolicyRecord[]>([]);
   const [backupPolicyRuns, setBackupPolicyRuns] = useState<BackupPolicyRunRecord[]>([]);
   const [backupPolicyDraft, setBackupPolicyDraft] = useState<BackupPolicyForm>(defaultBackupPolicyForm);
@@ -2328,6 +2463,9 @@ export function App() {
   const [loadingOpsChecklist, setLoadingOpsChecklist] = useState(false);
   const [loadingIncidentCommands, setLoadingIncidentCommands] = useState(false);
   const [loadingIncidentCommandDetail, setLoadingIncidentCommandDetail] = useState(false);
+  const [loadingRunbookTemplates, setLoadingRunbookTemplates] = useState(false);
+  const [loadingRunbookExecutions, setLoadingRunbookExecutions] = useState(false);
+  const [executingRunbookTemplate, setExecutingRunbookTemplate] = useState(false);
   const [savingIncidentCommand, setSavingIncidentCommand] = useState(false);
   const [loadingBackupPolicies, setLoadingBackupPolicies] = useState(false);
   const [loadingBackupPolicyRuns, setLoadingBackupPolicyRuns] = useState(false);
@@ -2368,6 +2506,7 @@ export function App() {
   const [dailyCockpitNotice, setDailyCockpitNotice] = useState<string | null>(null);
   const [opsChecklistNotice, setOpsChecklistNotice] = useState<string | null>(null);
   const [incidentCommandNotice, setIncidentCommandNotice] = useState<string | null>(null);
+  const [runbookNotice, setRunbookNotice] = useState<string | null>(null);
   const [backupPolicyNotice, setBackupPolicyNotice] = useState<string | null>(null);
   const [changeCalendarNotice, setChangeCalendarNotice] = useState<string | null>(null);
   const [weeklyDigestNotice, setWeeklyDigestNotice] = useState<string | null>(null);
@@ -3442,6 +3581,209 @@ export function App() {
     }
   }, [canWriteCmdb, incidentCommandDraft, loadIncidentCommands, t]);
 
+  const loadRunbookTemplates = useCallback(async () => {
+    setLoadingRunbookTemplates(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookTemplateCatalogResponse = await response.json();
+      const items = payload.items ?? [];
+      setRunbookTemplates(items);
+
+      const keepSelected = selectedRunbookTemplateKey.length > 0
+        && items.some((item) => item.key === selectedRunbookTemplateKey);
+      const nextSelectedKey = keepSelected
+        ? selectedRunbookTemplateKey
+        : (items[0]?.key ?? "");
+      setSelectedRunbookTemplateKey(nextSelectedKey);
+
+      const selectedTemplate = items.find((item) => item.key === nextSelectedKey) ?? null;
+      if (selectedTemplate) {
+        setRunbookParamDraft((prev) =>
+          keepSelected && Object.keys(prev).length > 0 ? prev : buildRunbookParamDraft(selectedTemplate)
+        );
+        setRunbookPreflightDraft((prev) =>
+          keepSelected && Object.keys(prev).length > 0 ? prev : buildRunbookPreflightDraft(selectedTemplate)
+        );
+      } else {
+        setRunbookParamDraft({});
+        setRunbookPreflightDraft({});
+      }
+
+      return items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setRunbookTemplates([]);
+      setSelectedRunbookTemplateKey("");
+      setRunbookParamDraft({});
+      setRunbookPreflightDraft({});
+      return [];
+    } finally {
+      setLoadingRunbookTemplates(false);
+    }
+  }, [selectedRunbookTemplateKey]);
+
+  const loadRunbookTemplateExecutions = useCallback(async () => {
+    setLoadingRunbookExecutions(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "40",
+        offset: "0"
+      });
+      if (selectedRunbookTemplateKey.trim().length > 0) {
+        params.set("template_key", selectedRunbookTemplateKey.trim());
+      }
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/executions?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookTemplateExecutionListResponse = await response.json();
+      setRunbookExecutions(payload.items ?? []);
+      return payload.items ?? [];
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setRunbookExecutions([]);
+      return [];
+    } finally {
+      setLoadingRunbookExecutions(false);
+    }
+  }, [selectedRunbookTemplateKey]);
+
+  const executeRunbookTemplate = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const template = runbookTemplates.find((item) => item.key === selectedRunbookTemplateKey) ?? null;
+    if (!template) {
+      setError("Runbook template is required.");
+      return null;
+    }
+
+    const paramsPayload: Record<string, unknown> = {};
+    for (const field of template.params ?? []) {
+      const rawValue = (runbookParamDraft[field.key] ?? "").trim();
+      if (field.field_type === "number") {
+        if (rawValue.length === 0) {
+          if (field.required) {
+            setError(`Runbook parameter '${field.label}' is required.`);
+            return null;
+          }
+          continue;
+        }
+        const parsed = Number.parseInt(rawValue, 10);
+        if (!Number.isFinite(parsed)) {
+          setError(`Runbook parameter '${field.label}' must be an integer.`);
+          return null;
+        }
+        paramsPayload[field.key] = parsed;
+      } else {
+        if (rawValue.length === 0) {
+          if (field.required) {
+            setError(`Runbook parameter '${field.label}' is required.`);
+            return null;
+          }
+          continue;
+        }
+        paramsPayload[field.key] = rawValue;
+      }
+    }
+
+    const preflightConfirmations = (template.preflight ?? [])
+      .filter((item) => runbookPreflightDraft[item.key])
+      .map((item) => item.key);
+
+    const summary = runbookEvidenceDraft.summary.trim();
+    if (summary.length === 0) {
+      setError("Runbook evidence summary is required.");
+      return null;
+    }
+
+    setExecutingRunbookTemplate(true);
+    setRunbookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/${template.key}/execute`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            params: paramsPayload,
+            preflight_confirmations: preflightConfirmations,
+            evidence: {
+              summary,
+              ticket_ref: trimToNull(runbookEvidenceDraft.ticket_ref),
+              artifact_url: trimToNull(runbookEvidenceDraft.artifact_url)
+            },
+            note: trimToNull(runbookEvidenceDraft.note)
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookTemplateExecuteResponse = await response.json();
+      await loadRunbookTemplateExecutions();
+      setRunbookPreflightDraft(buildRunbookPreflightDraft(template));
+      setRunbookNotice(
+        `Runbook '${payload.template.name}' execution #${payload.execution.id} finished with status '${payload.execution.status}'.`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setExecutingRunbookTemplate(false);
+    }
+  }, [
+    canWriteCmdb,
+    loadRunbookTemplateExecutions,
+    runbookEvidenceDraft.artifact_url,
+    runbookEvidenceDraft.note,
+    runbookEvidenceDraft.summary,
+    runbookEvidenceDraft.ticket_ref,
+    runbookParamDraft,
+    runbookPreflightDraft,
+    runbookTemplates,
+    selectedRunbookTemplateKey,
+    t
+  ]);
+
+  useEffect(() => {
+    const template = runbookTemplates.find((item) => item.key === selectedRunbookTemplateKey) ?? null;
+    if (!template) {
+      return;
+    }
+
+    setRunbookParamDraft((prev) => {
+      const next = buildRunbookParamDraft(template);
+      for (const key of Object.keys(next)) {
+        if (typeof prev[key] === "string") {
+          next[key] = prev[key];
+        }
+      }
+      return next;
+    });
+
+    setRunbookPreflightDraft((prev) => {
+      const next = buildRunbookPreflightDraft(template);
+      for (const key of Object.keys(next)) {
+        if (typeof prev[key] === "boolean") {
+          next[key] = prev[key];
+        }
+      }
+      return next;
+    });
+  }, [runbookTemplates, selectedRunbookTemplateKey]);
+
   const loadBackupPolicies = useCallback(async () => {
     setLoadingBackupPolicies(true);
     setError(null);
@@ -4478,6 +4820,8 @@ export function App() {
       nextActions,
       checklist,
       incidents,
+      runbooks,
+      runbookExecutions,
       policies,
       runs,
       evidence,
@@ -4493,6 +4837,8 @@ export function App() {
       loadNextBestActions(),
       loadOpsChecklist(),
       loadIncidentCommands(),
+      loadRunbookTemplates(),
+      loadRunbookTemplateExecutions(),
       loadBackupPolicies(),
       loadBackupPolicyRuns(),
       loadBackupRestoreEvidence(),
@@ -4509,6 +4855,8 @@ export function App() {
       nextActions,
       checklist,
       incidents,
+      runbooks,
+      runbookExecutions,
       policies,
       runs,
       evidence,
@@ -4523,6 +4871,8 @@ export function App() {
   }, [
     loadBackupEvidenceCompliancePolicy,
     loadBackupEvidenceComplianceScorecard,
+    loadRunbookTemplateExecutions,
+    loadRunbookTemplates,
     loadBackupPolicies,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
@@ -9408,6 +9758,13 @@ export function App() {
     dailyCockpitQueue,
     dailyCockpitSiteFilter,
     nextBestActions,
+    runbookTemplates,
+    runbookExecutions,
+    selectedRunbookTemplateKey,
+    runbookParamDraft,
+    runbookPreflightDraft,
+    runbookEvidenceDraft,
+    runbookNotice,
     incidentCommandDetail,
     incidentCommandDraft,
     incidentCommandNotice,
@@ -9424,6 +9781,8 @@ export function App() {
     handoverDigestNotice,
     handoverDigestShiftDate,
     loadBackupPolicies,
+    loadRunbookTemplates,
+    loadRunbookTemplateExecutions,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadBackupEvidenceCompliancePolicy,
@@ -9448,12 +9807,16 @@ export function App() {
     loadFieldDefinitions,
     runBackupPolicy,
     runBackupSchedulerTick,
+    executeRunbookTemplate,
     closeBackupRestoreEvidence,
     loadingDailyCockpit,
     loadingNextBestActions,
     loadingOpsChecklist,
     loadingIncidentCommandDetail,
     loadingIncidentCommands,
+    loadingRunbookTemplates,
+    loadingRunbookExecutions,
+    executingRunbookTemplate,
     loadingHandoverDigest,
     loadingHandoverReminders,
     loadingBackupPolicies,
@@ -9510,6 +9873,10 @@ export function App() {
     setFunctionWorkspace,
     setHandoverDigestShiftDate,
     setIncidentCommandDraft,
+    setSelectedRunbookTemplateKey,
+    setRunbookParamDraft,
+    setRunbookPreflightDraft,
+    setRunbookEvidenceDraft,
     setMenuAxis,
     setOpsChecklistDate,
     setSelectedIncidentAlertId,

@@ -54,6 +54,13 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     dailyCockpitQueue,
     dailyCockpitSiteFilter,
     nextBestActions,
+    runbookTemplates,
+    runbookExecutions,
+    selectedRunbookTemplateKey,
+    runbookParamDraft,
+    runbookPreflightDraft,
+    runbookEvidenceDraft,
+    runbookNotice,
     incidentCommandDetail,
     incidentCommandDraft,
     incidentCommandNotice,
@@ -72,6 +79,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     handoverDigestShiftDate,
     functionWorkspace,
     loadBackupPolicies,
+    loadRunbookTemplates,
+    loadRunbookTemplateExecutions,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadBackupEvidenceCompliancePolicy,
@@ -92,6 +101,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadFieldDefinitions,
     runBackupPolicy,
     runBackupSchedulerTick,
+    executeRunbookTemplate,
     closeBackupRestoreEvidence,
     runningBackupPolicyActionId,
     loadingDailyCockpit,
@@ -99,6 +109,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingOpsChecklist,
     loadingIncidentCommandDetail,
     loadingIncidentCommands,
+    loadingRunbookTemplates,
+    loadingRunbookExecutions,
+    executingRunbookTemplate,
     loadingHandoverDigest,
     loadingHandoverReminders,
     loadingBackupPolicies,
@@ -153,6 +166,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setFunctionWorkspace,
     setHandoverDigestShiftDate,
     setIncidentCommandDraft,
+    setSelectedRunbookTemplateKey,
+    setRunbookParamDraft,
+    setRunbookPreflightDraft,
+    setRunbookEvidenceDraft,
     setMenuAxis,
     setOpsChecklistDate,
     setSelectedIncidentAlertId,
@@ -167,6 +184,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     visibleSections,
     creatingSample
   } = rawProps as any;
+  const selectedRunbookTemplate =
+    (runbookTemplates as any[]).find((item) => item.key === selectedRunbookTemplateKey) ?? null;
 
   return (
     <>
@@ -716,6 +735,221 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   </tbody>
                 </table>
               </div>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>One-click runbook templates</h3>
+              <div className="toolbar-row">
+                <button onClick={() => void loadRunbookTemplates()} disabled={loadingRunbookTemplates}>
+                  {loadingRunbookTemplates ? t("cmdb.actions.loading") : "Refresh templates"}
+                </button>
+                <button onClick={() => void loadRunbookTemplateExecutions()} disabled={loadingRunbookExecutions}>
+                  {loadingRunbookExecutions ? t("cmdb.actions.loading") : "Refresh executions"}
+                </button>
+              </div>
+            </div>
+
+            {runbookNotice && <p className="banner banner-success">{runbookNotice}</p>}
+            <p className="section-note">
+              Use guided runbook templates with required preflight checklist and evidence closure.
+            </p>
+
+            {(runbookTemplates as any[]).length === 0 ? (
+              <p>No runbook template loaded.</p>
+            ) : (
+              <>
+                <div className="form-grid">
+                  <label className="control-field">
+                    <span>Template</span>
+                    <select
+                      value={selectedRunbookTemplateKey}
+                      onChange={(event) => {
+                        const nextKey = event.target.value;
+                        setSelectedRunbookTemplateKey(nextKey);
+                      }}
+                    >
+                      {(runbookTemplates as any[]).map((item) => (
+                        <option key={`runbook-template-${item.key}`} value={item.key}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="control-field">
+                    <span>Category</span>
+                    <input value={selectedRunbookTemplate?.category ?? "-"} readOnly />
+                  </label>
+                </div>
+
+                {selectedRunbookTemplate && (
+                  <>
+                    <p className="section-note">{selectedRunbookTemplate.description}</p>
+
+                    <div className="form-grid">
+                      {(selectedRunbookTemplate.params ?? []).map((field: any) => (
+                        <label key={`runbook-param-${field.key}`} className="control-field">
+                          <span>{field.label}{field.required ? " *" : ""}</span>
+                          {field.field_type === "enum" ? (
+                            <select
+                              value={runbookParamDraft[field.key] ?? ""}
+                              onChange={(event) => setRunbookParamDraft((prev: any) => ({
+                                ...prev,
+                                [field.key]: event.target.value
+                              }))}
+                            >
+                              <option value="">-- select --</option>
+                              {(field.options ?? []).map((option: any) => (
+                                <option key={`runbook-param-option-${field.key}-${option}`} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type={field.field_type === "number" ? "number" : "text"}
+                              min={field.min_value ?? undefined}
+                              max={field.max_value ?? undefined}
+                              value={runbookParamDraft[field.key] ?? ""}
+                              onChange={(event) => setRunbookParamDraft((prev: any) => ({
+                                ...prev,
+                                [field.key]: event.target.value
+                              }))}
+                              placeholder={field.placeholder ?? ""}
+                            />
+                          )}
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                      <p className="section-note" style={{ marginTop: 0, marginBottom: "0.35rem" }}>
+                        preflight checklist
+                      </p>
+                      {(selectedRunbookTemplate.preflight ?? []).map((item: any) => (
+                        <label key={`runbook-preflight-${item.key}`} className="inline-note" style={{ display: "block" }}>
+                          <input
+                            type="checkbox"
+                            checked={runbookPreflightDraft[item.key] ?? false}
+                            onChange={(event) => setRunbookPreflightDraft((prev: any) => ({
+                              ...prev,
+                              [item.key]: event.target.checked
+                            }))}
+                          />
+                          {" "}
+                          {item.label} - {item.detail}
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="form-grid">
+                      <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                        <span>Evidence summary *</span>
+                        <input
+                          value={runbookEvidenceDraft.summary}
+                          onChange={(event) => setRunbookEvidenceDraft((prev: any) => ({
+                            ...prev,
+                            summary: event.target.value
+                          }))}
+                          placeholder="what was executed and what is verified"
+                        />
+                      </label>
+                      <label className="control-field">
+                        <span>Evidence ticket</span>
+                        <input
+                          value={runbookEvidenceDraft.ticket_ref}
+                          onChange={(event) => setRunbookEvidenceDraft((prev: any) => ({
+                            ...prev,
+                            ticket_ref: event.target.value
+                          }))}
+                          placeholder="TKT-..."
+                        />
+                      </label>
+                      <label className="control-field">
+                        <span>Evidence artifact URL</span>
+                        <input
+                          value={runbookEvidenceDraft.artifact_url}
+                          onChange={(event) => setRunbookEvidenceDraft((prev: any) => ({
+                            ...prev,
+                            artifact_url: event.target.value
+                          }))}
+                          placeholder="https://artifact.example/runbook-proof"
+                        />
+                      </label>
+                      <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                        <span>Execution note</span>
+                        <input
+                          value={runbookEvidenceDraft.note}
+                          onChange={(event) => setRunbookEvidenceDraft((prev: any) => ({
+                            ...prev,
+                            note: event.target.value
+                          }))}
+                          placeholder="operator note"
+                        />
+                      </label>
+                    </div>
+
+                    <div className="toolbar-row" style={{ marginTop: "0.55rem" }}>
+                      <button onClick={() => void executeRunbookTemplate()} disabled={!canWriteCmdb || executingRunbookTemplate}>
+                        {executingRunbookTemplate ? t("cmdb.actions.loading") : "Execute runbook"}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                <h4 style={{ marginTop: "0.8rem", marginBottom: "0.4rem" }}>Runbook execution timeline</h4>
+                {loadingRunbookExecutions ? (
+                  <p>{t("cmdb.actions.loading")}</p>
+                ) : (runbookExecutions as any[]).length === 0 ? (
+                  <p>No runbook execution record yet.</p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ borderCollapse: "collapse", minWidth: "1120px", width: "100%" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Execution</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Remediation hints</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Evidence</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Actor/Time</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(runbookExecutions as any[]).slice(0, 20).map((item) => (
+                          <tr key={`runbook-execution-${item.id}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              #{item.id} {item.template_name}
+                              <div className="inline-note">{item.template_key}</div>
+                              <div className="inline-note">
+                                timeline={(item.timeline ?? []).map((step: any) => `${step.step_id}:${step.status}`).join(", ")}
+                              </div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.status}
+                              <div className="inline-note">note={item.note ?? "-"}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {(item.remediation_hints ?? []).length > 0
+                                ? (item.remediation_hints ?? []).join(" | ")
+                                : "-"}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.evidence?.summary ?? "-"}
+                              <div className="inline-note">ticket={item.evidence?.ticket_ref ?? "-"}</div>
+                              <div className="inline-note">artifact={item.evidence?.artifact_url ?? "-"}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.actor}
+                              <div className="inline-note">{new Date(item.created_at).toLocaleString()}</div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
             )}
           </div>
 

@@ -13,6 +13,7 @@ mod incident_command;
 mod monitoring;
 mod monitoring_sync_worker;
 mod ops_digest;
+mod ops_runbooks;
 mod playbooks;
 mod secrets;
 mod setup;
@@ -238,6 +239,7 @@ fn build_router(state: AppState) -> Router {
     let mut ops_routes = cockpit::routes()
         .merge(incident_command::routes())
         .merge(backup_dr::routes())
+        .merge(ops_runbooks::routes())
         .merge(change_calendar::routes())
         .merge(ops_digest::routes());
     if state.rbac_enabled {

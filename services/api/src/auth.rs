@@ -774,6 +774,26 @@ mod tests {
         );
         assert_permission(
             Method::GET,
+            "/api/v1/ops/cockpit/runbook-templates",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/runbook-templates/executions",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/runbook-templates/executions/1",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/ops/cockpit/runbook-templates/service-restart-safe/execute",
+            "ops.cockpit.write",
+        );
+        assert_permission(
+            Method::GET,
             "/api/v1/ops/cockpit/handover-digest/reminders",
             "ops.cockpit.read",
         );
@@ -1096,6 +1116,26 @@ mod tests {
                 Method::GET,
                 "/api/v1/ops/cockpit/backup/evidence-compliance/scorecard/export",
                 "ops.cockpit.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/runbook-templates",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/runbook-templates/executions",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/runbook-templates/executions/1",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/runbook-templates/service-restart-safe/execute",
+                "ops.cockpit.write",
             ),
             (
                 Method::POST,
