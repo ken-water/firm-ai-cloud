@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::State,
+    extract::{OriginalUri, State},
     http::{HeaderMap, Method, Request, header::AUTHORIZATION},
     middleware::Next,
     response::Response,
@@ -42,9 +42,14 @@ pub async fn rbac_guard(
 
     let method = request.method().clone();
     let path = request.uri().path().to_string();
+    let original_path = request
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|uri| uri.0.path().to_string())
+        .unwrap_or_else(|| path.clone());
 
     let user = resolve_auth_user(&state, request.headers()).await?;
-    let permission = match required_permission(&method, &path) {
+    let permission = match required_permission(&method, &original_path) {
         Some(value) => value,
         None => {
             write_audit_log_best_effort(
@@ -53,21 +58,22 @@ pub async fn rbac_guard(
                     actor: user.clone(),
                     action: "auth.permission_denied".to_string(),
                     target_type: "route".to_string(),
-                    target_id: Some(path.clone()),
+                    target_id: Some(original_path.clone()),
                     result: "denied".to_string(),
                     message: Some(format!(
-                        "no RBAC permission mapping found for route '{path}'"
+                        "no RBAC permission mapping found for route '{original_path}'"
                     )),
                     metadata: json!({
                         "method": method.to_string(),
-                        "path": path
+                        "path": original_path,
+                        "router_path": path
                     }),
                 },
             )
             .await;
 
             return Err(AppError::Forbidden(format!(
-                "no RBAC permission mapping found for route '{path}'"
+                "no RBAC permission mapping found for route '{original_path}'"
             )));
         }
     };
@@ -86,7 +92,8 @@ pub async fn rbac_guard(
                 message: Some("user does not exist or is disabled".to_string()),
                 metadata: json!({
                     "method": method.to_string(),
-                    "path": path,
+                    "path": original_path,
+                    "router_path": path,
                     "permission": permission
                 }),
             },
@@ -104,14 +111,15 @@ pub async fn rbac_guard(
                 actor: user.clone(),
                 action: "auth.permission_denied".to_string(),
                 target_type: "route".to_string(),
-                target_id: Some(path.clone()),
+                target_id: Some(original_path.clone()),
                 result: "denied".to_string(),
                 message: Some(format!(
                     "permission denied: '{user}' cannot access '{permission}'"
                 )),
                 metadata: json!({
                     "method": method.to_string(),
-                    "path": path,
+                    "path": original_path,
+                    "router_path": path,
                     "permission": permission
                 }),
             },
@@ -135,11 +143,13 @@ pub async fn rbac_guard(
             actor: user.clone(),
             action: "auth.login".to_string(),
             target_type: "route".to_string(),
-            target_id: Some(path.clone()),
+            target_id: Some(original_path.clone()),
             result: "success".to_string(),
             message: None,
             metadata: json!({
                 "method": method.to_string(),
+                "path": original_path,
+                "router_path": path,
                 "permission": permission
             }),
         },
@@ -395,6 +405,7 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
     {
         "monitoring.sources"
     } else if matches_scope(&normalized, "/setup")
+        || matches_scope(&normalized, "/profiles")
         || normalized == "/preflight"
         || normalized == "/checklist"
     {
@@ -730,6 +741,18 @@ mod tests {
             "ops.setup.write",
         );
         assert_permission(Method::GET, "/setup/preflight", "ops.setup.read");
+        assert_permission(Method::GET, "/profiles", "ops.setup.read");
+        assert_permission(Method::GET, "/profiles/history", "ops.setup.read");
+        assert_permission(
+            Method::POST,
+            "/profiles/smb-small-office/preview",
+            "ops.setup.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/profiles/smb-small-office/apply",
+            "ops.setup.write",
+        );
         assert_permission(Method::GET, "/preflight", "ops.setup.read");
         assert_permission(Method::GET, "/checklist", "ops.setup.read");
     }

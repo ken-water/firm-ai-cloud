@@ -222,6 +222,7 @@ stage_calendar_reservation() {
     cat "${LAST_BODY_FILE}" || true
     return 1
   }
+  local recommendation_body_file="${LAST_BODY_FILE}"
 
   request_api GET "/api/v1/ops/cockpit/change-calendar/reservations?days=7"
   status_is_success "${LAST_STATUS}" || {
@@ -235,30 +236,69 @@ stage_calendar_reservation() {
     return 2
   fi
 
-  request_api POST "/api/v1/ops/cockpit/change-calendar/reservations" \
-    "{\"start_at\":\"$(date -u -d '+3 hours' +%Y-%m-%dT%H:%M:%SZ)\",\"end_at\":\"$(date -u -d '+4 hours' +%Y-%m-%dT%H:%M:%SZ)\",\"operation_kind\":\"playbook.execute.restart-service-safe\",\"risk_level\":\"high\",\"owner\":\"${AUTH_USER}\",\"site\":\"dc-a\",\"department\":\"platform\",\"note\":\"qa v0.1.6 reservation\"}"
+  local fallback_start_at fallback_end_at
+  fallback_start_at="$(date -u -d '+3 hours' +%Y-%m-%dT%H:%M:%SZ)"
+  fallback_end_at="$(date -u -d '+4 hours' +%Y-%m-%dT%H:%M:%SZ)"
 
-  if [[ "${LAST_STATUS}" == "403" ]]; then
-    echo "reservation write forbidden under current RBAC; skipped"
-    cat "${LAST_BODY_FILE}" || true
-    return 2
+  mapfile -t slot_pairs < <(jq -r '.items[]? | select(.start_at and .end_at) | "\(.start_at)|\(.end_at)"' "${recommendation_body_file}")
+  if (( ${#slot_pairs[@]} == 0 )); then
+    slot_pairs=("${fallback_start_at}|${fallback_end_at}")
+  else
+    slot_pairs+=("${fallback_start_at}|${fallback_end_at}")
   fi
 
-  status_is_success "${LAST_STATUS}" || {
+  local slot_pair start_at end_at payload
+  for slot_pair in "${slot_pairs[@]}"; do
+    start_at="${slot_pair%%|*}"
+    end_at="${slot_pair##*|}"
+    payload="$(jq -nc \
+      --arg start_at "${start_at}" \
+      --arg end_at "${end_at}" \
+      --arg owner "${AUTH_USER}" \
+      --arg note "qa v0.1.6 reservation ${RUN_ID}" \
+      '{
+        start_at: $start_at,
+        end_at: $end_at,
+        operation_kind: "playbook.execute.restart-service-safe",
+        risk_level: "high",
+        owner: $owner,
+        site: "dc-a",
+        department: "platform",
+        note: $note
+      }')"
+
+    request_api POST "/api/v1/ops/cockpit/change-calendar/reservations" "${payload}"
+
+    if [[ "${LAST_STATUS}" == "403" ]]; then
+      echo "reservation write forbidden under current RBAC; skipped"
+      cat "${LAST_BODY_FILE}" || true
+      return 2
+    fi
+
+    if status_is_success "${LAST_STATUS}"; then
+      RESERVATION_ID="$(jq -r '.reservation.id // .id // empty' "${LAST_BODY_FILE}")"
+      [[ -n "${RESERVATION_ID}" ]] || {
+        echo "reservation response missing id"
+        cat "${LAST_BODY_FILE}" || true
+        return 1
+      }
+
+      echo "calendar reservation flow validated reservation_id=${RESERVATION_ID}"
+      return 0
+    fi
+
+    if [[ "${LAST_STATUS}" == "400" ]] && grep -qi "conflict" "${LAST_BODY_FILE}"; then
+      echo "reservation slot conflict for ${start_at}~${end_at}, retrying next slot"
+      continue
+    fi
+
     echo "reservation create failed, status=${LAST_STATUS}"
     cat "${LAST_BODY_FILE}" || true
     return 1
-  }
+  done
 
-  RESERVATION_ID="$(jq -r '.reservation.id // .id // empty' "${LAST_BODY_FILE}")"
-  [[ -n "${RESERVATION_ID}" ]] || {
-    echo "reservation response missing id"
-    cat "${LAST_BODY_FILE}" || true
-    return 1
-  }
-
-  echo "calendar reservation flow validated reservation_id=${RESERVATION_ID}"
-  return 0
+  echo "reservation create failed after exhausting recommended slots"
+  return 1
 }
 
 stage_evidence_compliance() {
