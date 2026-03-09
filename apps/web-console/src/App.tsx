@@ -1291,6 +1291,7 @@ type RunbookTemplateExecutionItem = {
   template_name: string;
   status: "succeeded" | "failed";
   execution_mode: "simulate" | "live";
+  replay_source_execution_id: number | null;
   actor: string;
   params: Record<string, unknown>;
   preflight: {
@@ -1320,6 +1321,13 @@ type RunbookTemplateExecuteResponse = {
   execution: RunbookTemplateExecutionItem;
 };
 
+type RunbookTemplateReplayResponse = {
+  generated_at: string;
+  template: RunbookTemplateCatalogItem;
+  source_execution_id: number;
+  execution: RunbookTemplateExecutionItem;
+};
+
 type RunbookExecutionPolicyItem = {
   policy_key: string;
   mode: "simulate_only" | "hybrid_live";
@@ -1343,6 +1351,38 @@ type RunbookExecutionPolicyDraft = {
   max_live_step_timeout_seconds: string;
   allow_simulate_failure: boolean;
   note: string;
+};
+
+type RunbookExecutionPresetItem = {
+  id: number;
+  template_key: string;
+  template_name: string;
+  name: string;
+  description: string | null;
+  execution_mode: "simulate" | "live";
+  params: Record<string, unknown>;
+  preflight_confirmations: string[];
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type RunbookExecutionPresetListResponse = {
+  generated_at: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: RunbookExecutionPresetItem[];
+};
+
+type RunbookExecutionPresetDetailResponse = {
+  generated_at: string;
+  item: RunbookExecutionPresetItem;
+};
+
+type RunbookExecutionPresetDraft = {
+  name: string;
+  description: string;
 };
 
 type RunbookEvidenceDraft = {
@@ -2186,6 +2226,11 @@ const defaultRunbookEvidenceDraft: RunbookEvidenceDraft = {
   note: ""
 };
 
+const defaultRunbookExecutionPresetDraft: RunbookExecutionPresetDraft = {
+  name: "",
+  description: ""
+};
+
 const defaultRunbookExecutionPolicyDraft: RunbookExecutionPolicyDraft = {
   mode: "simulate_only",
   live_templates_csv: "",
@@ -2458,13 +2503,18 @@ export function App() {
   const [selectedIncidentAlertId, setSelectedIncidentAlertId] = useState("");
   const [runbookTemplates, setRunbookTemplates] = useState<RunbookTemplateCatalogItem[]>([]);
   const [runbookExecutions, setRunbookExecutions] = useState<RunbookTemplateExecutionItem[]>([]);
+  const [runbookPresets, setRunbookPresets] = useState<RunbookExecutionPresetItem[]>([]);
   const [runbookExecutionPolicy, setRunbookExecutionPolicy] = useState<RunbookExecutionPolicyItem | null>(null);
   const [runbookExecutionPolicyDraft, setRunbookExecutionPolicyDraft] =
     useState<RunbookExecutionPolicyDraft>(defaultRunbookExecutionPolicyDraft);
   const [selectedRunbookTemplateKey, setSelectedRunbookTemplateKey] = useState("");
+  const [selectedRunbookPresetId, setSelectedRunbookPresetId] = useState("");
   const [runbookExecutionMode, setRunbookExecutionMode] = useState<"simulate" | "live">("simulate");
   const [runbookParamDraft, setRunbookParamDraft] = useState<Record<string, string>>({});
   const [runbookPreflightDraft, setRunbookPreflightDraft] = useState<Record<string, boolean>>({});
+  const [runbookPresetDraft, setRunbookPresetDraft] = useState<RunbookExecutionPresetDraft>(
+    defaultRunbookExecutionPresetDraft
+  );
   const [runbookEvidenceDraft, setRunbookEvidenceDraft] = useState<RunbookEvidenceDraft>(defaultRunbookEvidenceDraft);
   const [backupPolicies, setBackupPolicies] = useState<BackupPolicyRecord[]>([]);
   const [backupPolicyRuns, setBackupPolicyRuns] = useState<BackupPolicyRunRecord[]>([]);
@@ -2515,9 +2565,12 @@ export function App() {
   const [loadingIncidentCommandDetail, setLoadingIncidentCommandDetail] = useState(false);
   const [loadingRunbookTemplates, setLoadingRunbookTemplates] = useState(false);
   const [loadingRunbookExecutions, setLoadingRunbookExecutions] = useState(false);
+  const [loadingRunbookPresets, setLoadingRunbookPresets] = useState(false);
   const [loadingRunbookExecutionPolicy, setLoadingRunbookExecutionPolicy] = useState(false);
   const [executingRunbookTemplate, setExecutingRunbookTemplate] = useState(false);
+  const [savingRunbookPreset, setSavingRunbookPreset] = useState(false);
   const [savingRunbookExecutionPolicy, setSavingRunbookExecutionPolicy] = useState(false);
+  const [replayingRunbookExecutionId, setReplayingRunbookExecutionId] = useState<number | null>(null);
   const [savingIncidentCommand, setSavingIncidentCommand] = useState(false);
   const [loadingBackupPolicies, setLoadingBackupPolicies] = useState(false);
   const [loadingBackupPolicyRuns, setLoadingBackupPolicyRuns] = useState(false);
@@ -3784,6 +3837,279 @@ export function App() {
     }
   }, [selectedRunbookTemplateKey]);
 
+  const loadRunbookExecutionPresets = useCallback(async () => {
+    setLoadingRunbookPresets(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "80",
+        offset: "0"
+      });
+      if (selectedRunbookTemplateKey.trim().length > 0) {
+        params.set("template_key", selectedRunbookTemplateKey.trim());
+      }
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/presets?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookExecutionPresetListResponse = await response.json();
+      const items = payload.items ?? [];
+      setRunbookPresets(items);
+      setSelectedRunbookPresetId((prev) => {
+        if (prev.length > 0 && items.some((item) => String(item.id) === prev)) {
+          return prev;
+        }
+        return items[0] ? String(items[0].id) : "";
+      });
+      return items;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setRunbookPresets([]);
+      setSelectedRunbookPresetId("");
+      return [];
+    } finally {
+      setLoadingRunbookPresets(false);
+    }
+  }, [selectedRunbookTemplateKey]);
+
+  const applyRunbookExecutionPreset = useCallback((preset: RunbookExecutionPresetItem | null) => {
+    if (!preset) {
+      return;
+    }
+    const template = runbookTemplates.find((item) => item.key === preset.template_key) ?? null;
+    if (!template) {
+      setError(`Preset template '${preset.template_key}' is not available in current catalog.`);
+      return;
+    }
+
+    setSelectedRunbookTemplateKey(preset.template_key);
+    setRunbookExecutionMode(preset.execution_mode);
+    setRunbookParamDraft(() => {
+      const next = buildRunbookParamDraft(template);
+      for (const field of template.params ?? []) {
+        const value = preset.params?.[field.key];
+        if (typeof value === "number" || typeof value === "string") {
+          next[field.key] = String(value);
+        }
+      }
+      return next;
+    });
+    setRunbookPreflightDraft(() => {
+      const next = buildRunbookPreflightDraft(template);
+      const confirmed = new Set(preset.preflight_confirmations ?? []);
+      for (const item of template.preflight ?? []) {
+        next[item.key] = confirmed.has(item.key);
+      }
+      return next;
+    });
+    setSelectedRunbookPresetId(String(preset.id));
+    setRunbookNotice(
+      `Preset '${preset.name}' applied for template '${template.name}' in mode '${preset.execution_mode}'.`
+    );
+  }, [runbookTemplates]);
+
+  const createRunbookExecutionPreset = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    const template = runbookTemplates.find((item) => item.key === selectedRunbookTemplateKey) ?? null;
+    if (!template) {
+      setError("Runbook template is required.");
+      return null;
+    }
+
+    const presetName = runbookPresetDraft.name.trim();
+    if (presetName.length === 0) {
+      setError("Runbook preset name is required.");
+      return null;
+    }
+    const supportedModes = (template.execution_modes ?? []).length > 0
+      ? template.execution_modes
+      : ["simulate"];
+    if (!supportedModes.includes(runbookExecutionMode)) {
+      setError(`Runbook execution mode '${runbookExecutionMode}' is not supported by template '${template.key}'.`);
+      return null;
+    }
+
+    const paramsPayload: Record<string, unknown> = {};
+    for (const field of template.params ?? []) {
+      const rawValue = (runbookParamDraft[field.key] ?? "").trim();
+      if (field.field_type === "number") {
+        if (rawValue.length === 0) {
+          if (field.required) {
+            setError(`Runbook parameter '${field.label}' is required.`);
+            return null;
+          }
+          continue;
+        }
+        const parsed = Number.parseInt(rawValue, 10);
+        if (!Number.isFinite(parsed)) {
+          setError(`Runbook parameter '${field.label}' must be an integer.`);
+          return null;
+        }
+        paramsPayload[field.key] = parsed;
+      } else {
+        if (rawValue.length === 0) {
+          if (field.required) {
+            setError(`Runbook parameter '${field.label}' is required.`);
+            return null;
+          }
+          continue;
+        }
+        paramsPayload[field.key] = rawValue;
+      }
+    }
+
+    const preflightConfirmations = (template.preflight ?? [])
+      .filter((item) => runbookPreflightDraft[item.key])
+      .map((item) => item.key);
+
+    setSavingRunbookPreset(true);
+    setError(null);
+    setRunbookNotice(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/presets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          template_key: template.key,
+          name: presetName,
+          description: trimToNull(runbookPresetDraft.description),
+          execution_mode: runbookExecutionMode,
+          params: paramsPayload,
+          preflight_confirmations: preflightConfirmations
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookExecutionPresetDetailResponse = await response.json();
+      await loadRunbookExecutionPresets();
+      setSelectedRunbookPresetId(String(payload.item.id));
+      setRunbookPresetDraft(defaultRunbookExecutionPresetDraft);
+      setRunbookNotice(
+        `Runbook preset '${payload.item.name}' saved for template '${payload.item.template_name}'.`
+      );
+      return payload.item;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setSavingRunbookPreset(false);
+    }
+  }, [
+    canWriteCmdb,
+    loadRunbookExecutionPresets,
+    runbookExecutionMode,
+    runbookParamDraft,
+    runbookPreflightDraft,
+    runbookPresetDraft.description,
+    runbookPresetDraft.name,
+    runbookTemplates,
+    selectedRunbookTemplateKey,
+    t
+  ]);
+
+  const deleteRunbookExecutionPreset = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    const presetId = Number.parseInt(selectedRunbookPresetId, 10);
+    if (!Number.isFinite(presetId) || presetId <= 0) {
+      setError("Runbook preset selection is required.");
+      return null;
+    }
+
+    setSavingRunbookPreset(true);
+    setError(null);
+    setRunbookNotice(null);
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/presets/${presetId}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await loadRunbookExecutionPresets();
+      setSelectedRunbookPresetId("");
+      setRunbookNotice(`Runbook preset #${presetId} deleted.`);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setSavingRunbookPreset(false);
+    }
+  }, [canWriteCmdb, loadRunbookExecutionPresets, selectedRunbookPresetId, t]);
+
+  const replayRunbookTemplateExecution = useCallback(async (executionId: number) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    if (!Number.isFinite(executionId) || executionId <= 0) {
+      setError("Runbook execution id is required for replay.");
+      return null;
+    }
+
+    setReplayingRunbookExecutionId(executionId);
+    setError(null);
+    setRunbookNotice(null);
+    try {
+      const evidenceSummary = runbookEvidenceDraft.summary.trim();
+      const payload: Record<string, unknown> = {};
+      const overrideNote = trimToNull(runbookEvidenceDraft.note);
+      if (overrideNote) {
+        payload.note = overrideNote;
+      }
+      if (evidenceSummary.length > 0) {
+        payload.evidence = {
+          summary: evidenceSummary,
+          ticket_ref: trimToNull(runbookEvidenceDraft.ticket_ref),
+          artifact_url: trimToNull(runbookEvidenceDraft.artifact_url)
+        };
+      }
+
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/executions/${executionId}/replay`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const replayed: RunbookTemplateReplayResponse = await response.json();
+      await loadRunbookTemplateExecutions();
+      setRunbookNotice(
+        `Runbook replay created execution #${replayed.execution.id} from source #${replayed.source_execution_id}.`
+      );
+      return replayed;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setReplayingRunbookExecutionId(null);
+    }
+  }, [
+    canWriteCmdb,
+    loadRunbookTemplateExecutions,
+    runbookEvidenceDraft.artifact_url,
+    runbookEvidenceDraft.note,
+    runbookEvidenceDraft.summary,
+    runbookEvidenceDraft.ticket_ref,
+    t
+  ]);
+
   const executeRunbookTemplate = useCallback(async () => {
     if (!canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
@@ -3934,6 +4260,10 @@ export function App() {
       return next;
     });
   }, [runbookTemplates, selectedRunbookTemplateKey]);
+
+  useEffect(() => {
+    void loadRunbookExecutionPresets();
+  }, [loadRunbookExecutionPresets]);
 
   const loadBackupPolicies = useCallback(async () => {
     setLoadingBackupPolicies(true);
@@ -4974,6 +5304,7 @@ export function App() {
       runbooks,
       runbookPolicy,
       runbookExecutions,
+      runbookPresets,
       policies,
       runs,
       evidence,
@@ -4992,6 +5323,7 @@ export function App() {
       loadRunbookTemplates(),
       loadRunbookExecutionPolicy(),
       loadRunbookTemplateExecutions(),
+      loadRunbookExecutionPresets(),
       loadBackupPolicies(),
       loadBackupPolicyRuns(),
       loadBackupRestoreEvidence(),
@@ -5011,6 +5343,7 @@ export function App() {
       runbooks,
       runbookPolicy,
       runbookExecutions,
+      runbookPresets,
       policies,
       runs,
       evidence,
@@ -5026,6 +5359,7 @@ export function App() {
     loadBackupEvidenceCompliancePolicy,
     loadBackupEvidenceComplianceScorecard,
     loadRunbookExecutionPolicy,
+    loadRunbookExecutionPresets,
     loadRunbookTemplateExecutions,
     loadRunbookTemplates,
     loadBackupPolicies,
@@ -9915,12 +10249,15 @@ export function App() {
     nextBestActions,
     runbookTemplates,
     runbookExecutions,
+    runbookPresets,
     runbookExecutionPolicy,
     runbookExecutionPolicyDraft,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
+    selectedRunbookPresetId,
     runbookParamDraft,
     runbookPreflightDraft,
+    runbookPresetDraft,
     runbookEvidenceDraft,
     runbookNotice,
     incidentCommandDetail,
@@ -9942,6 +10279,7 @@ export function App() {
     loadRunbookTemplates,
     loadRunbookExecutionPolicy,
     loadRunbookTemplateExecutions,
+    loadRunbookExecutionPresets,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadBackupEvidenceCompliancePolicy,
@@ -9967,6 +10305,10 @@ export function App() {
     runBackupPolicy,
     runBackupSchedulerTick,
     executeRunbookTemplate,
+    applyRunbookExecutionPreset,
+    createRunbookExecutionPreset,
+    deleteRunbookExecutionPreset,
+    replayRunbookTemplateExecution,
     saveRunbookExecutionPolicy,
     closeBackupRestoreEvidence,
     loadingDailyCockpit,
@@ -9976,9 +10318,12 @@ export function App() {
     loadingIncidentCommands,
     loadingRunbookTemplates,
     loadingRunbookExecutions,
+    loadingRunbookPresets,
     loadingRunbookExecutionPolicy,
     executingRunbookTemplate,
+    savingRunbookPreset,
     savingRunbookExecutionPolicy,
+    replayingRunbookExecutionId,
     loadingHandoverDigest,
     loadingHandoverReminders,
     loadingBackupPolicies,
@@ -10036,10 +10381,12 @@ export function App() {
     setHandoverDigestShiftDate,
     setIncidentCommandDraft,
     setSelectedRunbookTemplateKey,
+    setSelectedRunbookPresetId,
     setRunbookExecutionMode,
     setRunbookExecutionPolicyDraft,
     setRunbookParamDraft,
     setRunbookPreflightDraft,
+    setRunbookPresetDraft,
     setRunbookEvidenceDraft,
     setMenuAxis,
     setOpsChecklistDate,

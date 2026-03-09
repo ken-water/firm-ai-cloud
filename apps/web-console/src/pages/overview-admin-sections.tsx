@@ -56,12 +56,15 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     nextBestActions,
     runbookTemplates,
     runbookExecutions,
+    runbookPresets,
     runbookExecutionPolicy,
     runbookExecutionPolicyDraft,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
+    selectedRunbookPresetId,
     runbookParamDraft,
     runbookPreflightDraft,
+    runbookPresetDraft,
     runbookEvidenceDraft,
     runbookNotice,
     incidentCommandDetail,
@@ -85,6 +88,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadRunbookTemplates,
     loadRunbookExecutionPolicy,
     loadRunbookTemplateExecutions,
+    loadRunbookExecutionPresets,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadBackupEvidenceCompliancePolicy,
@@ -106,6 +110,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     runBackupPolicy,
     runBackupSchedulerTick,
     executeRunbookTemplate,
+    applyRunbookExecutionPreset,
+    createRunbookExecutionPreset,
+    deleteRunbookExecutionPreset,
+    replayRunbookTemplateExecution,
     saveRunbookExecutionPolicy,
     closeBackupRestoreEvidence,
     runningBackupPolicyActionId,
@@ -116,9 +124,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingIncidentCommands,
     loadingRunbookTemplates,
     loadingRunbookExecutions,
+    loadingRunbookPresets,
     loadingRunbookExecutionPolicy,
     executingRunbookTemplate,
+    savingRunbookPreset,
     savingRunbookExecutionPolicy,
+    replayingRunbookExecutionId,
     loadingHandoverDigest,
     loadingHandoverReminders,
     loadingBackupPolicies,
@@ -174,10 +185,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setHandoverDigestShiftDate,
     setIncidentCommandDraft,
     setSelectedRunbookTemplateKey,
+    setSelectedRunbookPresetId,
     setRunbookExecutionMode,
     setRunbookExecutionPolicyDraft,
     setRunbookParamDraft,
     setRunbookPreflightDraft,
+    setRunbookPresetDraft,
     setRunbookEvidenceDraft,
     setMenuAxis,
     setOpsChecklistDate,
@@ -760,6 +773,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <button onClick={() => void loadRunbookTemplateExecutions()} disabled={loadingRunbookExecutions}>
                   {loadingRunbookExecutions ? t("cmdb.actions.loading") : "Refresh executions"}
                 </button>
+                <button onClick={() => void loadRunbookExecutionPresets()} disabled={loadingRunbookPresets}>
+                  {loadingRunbookPresets ? t("cmdb.actions.loading") : "Refresh presets"}
+                </button>
               </div>
             </div>
 
@@ -893,6 +909,71 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   </label>
                 </div>
 
+                <div className="detail-panel" style={{ marginTop: "0.55rem", marginBottom: "0.55rem" }}>
+                  <p className="section-note" style={{ marginTop: 0, marginBottom: "0.35rem" }}>
+                    Execution presets (template scoped): {(runbookPresets as any[]).length}
+                  </p>
+                  <div className="form-grid">
+                    <label className="control-field">
+                      <span>Preset</span>
+                      <select
+                        value={selectedRunbookPresetId}
+                        onChange={(event) => setSelectedRunbookPresetId(event.target.value)}
+                      >
+                        <option value="">-- select preset --</option>
+                        {(runbookPresets as any[]).map((item) => (
+                          <option key={`runbook-preset-${item.id}`} value={String(item.id)}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="control-field">
+                      <span>Preset name</span>
+                      <input
+                        value={runbookPresetDraft.name}
+                        onChange={(event) => setRunbookPresetDraft((prev: any) => ({
+                          ...prev,
+                          name: event.target.value
+                        }))}
+                        placeholder="dependency-baseline"
+                        disabled={!canWriteCmdb}
+                      />
+                    </label>
+                    <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                      <span>Preset description</span>
+                      <input
+                        value={runbookPresetDraft.description}
+                        onChange={(event) => setRunbookPresetDraft((prev: any) => ({
+                          ...prev,
+                          description: event.target.value
+                        }))}
+                        placeholder="validated by ops oncall"
+                        disabled={!canWriteCmdb}
+                      />
+                    </label>
+                  </div>
+                  <div className="toolbar-row" style={{ marginTop: "0.45rem" }}>
+                    <button
+                      onClick={() => {
+                        const preset = (runbookPresets as any[]).find((item) => String(item.id) === selectedRunbookPresetId) ?? null;
+                        if (preset) {
+                          applyRunbookExecutionPreset(preset);
+                        }
+                      }}
+                      disabled={selectedRunbookPresetId.length === 0}
+                    >
+                      Apply preset
+                    </button>
+                    <button onClick={() => void createRunbookExecutionPreset()} disabled={!canWriteCmdb || savingRunbookPreset}>
+                      {savingRunbookPreset ? t("cmdb.actions.loading") : "Save current as preset"}
+                    </button>
+                    <button onClick={() => void deleteRunbookExecutionPreset()} disabled={!canWriteCmdb || savingRunbookPreset || selectedRunbookPresetId.length === 0}>
+                      {savingRunbookPreset ? t("cmdb.actions.loading") : "Delete preset"}
+                    </button>
+                  </div>
+                </div>
+
                 {selectedRunbookTemplate && (
                   <>
                     <p className="section-note">{selectedRunbookTemplate.description}</p>
@@ -1023,6 +1104,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                           <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Remediation hints</th>
                           <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Evidence</th>
                           <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Actor/Time</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1038,6 +1120,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                             <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                               {item.status}
                               <div className="inline-note">mode={item.execution_mode ?? "simulate"}</div>
+                              {item.replay_source_execution_id ? (
+                                <div className="inline-note">replay_of=#{item.replay_source_execution_id}</div>
+                              ) : null}
                               <div className="inline-note">runtime={JSON.stringify(item.runtime_summary ?? {})}</div>
                               <div className="inline-note">note={item.note ?? "-"}</div>
                             </td>
@@ -1054,6 +1139,14 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                             <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                               {item.actor}
                               <div className="inline-note">{new Date(item.created_at).toLocaleString()}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <button
+                                onClick={() => void replayRunbookTemplateExecution(item.id)}
+                                disabled={!canWriteCmdb || replayingRunbookExecutionId === item.id}
+                              >
+                                {replayingRunbookExecutionId === item.id ? t("cmdb.actions.loading") : "Replay"}
+                              </button>
                             </td>
                           </tr>
                         ))}
