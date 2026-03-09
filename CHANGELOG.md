@@ -18,6 +18,42 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.8] - 2026-03-09
+
+### Added
+
+- v0.1.8 planning and release-gate documentation:
+  - `docs/36-v0.1.8-runbook-standardization-plan.md`
+  - `docs/37-v0.1.8-release-gate-checklist.md`
+- v0.1.8 issue baseline and closure track: GitHub issues `#151` to `#156`.
+- Runbook execution preset library baseline:
+  - migration: `202603090002_create_runbook_execution_presets.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/runbook-templates/presets`
+    - `POST /api/v1/ops/cockpit/runbook-templates/presets`
+    - `PATCH /api/v1/ops/cockpit/runbook-templates/presets/{id}`
+    - `DELETE /api/v1/ops/cockpit/runbook-templates/presets/{id}`
+- Runbook one-click replay baseline:
+  - migration: `202603090003_add_replay_source_to_runbook_template_executions.sql`
+  - endpoint:
+    - `POST /api/v1/ops/cockpit/runbook-templates/executions/{id}/replay`
+  - execution records now include `replay_source_execution_id`.
+- v0.1.8 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.8-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- v0.1.x planning document now includes v0.1.8 track and updated active queue (`docs/20-v0.1x-operator-simplicity-plan.md`).
+- Web console runbook panel now adds:
+  - preset list/apply/save/delete workflow,
+  - replay action from execution history with source linkage rendering.
+- RBAC permission coverage tests now include runbook preset/replay routes.
+
+### Fixed
+
+- None yet.
+
 ## [0.1.7] - 2026-03-09
 
 ### Added
