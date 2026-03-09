@@ -138,6 +138,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.7 release gate checklist](docs/35-v0.1.7-release-gate-checklist.md)
 - [v0.1.8 runbook standardization plan](docs/36-v0.1.8-runbook-standardization-plan.md)
 - [v0.1.8 release gate checklist](docs/37-v0.1.8-release-gate-checklist.md)
+- [v0.1.9 runbook analytics visibility plan](docs/38-v0.1.9-runbook-analytics-visibility-plan.md)
+- [v0.1.9 release gate checklist](docs/39-v0.1.9-release-gate-checklist.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
