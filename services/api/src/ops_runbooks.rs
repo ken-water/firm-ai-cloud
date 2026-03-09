@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration as StdDuration, Instant};
 
 use axum::{
@@ -32,6 +32,12 @@ const DEFAULT_EXECUTION_LIMIT: u32 = 30;
 const MAX_EXECUTION_LIMIT: u32 = 120;
 const DEFAULT_PRESET_LIMIT: u32 = 50;
 const MAX_PRESET_LIMIT: u32 = 120;
+const DEFAULT_ANALYTICS_DAYS: u32 = 14;
+const MAX_ANALYTICS_DAYS: u32 = 90;
+const MAX_ANALYTICS_SCAN_ROWS: u32 = 5000;
+const DEFAULT_FAILURE_FEED_LIMIT: u32 = 30;
+const MAX_FAILURE_FEED_LIMIT: u32 = 120;
+const MAX_FAILED_STEP_HOTSPOTS: usize = 12;
 const DEFAULT_EXECUTION_POLICY_KEY: &str = "global";
 const EXECUTION_MODE_SIMULATE: &str = "simulate";
 const EXECUTION_MODE_LIVE: &str = "live";
@@ -64,6 +70,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/cockpit/runbook-templates/executions/{id}",
             get(get_runbook_template_execution),
+        )
+        .route(
+            "/cockpit/runbook-templates/analytics/summary",
+            get(get_runbook_analytics_summary),
+        )
+        .route(
+            "/cockpit/runbook-templates/analytics/failures",
+            get(list_runbook_failure_feed),
         )
         .route(
             "/cockpit/runbook-templates/executions/{id}/replay",
@@ -269,6 +283,22 @@ struct ListRunbookTemplateExecutionsQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct RunbookAnalyticsSummaryQuery {
+    template_key: Option<String>,
+    execution_mode: Option<String>,
+    days: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RunbookFailureFeedQuery {
+    template_key: Option<String>,
+    execution_mode: Option<String>,
+    days: Option<u32>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 struct ListRunbookTemplateExecutionsResponse {
     generated_at: DateTime<Utc>,
@@ -282,6 +312,101 @@ struct ListRunbookTemplateExecutionsResponse {
 struct RunbookTemplateExecutionDetailResponse {
     generated_at: DateTime<Utc>,
     item: RunbookTemplateExecutionItem,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookAnalyticsWindow {
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    days: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookAnalyticsFilters {
+    template_key: Option<String>,
+    execution_mode: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookAnalyticsSummaryTotals {
+    executions: usize,
+    succeeded: usize,
+    failed: usize,
+    simulate: usize,
+    live: usize,
+    replayed: usize,
+    success_rate_percent: f64,
+    sampled_rows: usize,
+    truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookAnalyticsTemplateItem {
+    template_key: String,
+    template_name: String,
+    executions: usize,
+    succeeded: usize,
+    failed: usize,
+    simulate: usize,
+    live: usize,
+    replayed: usize,
+    success_rate_percent: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookAnalyticsFailedStepItem {
+    template_key: String,
+    template_name: String,
+    step_id: String,
+    failures: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookAnalyticsSummaryResponse {
+    generated_at: DateTime<Utc>,
+    window: RunbookAnalyticsWindow,
+    filters: RunbookAnalyticsFilters,
+    totals: RunbookAnalyticsSummaryTotals,
+    templates: Vec<RunbookAnalyticsTemplateItem>,
+    failed_steps: Vec<RunbookAnalyticsFailedStepItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookFailureFeedItem {
+    id: i64,
+    template_key: String,
+    template_name: String,
+    execution_mode: String,
+    replay_source_execution_id: Option<i64>,
+    actor: String,
+    failed_step_id: Option<String>,
+    failed_output: Option<String>,
+    remediation_hint: Option<String>,
+    evidence_summary: String,
+    runtime_summary: Value,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookFailureFeedResponse {
+    generated_at: DateTime<Utc>,
+    window: RunbookAnalyticsWindow,
+    filters: RunbookAnalyticsFilters,
+    total: i64,
+    limit: u32,
+    offset: u32,
+    items: Vec<RunbookFailureFeedItem>,
+}
+
+#[derive(Debug, Default)]
+struct RunbookTemplateAggregate {
+    template_name: String,
+    executions: usize,
+    succeeded: usize,
+    failed: usize,
+    simulate: usize,
+    live: usize,
+    replayed: usize,
 }
 
 #[derive(Debug, FromRow)]
@@ -1244,6 +1369,261 @@ async fn get_runbook_template_execution(
     }))
 }
 
+async fn get_runbook_analytics_summary(
+    State(state): State<AppState>,
+    Query(query): Query<RunbookAnalyticsSummaryQuery>,
+) -> AppResult<Json<RunbookAnalyticsSummaryResponse>> {
+    let template_key = query.template_key.map(normalize_template_key).transpose()?;
+    let execution_mode = query
+        .execution_mode
+        .map(normalize_execution_mode)
+        .transpose()?;
+    let days = normalize_analytics_days(query.days);
+    let generated_at = Utc::now();
+    let start_at = generated_at - Duration::days(days as i64);
+
+    let mut count_builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT COUNT(*) FROM ops_runbook_template_executions e WHERE e.created_at >= ");
+    count_builder.push_bind(start_at);
+    append_analytics_filters(&mut count_builder, template_key.clone(), execution_mode.clone());
+    let total_rows: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, template_key, template_name, status, execution_mode, replay_source_execution_id,
+                actor, params, preflight, timeline, evidence, runtime_summary, remediation_hints,
+                note, created_at, updated_at
+         FROM ops_runbook_template_executions e
+         WHERE e.created_at >= ",
+    );
+    list_builder.push_bind(start_at);
+    append_analytics_filters(&mut list_builder, template_key.clone(), execution_mode.clone());
+    list_builder
+        .push(" ORDER BY e.created_at DESC, e.id DESC LIMIT ")
+        .push_bind(MAX_ANALYTICS_SCAN_ROWS as i64);
+
+    let rows: Vec<RunbookTemplateExecutionRow> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
+
+    let mut totals = RunbookAnalyticsSummaryTotals {
+        executions: 0,
+        succeeded: 0,
+        failed: 0,
+        simulate: 0,
+        live: 0,
+        replayed: 0,
+        success_rate_percent: 0.0,
+        sampled_rows: rows.len(),
+        truncated: total_rows > rows.len() as i64,
+    };
+    let mut template_aggregate = BTreeMap::<String, RunbookTemplateAggregate>::new();
+    let mut failed_steps = BTreeMap::<(String, String, String), usize>::new();
+
+    for row in rows {
+        let item = parse_execution_row(row)?;
+        totals.executions += 1;
+
+        if item.status == "succeeded" {
+            totals.succeeded += 1;
+        } else if item.status == "failed" {
+            totals.failed += 1;
+        }
+        if item.execution_mode == EXECUTION_MODE_LIVE {
+            totals.live += 1;
+        } else {
+            totals.simulate += 1;
+        }
+        if item.replay_source_execution_id.is_some() {
+            totals.replayed += 1;
+        }
+
+        let aggregate = template_aggregate
+            .entry(item.template_key.clone())
+            .or_insert_with(|| RunbookTemplateAggregate {
+                template_name: item.template_name.clone(),
+                ..RunbookTemplateAggregate::default()
+            });
+        aggregate.executions += 1;
+        if item.status == "succeeded" {
+            aggregate.succeeded += 1;
+        } else if item.status == "failed" {
+            aggregate.failed += 1;
+        }
+        if item.execution_mode == EXECUTION_MODE_LIVE {
+            aggregate.live += 1;
+        } else {
+            aggregate.simulate += 1;
+        }
+        if item.replay_source_execution_id.is_some() {
+            aggregate.replayed += 1;
+        }
+
+        if let Some(step) = first_failed_timeline_step(&item.timeline) {
+            let key = (
+                item.template_key.clone(),
+                item.template_name.clone(),
+                step.step_id.clone(),
+            );
+            *failed_steps.entry(key).or_insert(0) += 1;
+        }
+    }
+
+    totals.success_rate_percent = calculate_success_rate_percent(totals.succeeded, totals.executions);
+
+    let mut templates = template_aggregate
+        .into_iter()
+        .map(|(template_key, aggregate)| RunbookAnalyticsTemplateItem {
+            template_key,
+            template_name: aggregate.template_name,
+            executions: aggregate.executions,
+            succeeded: aggregate.succeeded,
+            failed: aggregate.failed,
+            simulate: aggregate.simulate,
+            live: aggregate.live,
+            replayed: aggregate.replayed,
+            success_rate_percent: calculate_success_rate_percent(
+                aggregate.succeeded,
+                aggregate.executions,
+            ),
+        })
+        .collect::<Vec<_>>();
+    templates.sort_by(|left, right| {
+        right
+            .failed
+            .cmp(&left.failed)
+            .then_with(|| right.executions.cmp(&left.executions))
+            .then_with(|| left.template_key.cmp(&right.template_key))
+    });
+
+    let mut failed_steps = failed_steps
+        .into_iter()
+        .map(
+            |((template_key, template_name, step_id), failures)| RunbookAnalyticsFailedStepItem {
+                template_key,
+                template_name,
+                step_id,
+                failures,
+            },
+        )
+        .collect::<Vec<_>>();
+    failed_steps.sort_by(|left, right| {
+        right
+            .failures
+            .cmp(&left.failures)
+            .then_with(|| left.template_key.cmp(&right.template_key))
+            .then_with(|| left.step_id.cmp(&right.step_id))
+    });
+    failed_steps.truncate(MAX_FAILED_STEP_HOTSPOTS);
+
+    Ok(Json(RunbookAnalyticsSummaryResponse {
+        generated_at,
+        window: RunbookAnalyticsWindow {
+            start_at,
+            end_at: generated_at,
+            days,
+        },
+        filters: RunbookAnalyticsFilters {
+            template_key,
+            execution_mode,
+        },
+        totals,
+        templates,
+        failed_steps,
+    }))
+}
+
+async fn list_runbook_failure_feed(
+    State(state): State<AppState>,
+    Query(query): Query<RunbookFailureFeedQuery>,
+) -> AppResult<Json<RunbookFailureFeedResponse>> {
+    let template_key = query.template_key.map(normalize_template_key).transpose()?;
+    let execution_mode = query
+        .execution_mode
+        .map(normalize_execution_mode)
+        .transpose()?;
+    let days = normalize_analytics_days(query.days);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_FAILURE_FEED_LIMIT)
+        .clamp(1, MAX_FAILURE_FEED_LIMIT);
+    let offset = query.offset.unwrap_or(0);
+    let generated_at = Utc::now();
+    let start_at = generated_at - Duration::days(days as i64);
+
+    let mut count_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT COUNT(*) FROM ops_runbook_template_executions e WHERE e.created_at >= ",
+    );
+    count_builder.push_bind(start_at);
+    append_analytics_filters(&mut count_builder, template_key.clone(), execution_mode.clone());
+    count_builder.push(" AND e.status = ").push_bind("failed");
+    let total: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, template_key, template_name, status, execution_mode, replay_source_execution_id,
+                actor, params, preflight, timeline, evidence, runtime_summary, remediation_hints,
+                note, created_at, updated_at
+         FROM ops_runbook_template_executions e
+         WHERE e.created_at >= ",
+    );
+    list_builder.push_bind(start_at);
+    append_analytics_filters(&mut list_builder, template_key.clone(), execution_mode.clone());
+    list_builder
+        .push(" AND e.status = ")
+        .push_bind("failed")
+        .push(" ORDER BY e.created_at DESC, e.id DESC LIMIT ")
+        .push_bind(limit as i64)
+        .push(" OFFSET ")
+        .push_bind(offset as i64);
+
+    let rows: Vec<RunbookTemplateExecutionRow> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
+    let mut items = Vec::new();
+    for row in rows {
+        let execution = parse_execution_row(row)?;
+        let failed_step = first_failed_timeline_step(&execution.timeline);
+        let remediation_hint = failed_step
+            .and_then(|step| step.remediation_hint.clone())
+            .or_else(|| execution.remediation_hints.first().cloned());
+
+        items.push(RunbookFailureFeedItem {
+            id: execution.id,
+            template_key: execution.template_key,
+            template_name: execution.template_name,
+            execution_mode: execution.execution_mode,
+            replay_source_execution_id: execution.replay_source_execution_id,
+            actor: execution.actor,
+            failed_step_id: failed_step.map(|step| step.step_id.clone()),
+            failed_output: failed_step.map(|step| step.output.clone()),
+            remediation_hint,
+            evidence_summary: execution.evidence.summary,
+            runtime_summary: execution.runtime_summary,
+            created_at: execution.created_at,
+        });
+    }
+
+    Ok(Json(RunbookFailureFeedResponse {
+        generated_at,
+        window: RunbookAnalyticsWindow {
+            start_at,
+            end_at: generated_at,
+            days,
+        },
+        filters: RunbookAnalyticsFilters {
+            template_key,
+            execution_mode,
+        },
+        total,
+        limit,
+        offset,
+        items,
+    }))
+}
+
 fn append_execution_filters(
     builder: &mut QueryBuilder<Postgres>,
     template_key: Option<String>,
@@ -1264,6 +1644,23 @@ fn append_preset_filters(builder: &mut QueryBuilder<Postgres>, template_key: Opt
         builder
             .push(" AND p.template_key = ")
             .push_bind(template_key);
+    }
+}
+
+fn append_analytics_filters(
+    builder: &mut QueryBuilder<Postgres>,
+    template_key: Option<String>,
+    execution_mode: Option<String>,
+) {
+    if let Some(template_key) = template_key {
+        builder
+            .push(" AND e.template_key = ")
+            .push_bind(template_key);
+    }
+    if let Some(execution_mode) = execution_mode {
+        builder
+            .push(" AND e.execution_mode = ")
+            .push_bind(execution_mode);
     }
 }
 
@@ -2593,6 +2990,25 @@ fn normalize_execution_status(value: String) -> AppResult<String> {
     }
 }
 
+fn normalize_analytics_days(value: Option<u32>) -> u32 {
+    value
+        .unwrap_or(DEFAULT_ANALYTICS_DAYS)
+        .clamp(1, MAX_ANALYTICS_DAYS)
+}
+
+fn calculate_success_rate_percent(succeeded: usize, total: usize) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
+    ((succeeded as f64 * 1000.0) / total as f64).round() / 10.0
+}
+
+fn first_failed_timeline_step(
+    timeline: &[RunbookStepTimelineEvent],
+) -> Option<&RunbookStepTimelineEvent> {
+    timeline.iter().find(|item| item.status == "failed")
+}
+
 fn required_trimmed(field: &str, value: String, max_len: usize) -> AppResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -2619,13 +3035,15 @@ fn trim_optional(value: Option<String>, max_len: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use serde_json::json;
 
     use super::{
-        enforce_template_supports_execution_mode, evaluate_step_failure, normalize_execution_mode,
-        normalize_live_template_keys, normalize_preflight_confirmations, normalize_preset_name,
-        normalize_runbook_params, parse_dependency_target, parse_preflight_snapshot_confirmed,
-        resolve_template_by_key,
+        RunbookStepTimelineEvent, calculate_success_rate_percent,
+        enforce_template_supports_execution_mode, evaluate_step_failure, first_failed_timeline_step,
+        normalize_analytics_days, normalize_execution_mode, normalize_live_template_keys,
+        normalize_preflight_confirmations, normalize_preset_name, normalize_runbook_params,
+        parse_dependency_target, parse_preflight_snapshot_confirmed, resolve_template_by_key,
     };
 
     #[test]
@@ -2767,5 +3185,51 @@ mod tests {
         }))
         .expect_err("missing confirmed should fail");
         assert!(format!("{}", err).contains("missing confirmed"));
+    }
+
+    #[test]
+    fn normalizes_analytics_days_range() {
+        assert_eq!(normalize_analytics_days(None), 14);
+        assert_eq!(normalize_analytics_days(Some(0)), 1);
+        assert_eq!(normalize_analytics_days(Some(14)), 14);
+        assert_eq!(normalize_analytics_days(Some(365)), 90);
+    }
+
+    #[test]
+    fn calculates_success_rate_percent_with_one_decimal_precision() {
+        assert_eq!(calculate_success_rate_percent(0, 0), 0.0);
+        assert_eq!(calculate_success_rate_percent(1, 3), 33.3);
+        assert_eq!(calculate_success_rate_percent(3, 4), 75.0);
+    }
+
+    #[test]
+    fn detects_first_failed_timeline_step() {
+        let now = Utc::now();
+        let timeline = vec![
+            RunbookStepTimelineEvent {
+                step_id: "scope_validation".to_string(),
+                name: "Scope".to_string(),
+                detail: "detail".to_string(),
+                status: "succeeded".to_string(),
+                started_at: now,
+                finished_at: now,
+                output: "ok".to_string(),
+                remediation_hint: None,
+            },
+            RunbookStepTimelineEvent {
+                step_id: "reachability_probe".to_string(),
+                name: "Probe".to_string(),
+                detail: "detail".to_string(),
+                status: "failed".to_string(),
+                started_at: now,
+                finished_at: now,
+                output: "timeout".to_string(),
+                remediation_hint: Some("check network path".to_string()),
+            },
+        ];
+
+        let failed = first_failed_timeline_step(&timeline).expect("failed step");
+        assert_eq!(failed.step_id, "reachability_probe");
+        assert_eq!(failed.output, "timeout");
     }
 }
