@@ -811,6 +811,26 @@ mod tests {
             "ops.cockpit.read",
         );
         assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/runbook-templates/presets",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/ops/cockpit/runbook-templates/presets",
+            "ops.cockpit.write",
+        );
+        assert_permission(
+            Method::PATCH,
+            "/api/v1/ops/cockpit/runbook-templates/presets/1",
+            "ops.cockpit.write",
+        );
+        assert_permission(
+            Method::DELETE,
+            "/api/v1/ops/cockpit/runbook-templates/presets/1",
+            "ops.cockpit.write",
+        );
+        assert_permission(
             Method::POST,
             "/api/v1/ops/cockpit/runbook-templates/service-restart-safe/execute",
             "ops.cockpit.write",
@@ -1154,6 +1174,26 @@ mod tests {
                 Method::GET,
                 "/api/v1/ops/cockpit/runbook-templates/executions/1",
                 "ops.cockpit.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/runbook-templates/presets",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/runbook-templates/presets",
+                "ops.cockpit.write",
+            ),
+            (
+                Method::PATCH,
+                "/api/v1/ops/cockpit/runbook-templates/presets/1",
+                "ops.cockpit.write",
+            ),
+            (
+                Method::DELETE,
+                "/api/v1/ops/cockpit/runbook-templates/presets/1",
+                "ops.cockpit.write",
             ),
             (
                 Method::POST,

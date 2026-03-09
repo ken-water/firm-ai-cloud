@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::HeaderMap,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -24,10 +24,14 @@ use crate::{
 const MAX_TEMPLATE_KEY_LEN: usize = 64;
 const MAX_TEXT_FIELD_LEN: usize = 256;
 const MAX_NOTE_LEN: usize = 1024;
+const MAX_PRESET_NAME_LEN: usize = 128;
+const MAX_PRESET_DESCRIPTION_LEN: usize = 512;
 const MAX_TICKET_REF_LEN: usize = 128;
 const MAX_ARTIFACT_URL_LEN: usize = 1024;
 const DEFAULT_EXECUTION_LIMIT: u32 = 30;
 const MAX_EXECUTION_LIMIT: u32 = 120;
+const DEFAULT_PRESET_LIMIT: u32 = 50;
+const MAX_PRESET_LIMIT: u32 = 120;
 const DEFAULT_EXECUTION_POLICY_KEY: &str = "global";
 const EXECUTION_MODE_SIMULATE: &str = "simulate";
 const EXECUTION_MODE_LIVE: &str = "live";
@@ -41,6 +45,14 @@ const MAX_LIVE_TEMPLATE_COUNT: usize = 32;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/cockpit/runbook-templates", get(list_runbook_templates))
+        .route(
+            "/cockpit/runbook-templates/presets",
+            get(list_runbook_execution_presets).post(create_runbook_execution_preset),
+        )
+        .route(
+            "/cockpit/runbook-templates/presets/{id}",
+            patch(update_runbook_execution_preset).delete(delete_runbook_execution_preset),
+        )
         .route(
             "/cockpit/runbook-templates/execution-policy",
             get(get_runbook_execution_policy).put(update_runbook_execution_policy),
@@ -292,6 +304,85 @@ struct UpdateRunbookExecutionPolicyRequest {
     note: Option<String>,
 }
 
+#[derive(Debug, FromRow)]
+struct RunbookExecutionPresetRow {
+    id: i64,
+    template_key: String,
+    template_name: String,
+    name: String,
+    description: Option<String>,
+    execution_mode: String,
+    params: Value,
+    preflight_confirmations: Value,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RunbookExecutionPresetItem {
+    id: i64,
+    template_key: String,
+    template_name: String,
+    name: String,
+    description: Option<String>,
+    execution_mode: String,
+    params: Value,
+    preflight_confirmations: Vec<String>,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ListRunbookExecutionPresetsQuery {
+    template_key: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListRunbookExecutionPresetsResponse {
+    generated_at: DateTime<Utc>,
+    total: i64,
+    limit: u32,
+    offset: u32,
+    items: Vec<RunbookExecutionPresetItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateRunbookExecutionPresetRequest {
+    template_key: String,
+    name: String,
+    description: Option<String>,
+    execution_mode: Option<String>,
+    params: Value,
+    preflight_confirmations: Vec<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateRunbookExecutionPresetRequest {
+    name: Option<String>,
+    description: Option<String>,
+    execution_mode: Option<String>,
+    params: Option<Value>,
+    preflight_confirmations: Option<Vec<String>>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookExecutionPresetDetailResponse {
+    generated_at: DateTime<Utc>,
+    item: RunbookExecutionPresetItem,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookExecutionPresetDeleteResponse {
+    generated_at: DateTime<Utc>,
+    deleted_id: i64,
+}
+
 async fn list_runbook_templates() -> AppResult<Json<ListRunbookTemplatesResponse>> {
     let mut items = built_in_runbook_templates()
         .into_iter()
@@ -307,6 +398,329 @@ async fn list_runbook_templates() -> AppResult<Json<ListRunbookTemplatesResponse
         generated_at: Utc::now(),
         total: items.len(),
         items,
+    }))
+}
+
+async fn list_runbook_execution_presets(
+    State(state): State<AppState>,
+    Query(query): Query<ListRunbookExecutionPresetsQuery>,
+) -> AppResult<Json<ListRunbookExecutionPresetsResponse>> {
+    let template_key = query.template_key.map(normalize_template_key).transpose()?;
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_PRESET_LIMIT)
+        .clamp(1, MAX_PRESET_LIMIT) as i64;
+    let offset = query.offset.unwrap_or(0) as i64;
+
+    let mut count_builder: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT COUNT(*) FROM ops_runbook_execution_presets p WHERE 1=1");
+    append_preset_filters(&mut count_builder, template_key.clone());
+    let total: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.db)
+        .await?;
+
+    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, template_key, template_name, name, description, execution_mode,
+                params, preflight_confirmations, updated_by, created_at, updated_at
+         FROM ops_runbook_execution_presets p
+         WHERE 1=1",
+    );
+    append_preset_filters(&mut list_builder, template_key);
+    list_builder
+        .push(" ORDER BY p.template_key ASC, p.name ASC, p.id ASC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+
+    let rows: Vec<RunbookExecutionPresetRow> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(parse_runbook_execution_preset_row(row)?);
+    }
+
+    Ok(Json(ListRunbookExecutionPresetsResponse {
+        generated_at: Utc::now(),
+        total,
+        limit: limit as u32,
+        offset: offset as u32,
+        items,
+    }))
+}
+
+async fn create_runbook_execution_preset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateRunbookExecutionPresetRequest>,
+) -> AppResult<Json<RunbookExecutionPresetDetailResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let template = resolve_template_by_key(payload.template_key.as_str())?;
+    let name = normalize_preset_name(payload.name)?;
+    let description = trim_optional(payload.description, MAX_PRESET_DESCRIPTION_LEN);
+    let execution_mode = normalize_execution_mode(
+        payload
+            .execution_mode
+            .unwrap_or_else(|| EXECUTION_MODE_SIMULATE.to_string()),
+    )?;
+    enforce_template_supports_execution_mode(&template, execution_mode.as_str())?;
+    let params = normalize_runbook_params(&template, payload.params)?;
+    let preflight_confirmations =
+        normalize_preflight_confirmations(&template, payload.preflight_confirmations)?;
+    let note = trim_optional(payload.note, MAX_NOTE_LEN);
+
+    let existing: Option<i64> = sqlx::query_scalar(
+        "SELECT id
+         FROM ops_runbook_execution_presets
+         WHERE template_key = $1
+           AND name = $2",
+    )
+    .bind(template.key)
+    .bind(name.as_str())
+    .fetch_optional(&state.db)
+    .await?;
+    if existing.is_some() {
+        return Err(AppError::Validation(format!(
+            "runbook preset '{}' already exists for template '{}'",
+            name, template.key
+        )));
+    }
+
+    let row: RunbookExecutionPresetRow = sqlx::query_as(
+        "INSERT INTO ops_runbook_execution_presets (
+            template_key, template_name, name, description, execution_mode,
+            params, preflight_confirmations, updated_by
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, template_key, template_name, name, description, execution_mode,
+                   params, preflight_confirmations, updated_by, created_at, updated_at",
+    )
+    .bind(template.key)
+    .bind(template.name)
+    .bind(name.as_str())
+    .bind(description.clone())
+    .bind(execution_mode.as_str())
+    .bind(Value::Object(params.clone()))
+    .bind(
+        serde_json::to_value(&preflight_confirmations).map_err(|err| {
+            AppError::Validation(format!(
+                "failed to serialize preset preflight_confirmations: {err}"
+            ))
+        })?,
+    )
+    .bind(actor.as_str())
+    .fetch_one(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "ops.runbook.preset.create".to_string(),
+            target_type: "ops_runbook_execution_preset".to_string(),
+            target_id: Some(row.id.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "template_key": template.key,
+                "preset_name": name,
+                "execution_mode": execution_mode,
+                "param_count": params.len(),
+                "preflight_count": preflight_confirmations.len()
+            }),
+        },
+    )
+    .await;
+
+    let item = parse_runbook_execution_preset_row(row)?;
+    Ok(Json(RunbookExecutionPresetDetailResponse {
+        generated_at: item.updated_at,
+        item,
+    }))
+}
+
+async fn update_runbook_execution_preset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(payload): Json<UpdateRunbookExecutionPresetRequest>,
+) -> AppResult<Json<RunbookExecutionPresetDetailResponse>> {
+    if id <= 0 {
+        return Err(AppError::Validation(
+            "preset id must be a positive integer".to_string(),
+        ));
+    }
+
+    let has_mutation = payload.name.is_some()
+        || payload.description.is_some()
+        || payload.execution_mode.is_some()
+        || payload.params.is_some()
+        || payload.preflight_confirmations.is_some();
+    if !has_mutation {
+        return Err(AppError::Validation(
+            "at least one preset field must be provided".to_string(),
+        ));
+    }
+
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let existing: Option<RunbookExecutionPresetRow> = sqlx::query_as(
+        "SELECT id, template_key, template_name, name, description, execution_mode,
+                params, preflight_confirmations, updated_by, created_at, updated_at
+         FROM ops_runbook_execution_presets
+         WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let existing =
+        existing.ok_or_else(|| AppError::NotFound(format!("runbook preset {id} not found")))?;
+
+    let template = resolve_template_by_key(existing.template_key.as_str())?;
+    let name = match payload.name {
+        Some(value) => normalize_preset_name(value)?,
+        None => existing.name.clone(),
+    };
+    let description = if payload.description.is_some() {
+        trim_optional(payload.description, MAX_PRESET_DESCRIPTION_LEN)
+    } else {
+        existing.description.clone()
+    };
+    let execution_mode = payload
+        .execution_mode
+        .map(normalize_execution_mode)
+        .transpose()?
+        .unwrap_or(existing.execution_mode.clone());
+    enforce_template_supports_execution_mode(&template, execution_mode.as_str())?;
+    let params = match payload.params {
+        Some(value) => normalize_runbook_params(&template, value)?,
+        None => parse_params_object(existing.params.clone())?,
+    };
+    let preflight_confirmations = match payload.preflight_confirmations {
+        Some(value) => normalize_preflight_confirmations(&template, value)?,
+        None => parse_preflight_confirmations(existing.preflight_confirmations.clone())?,
+    };
+    let note = trim_optional(payload.note, MAX_NOTE_LEN);
+
+    let duplicate: Option<i64> = sqlx::query_scalar(
+        "SELECT id
+         FROM ops_runbook_execution_presets
+         WHERE template_key = $1
+           AND name = $2
+           AND id <> $3",
+    )
+    .bind(template.key)
+    .bind(name.as_str())
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    if duplicate.is_some() {
+        return Err(AppError::Validation(format!(
+            "runbook preset '{}' already exists for template '{}'",
+            name, template.key
+        )));
+    }
+
+    let row: RunbookExecutionPresetRow = sqlx::query_as(
+        "UPDATE ops_runbook_execution_presets
+         SET name = $1,
+             description = $2,
+             execution_mode = $3,
+             params = $4,
+             preflight_confirmations = $5,
+             updated_by = $6,
+             updated_at = NOW()
+         WHERE id = $7
+         RETURNING id, template_key, template_name, name, description, execution_mode,
+                   params, preflight_confirmations, updated_by, created_at, updated_at",
+    )
+    .bind(name.as_str())
+    .bind(description.clone())
+    .bind(execution_mode.as_str())
+    .bind(Value::Object(params.clone()))
+    .bind(
+        serde_json::to_value(&preflight_confirmations).map_err(|err| {
+            AppError::Validation(format!(
+                "failed to serialize preset preflight_confirmations: {err}"
+            ))
+        })?,
+    )
+    .bind(actor.as_str())
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "ops.runbook.preset.update".to_string(),
+            target_type: "ops_runbook_execution_preset".to_string(),
+            target_id: Some(id.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "template_key": template.key,
+                "preset_name": name,
+                "execution_mode": execution_mode,
+                "param_count": params.len(),
+                "preflight_count": preflight_confirmations.len()
+            }),
+        },
+    )
+    .await;
+
+    let item = parse_runbook_execution_preset_row(row)?;
+    Ok(Json(RunbookExecutionPresetDetailResponse {
+        generated_at: item.updated_at,
+        item,
+    }))
+}
+
+async fn delete_runbook_execution_preset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> AppResult<Json<RunbookExecutionPresetDeleteResponse>> {
+    if id <= 0 {
+        return Err(AppError::Validation(
+            "preset id must be a positive integer".to_string(),
+        ));
+    }
+
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let row: Option<RunbookExecutionPresetRow> = sqlx::query_as(
+        "DELETE FROM ops_runbook_execution_presets
+         WHERE id = $1
+         RETURNING id, template_key, template_name, name, description, execution_mode,
+                   params, preflight_confirmations, updated_by, created_at, updated_at",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let row = row.ok_or_else(|| AppError::NotFound(format!("runbook preset {id} not found")))?;
+    let note = Some(format!("deleted runbook preset '{}'", row.name));
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor,
+            action: "ops.runbook.preset.delete".to_string(),
+            target_type: "ops_runbook_execution_preset".to_string(),
+            target_id: Some(id.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "template_key": row.template_key,
+                "preset_name": row.name,
+                "execution_mode": row.execution_mode
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(RunbookExecutionPresetDeleteResponse {
+        generated_at: Utc::now(),
+        deleted_id: id,
     }))
 }
 
@@ -647,6 +1061,40 @@ fn append_execution_filters(
     }
 }
 
+fn append_preset_filters(builder: &mut QueryBuilder<Postgres>, template_key: Option<String>) {
+    if let Some(template_key) = template_key {
+        builder
+            .push(" AND p.template_key = ")
+            .push_bind(template_key);
+    }
+}
+
+fn parse_runbook_execution_preset_row(
+    row: RunbookExecutionPresetRow,
+) -> AppResult<RunbookExecutionPresetItem> {
+    let preflight_confirmations = parse_preflight_confirmations(row.preflight_confirmations)?;
+    let execution_mode = normalize_execution_mode(row.execution_mode)?;
+    if !matches!(row.params, Value::Object(_)) {
+        return Err(AppError::Validation(
+            "runbook preset params must be a JSON object".to_string(),
+        ));
+    }
+
+    Ok(RunbookExecutionPresetItem {
+        id: row.id,
+        template_key: row.template_key,
+        template_name: row.template_name,
+        name: row.name,
+        description: row.description,
+        execution_mode,
+        params: row.params,
+        preflight_confirmations,
+        updated_by: row.updated_by,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+
 fn parse_execution_row(
     row: RunbookTemplateExecutionRow,
 ) -> AppResult<RunbookTemplateExecutionItem> {
@@ -785,6 +1233,23 @@ fn normalize_execution_mode(value: String) -> AppResult<String> {
             "execution_mode must be one of: simulate, live".to_string(),
         )),
     }
+}
+
+fn normalize_preset_name(value: String) -> AppResult<String> {
+    required_trimmed("preset name", value, MAX_PRESET_NAME_LEN)
+}
+
+fn enforce_template_supports_execution_mode(
+    template: &RunbookTemplateDefinition,
+    execution_mode: &str,
+) -> AppResult<()> {
+    if execution_mode == EXECUTION_MODE_LIVE && !template.supports_live {
+        return Err(AppError::Validation(format!(
+            "template '{}' does not support live execution",
+            template.key
+        )));
+    }
+    Ok(())
 }
 
 fn normalize_live_template_keys(raw: Vec<String>) -> AppResult<Vec<String>> {
@@ -1119,6 +1584,24 @@ fn parse_dependency_target(raw: &str) -> AppResult<LiveProbeTarget> {
     }
 
     parse_host_port_target(trimmed, 0, trimmed)
+}
+
+fn parse_params_object(value: Value) -> AppResult<JsonMap<String, Value>> {
+    let Value::Object(params) = value else {
+        return Err(AppError::Validation(
+            "runbook preset params must be a JSON object".to_string(),
+        ));
+    };
+    Ok(params)
+}
+
+fn parse_preflight_confirmations(value: Value) -> AppResult<Vec<String>> {
+    let preflight_confirmations: Vec<String> = serde_json::from_value(value).map_err(|err| {
+        AppError::Validation(format!(
+            "runbook preset preflight_confirmations is invalid: {err}"
+        ))
+    })?;
+    Ok(preflight_confirmations)
 }
 
 fn parse_host_port_target(
@@ -1921,9 +2404,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        evaluate_step_failure, normalize_execution_mode, normalize_live_template_keys,
-        normalize_preflight_confirmations, normalize_runbook_params, parse_dependency_target,
-        resolve_template_by_key,
+        enforce_template_supports_execution_mode, evaluate_step_failure, normalize_execution_mode,
+        normalize_live_template_keys, normalize_preflight_confirmations, normalize_preset_name,
+        normalize_runbook_params, parse_dependency_target, resolve_template_by_key,
     };
 
     #[test]
@@ -2025,5 +2508,27 @@ mod tests {
 
         let err = normalize_execution_mode("invalid".to_string()).expect_err("should fail");
         assert!(format!("{}", err).contains("execution_mode must be one of"));
+    }
+
+    #[test]
+    fn validates_preset_name_rules() {
+        assert_eq!(
+            normalize_preset_name("  dependency baseline  ".to_string()).expect("preset name"),
+            "dependency baseline"
+        );
+        assert!(normalize_preset_name("".to_string()).is_err());
+        assert!(normalize_preset_name("x".repeat(129)).is_err());
+    }
+
+    #[test]
+    fn validates_template_execution_mode_support() {
+        let live_template = resolve_template_by_key("dependency-check").expect("template");
+        enforce_template_supports_execution_mode(&live_template, "live")
+            .expect("live template supports live mode");
+
+        let simulate_only_template = resolve_template_by_key("backup-verify").expect("template");
+        let err = enforce_template_supports_execution_mode(&simulate_only_template, "live")
+            .expect_err("should reject live mode");
+        assert!(format!("{}", err).contains("does not support live execution"));
     }
 }
