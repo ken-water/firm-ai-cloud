@@ -6,6 +6,7 @@
 - Release date: `YYYY-MM-DD`
 - Release type: `major | minor | patch`
 - Git tag: `vX.Y.Z`
+- GitHub issues: `#123, #124`
 
 ## Executive Summary
 

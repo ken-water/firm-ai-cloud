@@ -150,6 +150,7 @@ main() {
     || fatal "release note metadata git tag mismatch in ${notes_file}"
   grep -Eq "^- Release date: \`${changelog_date}\`$" "${notes_file}" \
     || fatal "release note date must match CHANGELOG.md date (${changelog_date})"
+  bash scripts/release-github-issues-check.sh --version "${VERSION}" --notes-file "${notes_file}" >/dev/null
 
   git rev-parse -q --verify "refs/tags/${tag}" >/dev/null \
     || fatal "local git tag not found: ${tag}"

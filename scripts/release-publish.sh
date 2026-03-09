@@ -153,6 +153,7 @@ main() {
     || fatal "release note metadata git tag mismatch in ${notes_file}"
   grep -Eq "^- Release date: \`${changelog_date}\`$" "${notes_file}" \
     || fatal "release note date must match CHANGELOG.md date (${changelog_date})"
+  bash scripts/release-github-issues-check.sh --version "${VERSION}" --notes-file "${notes_file}" >/dev/null
 
   release_title="$(release_title_from_file "${notes_file}" "CloudOps One ${tag}")"
   log "publishing version=${VERSION} tag=${tag} remote=${REMOTE}"

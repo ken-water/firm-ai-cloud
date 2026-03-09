@@ -1,7 +1,7 @@
 # CloudOps One Release Governance
 
-Version: v1.2  
-Date: 2026-03-06
+Version: v1.3  
+Date: 2026-03-09
 
 ## 1. Scope
 
@@ -34,6 +34,7 @@ Each release must include all artifacts below:
 2. `CHANGELOG.md` entry for the version
 3. Detailed release note file: `release-notes/vX.Y.Z.md`
 4. Published GitHub Release using the same note content
+5. Release metadata includes GitHub issue list and all listed issues are closed before publish
 
 A release is incomplete if any required artifact is missing.
 
@@ -74,12 +75,13 @@ Avoid one-line generic summaries for public releases.
 1. Prepare release note file from `release-notes/TEMPLATE.md`.
 2. Update `CHANGELOG.md` with the exact same version and date.
 3. Run project validation (`cargo check`, frontend build, and any required smoke tests).
-4. Commit release artifacts.
-5. Run dry-run release publish gate:
+4. Ensure all release-scoped GitHub issues are closed and listed in release metadata.
+5. Commit release artifacts.
+6. Run dry-run release publish gate:
    - `make release-publish-dry VERSION=X.Y.Z`
-6. Publish release through the scripted flow:
+7. Publish release through the scripted flow:
    - `make release-publish VERSION=X.Y.Z`
-7. Run mandatory synchronization check:
+8. Run mandatory synchronization check:
    - `make release-check VERSION=X.Y.Z`
 
 Notes:
@@ -95,6 +97,8 @@ Before publishing, confirm all items:
 - [ ] Required sections are complete.
 - [ ] `CHANGELOG.md` updated.
 - [ ] Version number is consistent across tag, changelog, and release note filename.
+- [ ] Release metadata includes `GitHub issues` list for the target version.
+- [ ] All listed GitHub issues are closed before publish.
 - [ ] Upgrade instructions were tested.
 - [ ] Known issues are explicitly listed (or `None`).
 - [ ] If benchmark scope changed, release note includes CI benchmark artifact references (`profile`, `gate`, `trend`, `regression` summaries).
@@ -169,6 +173,9 @@ To avoid release omissions caused by manual steps, every release owner must use 
   - verifies changelog/release-note/tag/GitHub release synchronization
   - verifies published (non-draft/non-prerelease) status
   - verifies latest-release gate by default
+- `scripts/release-github-issues-check.sh`:
+  - parses `GitHub issues` from release metadata
+  - verifies all listed issues are in `CLOSED` state (enforced for `>= v0.1.7`)
 
 Minimal command set:
 
