@@ -18,6 +18,34 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.9] - 2026-03-09
+
+### Added
+
+- v0.1.9 planning and release-gate documentation:
+  - `docs/38-v0.1.9-runbook-analytics-visibility-plan.md`
+  - `docs/39-v0.1.9-release-gate-checklist.md`
+- v0.1.9 issue baseline and closure track: GitHub issues `#157` to `#162`.
+- Runbook analytics APIs:
+  - `GET /api/v1/ops/cockpit/runbook-templates/analytics/summary`
+  - `GET /api/v1/ops/cockpit/runbook-templates/analytics/failures`
+- v0.1.9 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.9-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- v0.1.x planning document now includes v0.1.9 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
+- Web console runbook panel now adds:
+  - analytics filters by time window and execution mode,
+  - summary metrics and failed-step hotspot rendering,
+  - failure hotspot feed with diagnostics/remediation context.
+- RBAC permission coverage tests now include runbook analytics summary/failure routes.
+
+### Fixed
+
+- None.
+
 ## [0.1.8] - 2026-03-09
 
 ### Added
