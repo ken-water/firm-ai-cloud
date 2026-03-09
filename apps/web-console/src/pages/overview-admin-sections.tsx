@@ -59,6 +59,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     runbookPresets,
     runbookExecutionPolicy,
     runbookExecutionPolicyDraft,
+    runbookAnalyticsFilterDraft,
+    runbookAnalyticsSummary,
+    runbookFailureFeed,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
     selectedRunbookPresetId,
@@ -89,6 +92,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadRunbookExecutionPolicy,
     loadRunbookTemplateExecutions,
     loadRunbookExecutionPresets,
+    loadRunbookAnalyticsSummary,
+    loadRunbookFailureFeed,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadBackupEvidenceCompliancePolicy,
@@ -126,6 +131,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingRunbookExecutions,
     loadingRunbookPresets,
     loadingRunbookExecutionPolicy,
+    loadingRunbookAnalyticsSummary,
+    loadingRunbookFailureFeed,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,
@@ -188,6 +195,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setSelectedRunbookPresetId,
     setRunbookExecutionMode,
     setRunbookExecutionPolicyDraft,
+    setRunbookAnalyticsFilterDraft,
     setRunbookParamDraft,
     setRunbookPreflightDraft,
     setRunbookPresetDraft,
@@ -776,6 +784,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <button onClick={() => void loadRunbookExecutionPresets()} disabled={loadingRunbookPresets}>
                   {loadingRunbookPresets ? t("cmdb.actions.loading") : "Refresh presets"}
                 </button>
+                <button onClick={() => void loadRunbookAnalyticsSummary()} disabled={loadingRunbookAnalyticsSummary}>
+                  {loadingRunbookAnalyticsSummary ? t("cmdb.actions.loading") : "Refresh analytics"}
+                </button>
+                <button onClick={() => void loadRunbookFailureFeed()} disabled={loadingRunbookFailureFeed}>
+                  {loadingRunbookFailureFeed ? t("cmdb.actions.loading") : "Refresh failure feed"}
+                </button>
               </div>
             </div>
 
@@ -861,6 +875,43 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <button onClick={() => void saveRunbookExecutionPolicy()} disabled={!canWriteCmdb || savingRunbookExecutionPolicy}>
                   {savingRunbookExecutionPolicy ? t("cmdb.actions.loading") : "Save execution policy"}
                 </button>
+              </div>
+            </div>
+
+            <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+              <p className="section-note" style={{ marginTop: 0, marginBottom: "0.35rem" }}>
+                analytics filter window_days={runbookAnalyticsFilterDraft.days}
+                {" | "}mode={runbookAnalyticsFilterDraft.execution_mode}
+                {" | "}template={selectedRunbookTemplateKey || "all"}
+              </p>
+              <div className="form-grid">
+                <label className="control-field">
+                  <span>Analytics days (1-90)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={runbookAnalyticsFilterDraft.days}
+                    onChange={(event) => setRunbookAnalyticsFilterDraft((prev: any) => ({
+                      ...prev,
+                      days: event.target.value
+                    }))}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Analytics mode filter</span>
+                  <select
+                    value={runbookAnalyticsFilterDraft.execution_mode}
+                    onChange={(event) => setRunbookAnalyticsFilterDraft((prev: any) => ({
+                      ...prev,
+                      execution_mode: event.target.value
+                    }))}
+                  >
+                    <option value="all">all</option>
+                    <option value="simulate">simulate</option>
+                    <option value="live">live</option>
+                  </select>
+                </label>
               </div>
             </div>
 
@@ -1088,6 +1139,105 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                     </div>
                   </>
                 )}
+
+                <div className="detail-panel" style={{ marginTop: "0.7rem", marginBottom: "0.55rem" }}>
+                  <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Runbook analytics summary</h4>
+                  {loadingRunbookAnalyticsSummary ? (
+                    <p>{t("cmdb.actions.loading")}</p>
+                  ) : !runbookAnalyticsSummary ? (
+                    <p>No analytics summary available.</p>
+                  ) : (
+                    <>
+                      <p className="section-note" style={{ marginTop: 0, marginBottom: "0.35rem" }}>
+                        window={runbookAnalyticsSummary.window?.days ?? "-"}d
+                        {" | "}generated={runbookAnalyticsSummary.generated_at ? new Date(runbookAnalyticsSummary.generated_at).toLocaleString() : "-"}
+                        {" | "}sampled={runbookAnalyticsSummary.totals?.sampled_rows ?? 0}
+                        {runbookAnalyticsSummary.totals?.truncated ? " (truncated)" : ""}
+                      </p>
+                      <div className="form-grid">
+                        <label className="control-field">
+                          <span>Total executions</span>
+                          <input value={String(runbookAnalyticsSummary.totals?.executions ?? 0)} readOnly />
+                        </label>
+                        <label className="control-field">
+                          <span>Succeeded / Failed</span>
+                          <input
+                            value={`${runbookAnalyticsSummary.totals?.succeeded ?? 0} / ${runbookAnalyticsSummary.totals?.failed ?? 0}`}
+                            readOnly
+                          />
+                        </label>
+                        <label className="control-field">
+                          <span>Success rate</span>
+                          <input value={`${runbookAnalyticsSummary.totals?.success_rate_percent ?? 0}%`} readOnly />
+                        </label>
+                        <label className="control-field">
+                          <span>Replay usage</span>
+                          <input value={String(runbookAnalyticsSummary.totals?.replayed ?? 0)} readOnly />
+                        </label>
+                      </div>
+                      {(runbookAnalyticsSummary.failed_steps ?? []).length > 0 ? (
+                        <p className="section-note" style={{ marginTop: "0.45rem", marginBottom: 0 }}>
+                          failed hotspots={runbookAnalyticsSummary.failed_steps
+                            .map((item: any) => `${item.template_key}:${item.step_id}(${item.failures})`)
+                            .join(" | ")}
+                        </p>
+                      ) : (
+                        <p className="section-note" style={{ marginTop: "0.45rem", marginBottom: 0 }}>
+                          No failed step hotspot in current filter window.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                  <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Runbook failure hotspot feed</h4>
+                  {loadingRunbookFailureFeed ? (
+                    <p>{t("cmdb.actions.loading")}</p>
+                  ) : !runbookFailureFeed || (runbookFailureFeed.items ?? []).length === 0 ? (
+                    <p>No failed runbook record in current window.</p>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                        <thead>
+                          <tr>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Execution</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Failed step</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Diagnostics</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Evidence/Actor</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(runbookFailureFeed.items ?? []).map((item: any) => (
+                            <tr key={`runbook-failure-feed-${item.id}`}>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                #{item.id} {item.template_name}
+                                <div className="inline-note">{item.template_key}</div>
+                                <div className="inline-note">mode={item.execution_mode}</div>
+                                {item.replay_source_execution_id ? (
+                                  <div className="inline-note">replay_of=#{item.replay_source_execution_id}</div>
+                                ) : null}
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                {item.failed_step_id ?? "-"}
+                                <div className="inline-note">{item.failed_output ?? "-"}</div>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                {item.remediation_hint ?? "-"}
+                                <div className="inline-note">runtime={JSON.stringify(item.runtime_summary ?? {})}</div>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                {item.evidence_summary ?? "-"}
+                                <div className="inline-note">actor={item.actor}</div>
+                                <div className="inline-note">{item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
 
                 <h4 style={{ marginTop: "0.8rem", marginBottom: "0.4rem" }}>Runbook execution timeline</h4>
                 {loadingRunbookExecutions ? (

@@ -1315,6 +1315,87 @@ type RunbookTemplateExecutionListResponse = {
   items: RunbookTemplateExecutionItem[];
 };
 
+type RunbookAnalyticsWindow = {
+  start_at: string;
+  end_at: string;
+  days: number;
+};
+
+type RunbookAnalyticsFilters = {
+  template_key: string | null;
+  execution_mode: "simulate" | "live" | null;
+};
+
+type RunbookAnalyticsSummaryTotals = {
+  executions: number;
+  succeeded: number;
+  failed: number;
+  simulate: number;
+  live: number;
+  replayed: number;
+  success_rate_percent: number;
+  sampled_rows: number;
+  truncated: boolean;
+};
+
+type RunbookAnalyticsTemplateBreakdownItem = {
+  template_key: string;
+  template_name: string;
+  executions: number;
+  succeeded: number;
+  failed: number;
+  simulate: number;
+  live: number;
+  replayed: number;
+  success_rate_percent: number;
+};
+
+type RunbookAnalyticsFailedStepItem = {
+  template_key: string;
+  template_name: string;
+  step_id: string;
+  failures: number;
+};
+
+type RunbookAnalyticsSummaryResponse = {
+  generated_at: string;
+  window: RunbookAnalyticsWindow;
+  filters: RunbookAnalyticsFilters;
+  totals: RunbookAnalyticsSummaryTotals;
+  templates: RunbookAnalyticsTemplateBreakdownItem[];
+  failed_steps: RunbookAnalyticsFailedStepItem[];
+};
+
+type RunbookFailureFeedItem = {
+  id: number;
+  template_key: string;
+  template_name: string;
+  execution_mode: "simulate" | "live";
+  replay_source_execution_id: number | null;
+  actor: string;
+  failed_step_id: string | null;
+  failed_output: string | null;
+  remediation_hint: string | null;
+  evidence_summary: string;
+  runtime_summary: Record<string, unknown>;
+  created_at: string;
+};
+
+type RunbookFailureFeedResponse = {
+  generated_at: string;
+  window: RunbookAnalyticsWindow;
+  filters: RunbookAnalyticsFilters;
+  total: number;
+  limit: number;
+  offset: number;
+  items: RunbookFailureFeedItem[];
+};
+
+type RunbookAnalyticsFilterDraft = {
+  days: string;
+  execution_mode: "all" | "simulate" | "live";
+};
+
 type RunbookTemplateExecuteResponse = {
   generated_at: string;
   template: RunbookTemplateCatalogItem;
@@ -2239,6 +2320,11 @@ const defaultRunbookExecutionPolicyDraft: RunbookExecutionPolicyDraft = {
   note: ""
 };
 
+const defaultRunbookAnalyticsFilterDraft: RunbookAnalyticsFilterDraft = {
+  days: "14",
+  execution_mode: "all"
+};
+
 const defaultWorkflowStepForm: NewWorkflowTemplateStepForm = {
   id: "",
   name: "",
@@ -2349,6 +2435,14 @@ function buildRunbookExecutionPolicyDraft(policy: RunbookExecutionPolicyItem): R
     allow_simulate_failure: policy.allow_simulate_failure,
     note: policy.note ?? ""
   };
+}
+
+function normalizeRunbookAnalyticsDays(value: string): number {
+  const parsed = Number.parseInt(value.trim(), 10);
+  if (!Number.isFinite(parsed)) {
+    return 14;
+  }
+  return Math.min(90, Math.max(1, parsed));
 }
 
 export function App() {
@@ -2507,6 +2601,10 @@ export function App() {
   const [runbookExecutionPolicy, setRunbookExecutionPolicy] = useState<RunbookExecutionPolicyItem | null>(null);
   const [runbookExecutionPolicyDraft, setRunbookExecutionPolicyDraft] =
     useState<RunbookExecutionPolicyDraft>(defaultRunbookExecutionPolicyDraft);
+  const [runbookAnalyticsFilterDraft, setRunbookAnalyticsFilterDraft] =
+    useState<RunbookAnalyticsFilterDraft>(defaultRunbookAnalyticsFilterDraft);
+  const [runbookAnalyticsSummary, setRunbookAnalyticsSummary] = useState<RunbookAnalyticsSummaryResponse | null>(null);
+  const [runbookFailureFeed, setRunbookFailureFeed] = useState<RunbookFailureFeedResponse | null>(null);
   const [selectedRunbookTemplateKey, setSelectedRunbookTemplateKey] = useState("");
   const [selectedRunbookPresetId, setSelectedRunbookPresetId] = useState("");
   const [runbookExecutionMode, setRunbookExecutionMode] = useState<"simulate" | "live">("simulate");
@@ -2567,6 +2665,8 @@ export function App() {
   const [loadingRunbookExecutions, setLoadingRunbookExecutions] = useState(false);
   const [loadingRunbookPresets, setLoadingRunbookPresets] = useState(false);
   const [loadingRunbookExecutionPolicy, setLoadingRunbookExecutionPolicy] = useState(false);
+  const [loadingRunbookAnalyticsSummary, setLoadingRunbookAnalyticsSummary] = useState(false);
+  const [loadingRunbookFailureFeed, setLoadingRunbookFailureFeed] = useState(false);
   const [executingRunbookTemplate, setExecutingRunbookTemplate] = useState(false);
   const [savingRunbookPreset, setSavingRunbookPreset] = useState(false);
   const [savingRunbookExecutionPolicy, setSavingRunbookExecutionPolicy] = useState(false);
@@ -3872,6 +3972,78 @@ export function App() {
     }
   }, [selectedRunbookTemplateKey]);
 
+  const loadRunbookAnalyticsSummary = useCallback(async () => {
+    setLoadingRunbookAnalyticsSummary(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("days", String(normalizeRunbookAnalyticsDays(runbookAnalyticsFilterDraft.days)));
+      if (selectedRunbookTemplateKey.trim().length > 0) {
+        params.set("template_key", selectedRunbookTemplateKey.trim());
+      }
+      if (runbookAnalyticsFilterDraft.execution_mode !== "all") {
+        params.set("execution_mode", runbookAnalyticsFilterDraft.execution_mode);
+      }
+
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/analytics/summary?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookAnalyticsSummaryResponse = await response.json();
+      setRunbookAnalyticsSummary(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setRunbookAnalyticsSummary(null);
+      return null;
+    } finally {
+      setLoadingRunbookAnalyticsSummary(false);
+    }
+  }, [
+    runbookAnalyticsFilterDraft.days,
+    runbookAnalyticsFilterDraft.execution_mode,
+    selectedRunbookTemplateKey
+  ]);
+
+  const loadRunbookFailureFeed = useCallback(async () => {
+    setLoadingRunbookFailureFeed(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("days", String(normalizeRunbookAnalyticsDays(runbookAnalyticsFilterDraft.days)));
+      params.set("limit", "20");
+      params.set("offset", "0");
+      if (selectedRunbookTemplateKey.trim().length > 0) {
+        params.set("template_key", selectedRunbookTemplateKey.trim());
+      }
+      if (runbookAnalyticsFilterDraft.execution_mode !== "all") {
+        params.set("execution_mode", runbookAnalyticsFilterDraft.execution_mode);
+      }
+
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/analytics/failures?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookFailureFeedResponse = await response.json();
+      setRunbookFailureFeed(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setRunbookFailureFeed(null);
+      return null;
+    } finally {
+      setLoadingRunbookFailureFeed(false);
+    }
+  }, [
+    runbookAnalyticsFilterDraft.days,
+    runbookAnalyticsFilterDraft.execution_mode,
+    selectedRunbookTemplateKey
+  ]);
+
   const applyRunbookExecutionPreset = useCallback((preset: RunbookExecutionPresetItem | null) => {
     if (!preset) {
       return;
@@ -4089,7 +4261,11 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const replayed: RunbookTemplateReplayResponse = await response.json();
-      await loadRunbookTemplateExecutions();
+      await Promise.all([
+        loadRunbookTemplateExecutions(),
+        loadRunbookAnalyticsSummary(),
+        loadRunbookFailureFeed()
+      ]);
       setRunbookNotice(
         `Runbook replay created execution #${replayed.execution.id} from source #${replayed.source_execution_id}.`
       );
@@ -4102,6 +4278,8 @@ export function App() {
     }
   }, [
     canWriteCmdb,
+    loadRunbookAnalyticsSummary,
+    loadRunbookFailureFeed,
     loadRunbookTemplateExecutions,
     runbookEvidenceDraft.artifact_url,
     runbookEvidenceDraft.note,
@@ -4200,7 +4378,11 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const payload: RunbookTemplateExecuteResponse = await response.json();
-      await loadRunbookTemplateExecutions();
+      await Promise.all([
+        loadRunbookTemplateExecutions(),
+        loadRunbookAnalyticsSummary(),
+        loadRunbookFailureFeed()
+      ]);
       setRunbookPreflightDraft(buildRunbookPreflightDraft(template));
       const durationMs = Number(payload.execution.runtime_summary?.duration_ms ?? 0);
       setRunbookNotice(
@@ -4215,6 +4397,8 @@ export function App() {
     }
   }, [
     canWriteCmdb,
+    loadRunbookAnalyticsSummary,
+    loadRunbookFailureFeed,
     loadRunbookTemplateExecutions,
     runbookEvidenceDraft.artifact_url,
     runbookEvidenceDraft.note,
@@ -4264,6 +4448,14 @@ export function App() {
   useEffect(() => {
     void loadRunbookExecutionPresets();
   }, [loadRunbookExecutionPresets]);
+
+  useEffect(() => {
+    void loadRunbookAnalyticsSummary();
+  }, [loadRunbookAnalyticsSummary]);
+
+  useEffect(() => {
+    void loadRunbookFailureFeed();
+  }, [loadRunbookFailureFeed]);
 
   const loadBackupPolicies = useCallback(async () => {
     setLoadingBackupPolicies(true);
@@ -5305,6 +5497,8 @@ export function App() {
       runbookPolicy,
       runbookExecutions,
       runbookPresets,
+      runbookAnalyticsSummary,
+      runbookFailureFeed,
       policies,
       runs,
       evidence,
@@ -5324,6 +5518,8 @@ export function App() {
       loadRunbookExecutionPolicy(),
       loadRunbookTemplateExecutions(),
       loadRunbookExecutionPresets(),
+      loadRunbookAnalyticsSummary(),
+      loadRunbookFailureFeed(),
       loadBackupPolicies(),
       loadBackupPolicyRuns(),
       loadBackupRestoreEvidence(),
@@ -5344,6 +5540,8 @@ export function App() {
       runbookPolicy,
       runbookExecutions,
       runbookPresets,
+      runbookAnalyticsSummary,
+      runbookFailureFeed,
       policies,
       runs,
       evidence,
@@ -5360,6 +5558,8 @@ export function App() {
     loadBackupEvidenceComplianceScorecard,
     loadRunbookExecutionPolicy,
     loadRunbookExecutionPresets,
+    loadRunbookAnalyticsSummary,
+    loadRunbookFailureFeed,
     loadRunbookTemplateExecutions,
     loadRunbookTemplates,
     loadBackupPolicies,
@@ -10252,6 +10452,9 @@ export function App() {
     runbookPresets,
     runbookExecutionPolicy,
     runbookExecutionPolicyDraft,
+    runbookAnalyticsFilterDraft,
+    runbookAnalyticsSummary,
+    runbookFailureFeed,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
     selectedRunbookPresetId,
@@ -10280,6 +10483,8 @@ export function App() {
     loadRunbookExecutionPolicy,
     loadRunbookTemplateExecutions,
     loadRunbookExecutionPresets,
+    loadRunbookAnalyticsSummary,
+    loadRunbookFailureFeed,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadBackupEvidenceCompliancePolicy,
@@ -10320,6 +10525,8 @@ export function App() {
     loadingRunbookExecutions,
     loadingRunbookPresets,
     loadingRunbookExecutionPolicy,
+    loadingRunbookAnalyticsSummary,
+    loadingRunbookFailureFeed,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,
@@ -10384,6 +10591,7 @@ export function App() {
     setSelectedRunbookPresetId,
     setRunbookExecutionMode,
     setRunbookExecutionPolicyDraft,
+    setRunbookAnalyticsFilterDraft,
     setRunbookParamDraft,
     setRunbookPreflightDraft,
     setRunbookPresetDraft,
