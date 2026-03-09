@@ -66,6 +66,10 @@ pub fn routes() -> Router<AppState> {
             get(get_runbook_template_execution),
         )
         .route(
+            "/cockpit/runbook-templates/executions/{id}/replay",
+            post(replay_runbook_template_execution),
+        )
+        .route(
             "/cockpit/runbook-templates/{key}/execute",
             post(execute_runbook_template),
         )
@@ -202,6 +206,7 @@ struct RunbookTemplateExecutionItem {
     template_name: String,
     status: String,
     execution_mode: String,
+    replay_source_execution_id: Option<i64>,
     actor: String,
     params: Value,
     preflight: Value,
@@ -221,6 +226,7 @@ struct RunbookTemplateExecutionRow {
     template_name: String,
     status: String,
     execution_mode: String,
+    replay_source_execution_id: Option<i64>,
     actor: String,
     params: Value,
     preflight: Value,
@@ -237,6 +243,21 @@ struct RunbookTemplateExecutionRow {
 struct ExecuteRunbookTemplateResponse {
     generated_at: DateTime<Utc>,
     template: RunbookTemplateCatalogItem,
+    execution: RunbookTemplateExecutionItem,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplayRunbookTemplateExecutionRequest {
+    execution_mode: Option<String>,
+    evidence: Option<RunbookEvidenceInput>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplayRunbookTemplateExecutionResponse {
+    generated_at: DateTime<Utc>,
+    template: RunbookTemplateCatalogItem,
+    source_execution_id: i64,
     execution: RunbookTemplateExecutionItem,
 }
 
@@ -904,6 +925,7 @@ async fn execute_runbook_template(
             template_name,
             status,
             execution_mode,
+            replay_source_execution_id,
             actor,
             params,
             preflight,
@@ -913,14 +935,16 @@ async fn execute_runbook_template(
             remediation_hints,
             note
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         RETURNING id, template_key, template_name, status, execution_mode, actor, params, preflight,
-                   timeline, evidence, runtime_summary, remediation_hints, note, created_at, updated_at",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         RETURNING id, template_key, template_name, status, execution_mode, replay_source_execution_id,
+                   actor, params, preflight, timeline, evidence, runtime_summary, remediation_hints,
+                   note, created_at, updated_at",
     )
     .bind(template.key)
     .bind(template.name)
     .bind(final_status.as_str())
     .bind(execution_mode.as_str())
+    .bind(None::<i64>)
     .bind(actor.as_str())
     .bind(Value::Object(normalized_params.clone()))
     .bind(preflight_snapshot)
@@ -968,6 +992,178 @@ async fn execute_runbook_template(
     }))
 }
 
+async fn replay_runbook_template_execution(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(payload): Json<ReplayRunbookTemplateExecutionRequest>,
+) -> AppResult<Json<ReplayRunbookTemplateExecutionResponse>> {
+    if id <= 0 {
+        return Err(AppError::Validation(
+            "execution id must be a positive integer".to_string(),
+        ));
+    }
+
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let source_row: Option<RunbookTemplateExecutionRow> = sqlx::query_as(
+        "SELECT id, template_key, template_name, status, execution_mode, replay_source_execution_id,
+                actor, params, preflight, timeline, evidence, runtime_summary, remediation_hints,
+                note, created_at, updated_at
+         FROM ops_runbook_template_executions
+         WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let source_row = source_row
+        .ok_or_else(|| AppError::NotFound(format!("runbook execution {id} not found")))?;
+    let source_execution = parse_execution_row(source_row)?;
+
+    let template = resolve_template_by_key(source_execution.template_key.as_str())?;
+    let execution_policy =
+        parse_execution_policy_row(load_or_seed_execution_policy(&state).await?)?;
+    let execution_mode = normalize_execution_mode(
+        payload
+            .execution_mode
+            .unwrap_or_else(|| source_execution.execution_mode.clone()),
+    )?;
+    enforce_execution_mode_policy(&execution_policy, &template, execution_mode.as_str())?;
+
+    let normalized_params = normalize_runbook_params(&template, source_execution.params.clone())?;
+    if execution_mode == EXECUTION_MODE_LIVE
+        && string_param(&normalized_params, "simulate_failure_step").is_some()
+    {
+        return Err(AppError::Validation(
+            "simulate_failure_step is not allowed in live execution mode".to_string(),
+        ));
+    }
+    if execution_mode == EXECUTION_MODE_SIMULATE
+        && !execution_policy.allow_simulate_failure
+        && string_param(&normalized_params, "simulate_failure_step").is_some()
+    {
+        return Err(AppError::Validation(
+            "simulate_failure_step is disabled by execution policy".to_string(),
+        ));
+    }
+
+    let source_preflight_confirmations =
+        parse_preflight_snapshot_confirmed(source_execution.preflight.clone())?;
+    let preflight_confirmations =
+        normalize_preflight_confirmations(&template, source_preflight_confirmations)?;
+    let note = trim_optional(payload.note, MAX_NOTE_LEN);
+
+    let source_evidence = source_execution.evidence;
+    let evidence_input = match payload.evidence {
+        Some(value) => normalize_runbook_evidence_input(value)?,
+        None => normalize_runbook_evidence_input(RunbookEvidenceInput {
+            summary: source_evidence.summary,
+            ticket_ref: source_evidence.ticket_ref,
+            artifact_url: source_evidence.artifact_url,
+        })?,
+    };
+
+    let mut outcome = if execution_mode == EXECUTION_MODE_LIVE {
+        execute_live_template(
+            &template,
+            &normalized_params,
+            execution_policy.max_live_step_timeout_seconds,
+        )
+        .await?
+    } else {
+        execute_simulated_template(&template, &normalized_params)
+    };
+    if let Value::Object(runtime_summary) = &mut outcome.runtime_summary {
+        runtime_summary.insert("replay_source_execution_id".to_string(), json!(id));
+    }
+    let final_status = outcome.status.clone();
+
+    let evidence = RunbookEvidenceRecord {
+        summary: evidence_input.summary,
+        ticket_ref: evidence_input.ticket_ref,
+        artifact_url: evidence_input.artifact_url,
+        captured_at: Utc::now(),
+        execution_status: final_status.clone(),
+        operator: actor.clone(),
+    };
+    let preflight_snapshot = json!({
+        "confirmed": preflight_confirmations,
+        "total_required": template.preflight.len(),
+    });
+
+    let row: RunbookTemplateExecutionRow = sqlx::query_as(
+        "INSERT INTO ops_runbook_template_executions (
+            template_key,
+            template_name,
+            status,
+            execution_mode,
+            replay_source_execution_id,
+            actor,
+            params,
+            preflight,
+            timeline,
+            evidence,
+            runtime_summary,
+            remediation_hints,
+            note
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         RETURNING id, template_key, template_name, status, execution_mode, replay_source_execution_id,
+                   actor, params, preflight, timeline, evidence, runtime_summary, remediation_hints,
+                   note, created_at, updated_at",
+    )
+    .bind(template.key)
+    .bind(template.name)
+    .bind(final_status.as_str())
+    .bind(execution_mode.as_str())
+    .bind(id)
+    .bind(actor.as_str())
+    .bind(Value::Object(normalized_params.clone()))
+    .bind(preflight_snapshot)
+    .bind(serde_json::to_value(&outcome.timeline).map_err(|err| {
+        AppError::Validation(format!("failed to serialize runbook timeline: {err}"))
+    })?)
+    .bind(serde_json::to_value(&evidence).map_err(|err| {
+        AppError::Validation(format!("failed to serialize runbook evidence: {err}"))
+    })?)
+    .bind(outcome.runtime_summary.clone())
+    .bind(serde_json::to_value(&outcome.remediation_hints).map_err(|err| {
+        AppError::Validation(format!("failed to serialize remediation hints: {err}"))
+    })?)
+    .bind(note.clone())
+    .fetch_one(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "ops.runbook.template.replay".to_string(),
+            target_type: "ops_runbook_template_execution".to_string(),
+            target_id: Some(row.id.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "template_key": template.key,
+                "status": final_status,
+                "execution_mode": execution_mode,
+                "step_count": outcome.timeline.len(),
+                "remediation_hint_count": outcome.remediation_hints.len(),
+                "policy_mode": execution_policy.mode,
+                "replay_source_execution_id": id
+            }),
+        },
+    )
+    .await;
+
+    let execution = parse_execution_row(row)?;
+    Ok(Json(ReplayRunbookTemplateExecutionResponse {
+        generated_at: execution.created_at,
+        template: runbook_template_to_catalog_item(&template),
+        source_execution_id: id,
+        execution,
+    }))
+}
+
 async fn list_runbook_template_executions(
     State(state): State<AppState>,
     Query(query): Query<ListRunbookTemplateExecutionsQuery>,
@@ -989,8 +1185,9 @@ async fn list_runbook_template_executions(
         .await?;
 
     let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-        "SELECT id, template_key, template_name, status, execution_mode, actor, params, preflight,
-                timeline, evidence, runtime_summary, remediation_hints, note, created_at, updated_at
+        "SELECT id, template_key, template_name, status, execution_mode, replay_source_execution_id,
+                actor, params, preflight, timeline, evidence, runtime_summary, remediation_hints,
+                note, created_at, updated_at
          FROM ops_runbook_template_executions e
          WHERE 1=1",
     );
@@ -1028,8 +1225,9 @@ async fn get_runbook_template_execution(
     }
 
     let row: Option<RunbookTemplateExecutionRow> = sqlx::query_as(
-        "SELECT id, template_key, template_name, status, execution_mode, actor, params, preflight,
-                timeline, evidence, runtime_summary, remediation_hints, note, created_at, updated_at
+        "SELECT id, template_key, template_name, status, execution_mode, replay_source_execution_id,
+                actor, params, preflight, timeline, evidence, runtime_summary, remediation_hints,
+                note, created_at, updated_at
          FROM ops_runbook_template_executions
          WHERE id = $1",
     )
@@ -1118,6 +1316,7 @@ fn parse_execution_row(
         template_name: row.template_name,
         status: row.status,
         execution_mode: row.execution_mode,
+        replay_source_execution_id: row.replay_source_execution_id,
         actor: row.actor,
         params: row.params,
         preflight: row.preflight,
@@ -1602,6 +1801,25 @@ fn parse_preflight_confirmations(value: Value) -> AppResult<Vec<String>> {
         ))
     })?;
     Ok(preflight_confirmations)
+}
+
+fn parse_preflight_snapshot_confirmed(value: Value) -> AppResult<Vec<String>> {
+    let Value::Object(snapshot) = value else {
+        return Err(AppError::Validation(
+            "runbook execution preflight snapshot must be a JSON object".to_string(),
+        ));
+    };
+    let confirmed = snapshot.get("confirmed").cloned().ok_or_else(|| {
+        AppError::Validation(
+            "runbook execution preflight snapshot missing confirmed field".to_string(),
+        )
+    })?;
+    let confirmed: Vec<String> = serde_json::from_value(confirmed).map_err(|err| {
+        AppError::Validation(format!(
+            "runbook execution preflight snapshot confirmed field is invalid: {err}"
+        ))
+    })?;
+    Ok(confirmed)
 }
 
 fn parse_host_port_target(
@@ -2406,7 +2624,8 @@ mod tests {
     use super::{
         enforce_template_supports_execution_mode, evaluate_step_failure, normalize_execution_mode,
         normalize_live_template_keys, normalize_preflight_confirmations, normalize_preset_name,
-        normalize_runbook_params, parse_dependency_target, resolve_template_by_key,
+        normalize_runbook_params, parse_dependency_target, parse_preflight_snapshot_confirmed,
+        resolve_template_by_key,
     };
 
     #[test]
@@ -2530,5 +2749,23 @@ mod tests {
         let err = enforce_template_supports_execution_mode(&simulate_only_template, "live")
             .expect_err("should reject live mode");
         assert!(format!("{}", err).contains("does not support live execution"));
+    }
+
+    #[test]
+    fn parses_preflight_snapshot_confirmed_values() {
+        let confirmed = parse_preflight_snapshot_confirmed(json!({
+            "confirmed": ["confirm_probe_source", "confirm_dependency_owner"],
+            "total_required": 3
+        }))
+        .expect("confirmed list");
+        assert_eq!(confirmed.len(), 2);
+        assert_eq!(confirmed[0], "confirm_probe_source");
+        assert_eq!(confirmed[1], "confirm_dependency_owner");
+
+        let err = parse_preflight_snapshot_confirmed(json!({
+            "total_required": 3
+        }))
+        .expect_err("missing confirmed should fail");
+        assert!(format!("{}", err).contains("missing confirmed"));
     }
 }
