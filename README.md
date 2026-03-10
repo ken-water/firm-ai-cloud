@@ -142,6 +142,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.9 release gate checklist](docs/39-v0.1.9-release-gate-checklist.md)
 - [v0.1.10 runbook risk policy plan](docs/40-v0.1.10-runbook-risk-policy-plan.md)
 - [v0.1.10 release gate checklist](docs/41-v0.1.10-release-gate-checklist.md)
+- [v0.1.11 runbook risk-to-ticket closure plan](docs/42-v0.1.11-runbook-risk-ticket-closure-plan.md)
+- [v0.1.11 release gate checklist](docs/43-v0.1.11-release-gate-checklist.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
