@@ -1455,6 +1455,17 @@ type RunbookAnalyticsPolicyDraft = {
   note: string;
 };
 
+type RunbookRiskAlertTicketLinkItem = {
+  link_id: number;
+  ticket_id: number;
+  ticket_no: string;
+  ticket_status: "open" | "in_progress" | "resolved" | "closed" | "cancelled";
+  ticket_priority: "low" | "medium" | "high" | "critical";
+  status: "open" | "in_progress" | "resolved" | "closed" | "cancelled";
+  source_key: string;
+  updated_at: string;
+};
+
 type RunbookRiskAlertItem = {
   template_key: string;
   template_name: string;
@@ -1465,6 +1476,7 @@ type RunbookRiskAlertItem = {
   top_failed_step_id: string | null;
   latest_failed_execution_id: number | null;
   latest_failed_at: string | null;
+  ticket_link: RunbookRiskAlertTicketLinkItem | null;
   recommended_action: string;
 };
 
@@ -1477,6 +1489,14 @@ type RunbookRiskAlertResponse = {
   limit: number;
   offset: number;
   items: RunbookRiskAlertItem[];
+};
+
+type CreateRunbookRiskAlertTicketResponse = {
+  generated_at: string;
+  created: boolean;
+  source_key: string;
+  alert: RunbookRiskAlertItem;
+  ticket_link: RunbookRiskAlertTicketLinkItem;
 };
 
 type RunbookExecutionPresetItem = {
@@ -2732,6 +2752,7 @@ export function App() {
   const [loadingRunbookAnalyticsSummary, setLoadingRunbookAnalyticsSummary] = useState(false);
   const [loadingRunbookFailureFeed, setLoadingRunbookFailureFeed] = useState(false);
   const [loadingRunbookRiskAlerts, setLoadingRunbookRiskAlerts] = useState(false);
+  const [runningRunbookRiskTicketTemplateKey, setRunningRunbookRiskTicketTemplateKey] = useState<string | null>(null);
   const [executingRunbookTemplate, setExecutingRunbookTemplate] = useState(false);
   const [savingRunbookPreset, setSavingRunbookPreset] = useState(false);
   const [savingRunbookExecutionPolicy, setSavingRunbookExecutionPolicy] = useState(false);
@@ -3933,6 +3954,63 @@ export function App() {
     runbookAnalyticsFilterDraft.days,
     runbookAnalyticsFilterDraft.execution_mode,
     selectedRunbookTemplateKey
+  ]);
+
+  const createRunbookRiskAlertTicket = useCallback(async (templateKey: string) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const normalizedTemplateKey = templateKey.trim();
+    if (normalizedTemplateKey.length === 0) {
+      setError("Runbook template key is required.");
+      return null;
+    }
+
+    const days = normalizeRunbookAnalyticsDays(runbookAnalyticsFilterDraft.days);
+    const executionMode = runbookAnalyticsFilterDraft.execution_mode === "all"
+      ? null
+      : runbookAnalyticsFilterDraft.execution_mode;
+
+    setRunningRunbookRiskTicketTemplateKey(normalizedTemplateKey);
+    setRunbookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/analytics/alerts/tickets`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          template_key: normalizedTemplateKey,
+          execution_mode: executionMode,
+          days
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: CreateRunbookRiskAlertTicketResponse = await response.json();
+      await loadRunbookRiskAlerts();
+      setRunbookNotice(
+        payload.created
+          ? `Runbook risk alert ticket created: ${payload.ticket_link.ticket_no} (template=${payload.alert.template_key}).`
+          : `Runbook risk alert ticket reused: ${payload.ticket_link.ticket_no} (template=${payload.alert.template_key}).`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningRunbookRiskTicketTemplateKey(null);
+    }
+  }, [
+    canWriteCmdb,
+    loadRunbookRiskAlerts,
+    runbookAnalyticsFilterDraft.days,
+    runbookAnalyticsFilterDraft.execution_mode,
+    t
   ]);
 
   const saveRunbookAnalyticsPolicy = useCallback(async () => {
@@ -10692,6 +10770,7 @@ export function App() {
     loadRunbookAnalyticsSummary,
     loadRunbookFailureFeed,
     loadRunbookRiskAlerts,
+    createRunbookRiskAlertTicket,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadBackupEvidenceCompliancePolicy,
@@ -10737,6 +10816,7 @@ export function App() {
     loadingRunbookAnalyticsSummary,
     loadingRunbookFailureFeed,
     loadingRunbookRiskAlerts,
+    runningRunbookRiskTicketTemplateKey,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,

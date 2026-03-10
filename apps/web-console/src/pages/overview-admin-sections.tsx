@@ -99,6 +99,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadRunbookAnalyticsSummary,
     loadRunbookFailureFeed,
     loadRunbookRiskAlerts,
+    createRunbookRiskAlertTicket,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadBackupEvidenceCompliancePolicy,
@@ -141,6 +142,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingRunbookAnalyticsSummary,
     loadingRunbookFailureFeed,
     loadingRunbookRiskAlerts,
+    runningRunbookRiskTicketTemplateKey,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,
@@ -1277,7 +1279,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                         {" | "}total={runbookRiskAlerts.total ?? 0}
                       </p>
                       <div style={{ overflowX: "auto" }}>
-                        <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                        <table style={{ borderCollapse: "collapse", minWidth: "1220px", width: "100%" }}>
                           <thead>
                             <tr>
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Template</th>
@@ -1285,34 +1287,63 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Failure rate</th>
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Failure context</th>
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Recommended action</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Ticket link</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {(runbookRiskAlerts.items ?? []).map((item: any) => (
-                              <tr key={`runbook-risk-alert-${item.template_key}`}>
-                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
-                                  {item.template_name}
-                                  <div className="inline-note">{item.template_key}</div>
-                                </td>
-                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
-                                  {item.severity}
-                                </td>
-                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
-                                  {item.failure_rate_percent}%
-                                  <div className="inline-note">{item.failed} / {item.executions}</div>
-                                </td>
-                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
-                                  top_failed_step={item.top_failed_step_id ?? "-"}
-                                  <div className="inline-note">latest_failed_execution=#{item.latest_failed_execution_id ?? "-"}</div>
-                                  <div className="inline-note">
-                                    latest_failed_at={item.latest_failed_at ? new Date(item.latest_failed_at).toLocaleString() : "-"}
-                                  </div>
-                                </td>
-                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
-                                  {item.recommended_action}
-                                </td>
-                              </tr>
-                            ))}
+                            {(runbookRiskAlerts.items ?? []).map((item: any) => {
+                              const ticketLink = item.ticket_link;
+                              const rowRunning = runningRunbookRiskTicketTemplateKey === item.template_key;
+                              return (
+                                <tr key={`runbook-risk-alert-${item.template_key}`}>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    {item.template_name}
+                                    <div className="inline-note">{item.template_key}</div>
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    {item.severity}
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    {item.failure_rate_percent}%
+                                    <div className="inline-note">{item.failed} / {item.executions}</div>
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    top_failed_step={item.top_failed_step_id ?? "-"}
+                                    <div className="inline-note">latest_failed_execution=#{item.latest_failed_execution_id ?? "-"}</div>
+                                    <div className="inline-note">
+                                      latest_failed_at={item.latest_failed_at ? new Date(item.latest_failed_at).toLocaleString() : "-"}
+                                    </div>
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    {item.recommended_action}
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    {ticketLink ? (
+                                      <>
+                                        <div>{ticketLink.ticket_no}</div>
+                                        <div className="inline-note">status={ticketLink.ticket_status}</div>
+                                        <div className="inline-note">priority={ticketLink.ticket_priority}</div>
+                                        <div className="inline-note">link_status={ticketLink.status}</div>
+                                        <div className="inline-note">
+                                          {ticketLink.updated_at ? new Date(ticketLink.updated_at).toLocaleString() : "-"}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <span>-</span>
+                                    )}
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    <button
+                                      onClick={() => void createRunbookRiskAlertTicket(item.template_key)}
+                                      disabled={!canWriteCmdb || rowRunning}
+                                    >
+                                      {rowRunning ? t("cmdb.actions.loading") : "Create/reuse ticket"}
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
