@@ -18,6 +18,38 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.10] - 2026-03-10
+
+### Added
+
+- v0.1.10 planning and release-gate documentation:
+  - `docs/40-v0.1.10-runbook-risk-policy-plan.md`
+  - `docs/41-v0.1.10-release-gate-checklist.md`
+- v0.1.10 issue baseline and closure track: GitHub issues `#163` to `#168`.
+- Runbook analytics policy persistence baseline:
+  - migration: `202603100001_create_runbook_analytics_policies.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/runbook-templates/analytics/policy`
+    - `PUT /api/v1/ops/cockpit/runbook-templates/analytics/policy`
+- Proactive runbook risk alert feed endpoint:
+  - `GET /api/v1/ops/cockpit/runbook-templates/analytics/alerts`
+- v0.1.10 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.10-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- v0.1.x planning document now includes v0.1.10 track and issue map (`docs/20-v0.1x-operator-simplicity-plan.md`).
+- Web console runbook panel now adds:
+  - analytics risk policy read/write controls with role-aware save action,
+  - proactive risk alerts list with severity/failure-rate/context/recommended-action fields,
+  - daily snapshot refresh integration for analytics policy and risk alerts.
+- RBAC permission coverage tests now include runbook analytics policy and alerts routes.
+
+### Fixed
+
+- None.
+
 ## [0.1.9] - 2026-03-09
 
 ### Added
