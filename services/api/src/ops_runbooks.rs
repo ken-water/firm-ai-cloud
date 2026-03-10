@@ -38,6 +38,15 @@ const MAX_ANALYTICS_SCAN_ROWS: u32 = 5000;
 const DEFAULT_FAILURE_FEED_LIMIT: u32 = 30;
 const MAX_FAILURE_FEED_LIMIT: u32 = 120;
 const MAX_FAILED_STEP_HOTSPOTS: usize = 12;
+const DEFAULT_ALERT_LIMIT: u32 = 20;
+const MAX_ALERT_LIMIT: u32 = 120;
+const DEFAULT_ANALYTICS_POLICY_KEY: &str = "global";
+const DEFAULT_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT: i32 = 20;
+const MIN_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT: i32 = 1;
+const MAX_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT: i32 = 100;
+const DEFAULT_ANALYTICS_MINIMUM_SAMPLE_SIZE: i32 = 5;
+const MIN_ANALYTICS_MINIMUM_SAMPLE_SIZE: i32 = 1;
+const MAX_ANALYTICS_MINIMUM_SAMPLE_SIZE: i32 = 500;
 const DEFAULT_EXECUTION_POLICY_KEY: &str = "global";
 const EXECUTION_MODE_SIMULATE: &str = "simulate";
 const EXECUTION_MODE_LIVE: &str = "live";
@@ -74,6 +83,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/cockpit/runbook-templates/analytics/summary",
             get(get_runbook_analytics_summary),
+        )
+        .route(
+            "/cockpit/runbook-templates/analytics/policy",
+            get(get_runbook_analytics_policy).put(update_runbook_analytics_policy),
+        )
+        .route(
+            "/cockpit/runbook-templates/analytics/alerts",
+            get(list_runbook_risk_alerts),
         )
         .route(
             "/cockpit/runbook-templates/analytics/failures",
@@ -299,6 +316,15 @@ struct RunbookFailureFeedQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct RunbookRiskAlertQuery {
+    template_key: Option<String>,
+    execution_mode: Option<String>,
+    days: Option<u32>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 struct ListRunbookTemplateExecutionsResponse {
     generated_at: DateTime<Utc>,
@@ -398,6 +424,67 @@ struct RunbookFailureFeedResponse {
     items: Vec<RunbookFailureFeedItem>,
 }
 
+#[derive(Debug, FromRow)]
+struct RunbookAnalyticsPolicyRow {
+    policy_key: String,
+    failure_rate_threshold_percent: i32,
+    minimum_sample_size: i32,
+    note: Option<String>,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RunbookAnalyticsPolicyItem {
+    policy_key: String,
+    failure_rate_threshold_percent: i32,
+    minimum_sample_size: i32,
+    note: Option<String>,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookAnalyticsPolicyResponse {
+    generated_at: DateTime<Utc>,
+    policy: RunbookAnalyticsPolicyItem,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateRunbookAnalyticsPolicyRequest {
+    failure_rate_threshold_percent: Option<i32>,
+    minimum_sample_size: Option<i32>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookRiskAlertItem {
+    template_key: String,
+    template_name: String,
+    severity: String,
+    executions: usize,
+    failed: usize,
+    failure_rate_percent: f64,
+    top_failed_step_id: Option<String>,
+    latest_failed_execution_id: Option<i64>,
+    latest_failed_at: Option<DateTime<Utc>>,
+    recommended_action: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookRiskAlertResponse {
+    generated_at: DateTime<Utc>,
+    window: RunbookAnalyticsWindow,
+    filters: RunbookAnalyticsFilters,
+    policy: RunbookAnalyticsPolicyItem,
+    total: usize,
+    limit: u32,
+    offset: u32,
+    items: Vec<RunbookRiskAlertItem>,
+}
+
 #[derive(Debug, Default)]
 struct RunbookTemplateAggregate {
     template_name: String,
@@ -407,6 +494,16 @@ struct RunbookTemplateAggregate {
     simulate: usize,
     live: usize,
     replayed: usize,
+}
+
+#[derive(Debug, Default)]
+struct RunbookRiskAggregate {
+    template_name: String,
+    executions: usize,
+    failed: usize,
+    failed_step_counts: BTreeMap<String, usize>,
+    latest_failed_execution_id: Option<i64>,
+    latest_failed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, FromRow)]
@@ -1369,6 +1466,260 @@ async fn get_runbook_template_execution(
     }))
 }
 
+async fn get_runbook_analytics_policy(
+    State(state): State<AppState>,
+) -> AppResult<Json<RunbookAnalyticsPolicyResponse>> {
+    let policy = parse_runbook_analytics_policy_row(load_or_seed_analytics_policy(&state).await?)?;
+    Ok(Json(RunbookAnalyticsPolicyResponse {
+        generated_at: Utc::now(),
+        policy,
+    }))
+}
+
+async fn update_runbook_analytics_policy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateRunbookAnalyticsPolicyRequest>,
+) -> AppResult<Json<RunbookAnalyticsPolicyResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let current = parse_runbook_analytics_policy_row(load_or_seed_analytics_policy(&state).await?)?;
+
+    let failure_rate_threshold_percent = payload
+        .failure_rate_threshold_percent
+        .unwrap_or(current.failure_rate_threshold_percent);
+    if !(MIN_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT..=MAX_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT)
+        .contains(&failure_rate_threshold_percent)
+    {
+        return Err(AppError::Validation(format!(
+            "failure_rate_threshold_percent must be between {} and {}",
+            MIN_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT,
+            MAX_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT
+        )));
+    }
+
+    let minimum_sample_size = payload
+        .minimum_sample_size
+        .unwrap_or(current.minimum_sample_size);
+    if !(MIN_ANALYTICS_MINIMUM_SAMPLE_SIZE..=MAX_ANALYTICS_MINIMUM_SAMPLE_SIZE)
+        .contains(&minimum_sample_size)
+    {
+        return Err(AppError::Validation(format!(
+            "minimum_sample_size must be between {} and {}",
+            MIN_ANALYTICS_MINIMUM_SAMPLE_SIZE, MAX_ANALYTICS_MINIMUM_SAMPLE_SIZE
+        )));
+    }
+
+    let note = if payload.note.is_some() {
+        trim_optional(payload.note, MAX_NOTE_LEN)
+    } else {
+        current.note
+    };
+
+    let row: RunbookAnalyticsPolicyRow = sqlx::query_as(
+        "UPDATE ops_runbook_analytics_policies
+         SET failure_rate_threshold_percent = $1,
+             minimum_sample_size = $2,
+             note = $3,
+             updated_by = $4,
+             updated_at = NOW()
+         WHERE policy_key = $5
+         RETURNING policy_key, failure_rate_threshold_percent, minimum_sample_size,
+                   note, updated_by, created_at, updated_at",
+    )
+    .bind(failure_rate_threshold_percent)
+    .bind(minimum_sample_size)
+    .bind(note.clone())
+    .bind(actor.as_str())
+    .bind(DEFAULT_ANALYTICS_POLICY_KEY)
+    .fetch_one(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor,
+            action: "ops.runbook.analytics_policy.update".to_string(),
+            target_type: "ops_runbook_analytics_policy".to_string(),
+            target_id: Some(DEFAULT_ANALYTICS_POLICY_KEY.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "failure_rate_threshold_percent": failure_rate_threshold_percent,
+                "minimum_sample_size": minimum_sample_size
+            }),
+        },
+    )
+    .await;
+
+    let policy = parse_runbook_analytics_policy_row(row)?;
+    Ok(Json(RunbookAnalyticsPolicyResponse {
+        generated_at: Utc::now(),
+        policy,
+    }))
+}
+
+async fn list_runbook_risk_alerts(
+    State(state): State<AppState>,
+    Query(query): Query<RunbookRiskAlertQuery>,
+) -> AppResult<Json<RunbookRiskAlertResponse>> {
+    let template_key = query.template_key.map(normalize_template_key).transpose()?;
+    let execution_mode = query
+        .execution_mode
+        .map(normalize_execution_mode)
+        .transpose()?;
+    let days = normalize_analytics_days(query.days);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_ALERT_LIMIT)
+        .clamp(1, MAX_ALERT_LIMIT);
+    let offset = query.offset.unwrap_or(0);
+    let generated_at = Utc::now();
+    let start_at = generated_at - Duration::days(days as i64);
+    let policy = parse_runbook_analytics_policy_row(load_or_seed_analytics_policy(&state).await?)?;
+
+    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, template_key, template_name, status, execution_mode, replay_source_execution_id,
+                actor, params, preflight, timeline, evidence, runtime_summary, remediation_hints,
+                note, created_at, updated_at
+         FROM ops_runbook_template_executions e
+         WHERE e.created_at >= ",
+    );
+    list_builder.push_bind(start_at);
+    append_analytics_filters(&mut list_builder, template_key.clone(), execution_mode.clone());
+    list_builder
+        .push(" ORDER BY e.created_at DESC, e.id DESC LIMIT ")
+        .push_bind(MAX_ANALYTICS_SCAN_ROWS as i64);
+
+    let rows: Vec<RunbookTemplateExecutionRow> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
+
+    let mut aggregates = BTreeMap::<String, RunbookRiskAggregate>::new();
+    for row in rows {
+        let execution = parse_execution_row(row)?;
+        let aggregate = aggregates
+            .entry(execution.template_key.clone())
+            .or_insert_with(|| RunbookRiskAggregate {
+                template_name: execution.template_name.clone(),
+                ..RunbookRiskAggregate::default()
+            });
+        aggregate.executions += 1;
+
+        if execution.status != "failed" {
+            continue;
+        }
+        aggregate.failed += 1;
+        if aggregate
+            .latest_failed_at
+            .map(|current| execution.created_at > current)
+            .unwrap_or(true)
+        {
+            aggregate.latest_failed_at = Some(execution.created_at);
+            aggregate.latest_failed_execution_id = Some(execution.id);
+        }
+        if let Some(step) = first_failed_timeline_step(&execution.timeline) {
+            *aggregate
+                .failed_step_counts
+                .entry(step.step_id.clone())
+                .or_insert(0) += 1;
+        }
+    }
+
+    let mut alerts = aggregates
+        .into_iter()
+        .filter_map(|(template_key, aggregate)| {
+            if aggregate.executions < policy.minimum_sample_size as usize {
+                return None;
+            }
+            if aggregate.failed == 0 {
+                return None;
+            }
+
+            let failure_rate_percent =
+                ((aggregate.failed as f64 * 1000.0) / aggregate.executions as f64).round() / 10.0;
+            if failure_rate_percent < policy.failure_rate_threshold_percent as f64 {
+                return None;
+            }
+
+            let top_failed_step_id = aggregate
+                .failed_step_counts
+                .iter()
+                .max_by(|(left_step, left_count), (right_step, right_count)| {
+                    left_count
+                        .cmp(right_count)
+                        .then_with(|| right_step.cmp(left_step))
+                })
+                .map(|(step_id, _)| step_id.clone());
+
+            let severity =
+                if failure_rate_percent >= (policy.failure_rate_threshold_percent + 20) as f64
+                    || aggregate.failed >= policy.minimum_sample_size as usize
+                {
+                    "critical".to_string()
+                } else {
+                    "warning".to_string()
+                };
+
+            let recommended_action = match top_failed_step_id.as_ref() {
+                Some(step_id) => format!(
+                    "Review failed step '{}' and run guarded replay after dependency confirmation.",
+                    step_id
+                ),
+                None => "Review latest failed execution evidence and run guarded replay.".to_string(),
+            };
+
+            Some(RunbookRiskAlertItem {
+                template_key,
+                template_name: aggregate.template_name,
+                severity,
+                executions: aggregate.executions,
+                failed: aggregate.failed,
+                failure_rate_percent,
+                top_failed_step_id,
+                latest_failed_execution_id: aggregate.latest_failed_execution_id,
+                latest_failed_at: aggregate.latest_failed_at,
+                recommended_action,
+            })
+        })
+        .collect::<Vec<_>>();
+    alerts.sort_by(|left, right| {
+        risk_severity_rank(right.severity.as_str())
+            .cmp(&risk_severity_rank(left.severity.as_str()))
+            .then_with(|| {
+                right
+                    .failure_rate_percent
+                    .partial_cmp(&left.failure_rate_percent)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| right.failed.cmp(&left.failed))
+            .then_with(|| left.template_key.cmp(&right.template_key))
+    });
+
+    let total = alerts.len();
+    let items = alerts
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect::<Vec<_>>();
+
+    Ok(Json(RunbookRiskAlertResponse {
+        generated_at,
+        window: RunbookAnalyticsWindow {
+            start_at,
+            end_at: generated_at,
+            days,
+        },
+        filters: RunbookAnalyticsFilters {
+            template_key,
+            execution_mode,
+        },
+        policy,
+        total,
+        limit,
+        offset,
+        items,
+    }))
+}
+
 async fn get_runbook_analytics_summary(
     State(state): State<AppState>,
     Query(query): Query<RunbookAnalyticsSummaryQuery>,
@@ -1809,6 +2160,84 @@ fn parse_execution_policy_row(
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
+}
+
+async fn load_or_seed_analytics_policy(state: &AppState) -> AppResult<RunbookAnalyticsPolicyRow> {
+    let existing: Option<RunbookAnalyticsPolicyRow> = sqlx::query_as(
+        "SELECT policy_key, failure_rate_threshold_percent, minimum_sample_size,
+                note, updated_by, created_at, updated_at
+         FROM ops_runbook_analytics_policies
+         WHERE policy_key = $1",
+    )
+    .bind(DEFAULT_ANALYTICS_POLICY_KEY)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if let Some(row) = existing {
+        return Ok(row);
+    }
+
+    let row: RunbookAnalyticsPolicyRow = sqlx::query_as(
+        "INSERT INTO ops_runbook_analytics_policies (
+            policy_key,
+            failure_rate_threshold_percent,
+            minimum_sample_size,
+            note,
+            updated_by
+         )
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING policy_key, failure_rate_threshold_percent, minimum_sample_size,
+                   note, updated_by, created_at, updated_at",
+    )
+    .bind(DEFAULT_ANALYTICS_POLICY_KEY)
+    .bind(DEFAULT_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT)
+    .bind(DEFAULT_ANALYTICS_MINIMUM_SAMPLE_SIZE)
+    .bind(Some("seeded default analytics policy".to_string()))
+    .bind("system")
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(row)
+}
+
+fn parse_runbook_analytics_policy_row(
+    row: RunbookAnalyticsPolicyRow,
+) -> AppResult<RunbookAnalyticsPolicyItem> {
+    if !(MIN_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT..=MAX_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT)
+        .contains(&row.failure_rate_threshold_percent)
+    {
+        return Err(AppError::Validation(format!(
+            "runbook analytics policy failure_rate_threshold_percent must be between {} and {}",
+            MIN_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT,
+            MAX_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT
+        )));
+    }
+    if !(MIN_ANALYTICS_MINIMUM_SAMPLE_SIZE..=MAX_ANALYTICS_MINIMUM_SAMPLE_SIZE)
+        .contains(&row.minimum_sample_size)
+    {
+        return Err(AppError::Validation(format!(
+            "runbook analytics policy minimum_sample_size must be between {} and {}",
+            MIN_ANALYTICS_MINIMUM_SAMPLE_SIZE, MAX_ANALYTICS_MINIMUM_SAMPLE_SIZE
+        )));
+    }
+
+    Ok(RunbookAnalyticsPolicyItem {
+        policy_key: row.policy_key,
+        failure_rate_threshold_percent: row.failure_rate_threshold_percent,
+        minimum_sample_size: row.minimum_sample_size,
+        note: row.note,
+        updated_by: row.updated_by,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+
+fn risk_severity_rank(severity: &str) -> u8 {
+    match severity {
+        "critical" => 2,
+        "warning" => 1,
+        _ => 0,
+    }
 }
 
 fn normalize_execution_policy_mode(value: String) -> AppResult<String> {
@@ -3039,11 +3468,13 @@ mod tests {
     use serde_json::json;
 
     use super::{
+        RunbookAnalyticsPolicyRow,
         RunbookStepTimelineEvent, calculate_success_rate_percent,
         enforce_template_supports_execution_mode, evaluate_step_failure, first_failed_timeline_step,
         normalize_analytics_days, normalize_execution_mode, normalize_live_template_keys,
         normalize_preflight_confirmations, normalize_preset_name, normalize_runbook_params,
-        parse_dependency_target, parse_preflight_snapshot_confirmed, resolve_template_by_key,
+        parse_dependency_target, parse_preflight_snapshot_confirmed, parse_runbook_analytics_policy_row,
+        resolve_template_by_key, risk_severity_rank,
     };
 
     #[test]
@@ -3231,5 +3662,40 @@ mod tests {
         let failed = first_failed_timeline_step(&timeline).expect("failed step");
         assert_eq!(failed.step_id, "reachability_probe");
         assert_eq!(failed.output, "timeout");
+    }
+
+    #[test]
+    fn validates_analytics_policy_ranges() {
+        let now = Utc::now();
+        let valid = parse_runbook_analytics_policy_row(RunbookAnalyticsPolicyRow {
+            policy_key: "global".to_string(),
+            failure_rate_threshold_percent: 20,
+            minimum_sample_size: 5,
+            note: None,
+            updated_by: "admin".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("valid policy");
+        assert_eq!(valid.failure_rate_threshold_percent, 20);
+        assert_eq!(valid.minimum_sample_size, 5);
+
+        let err = parse_runbook_analytics_policy_row(RunbookAnalyticsPolicyRow {
+            policy_key: "global".to_string(),
+            failure_rate_threshold_percent: 0,
+            minimum_sample_size: 5,
+            note: None,
+            updated_by: "admin".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect_err("threshold range should fail");
+        assert!(format!("{}", err).contains("failure_rate_threshold_percent"));
+    }
+
+    #[test]
+    fn ranks_risk_severity_levels() {
+        assert!(risk_severity_rank("critical") > risk_severity_rank("warning"));
+        assert!(risk_severity_rank("warning") > risk_severity_rank("unknown"));
     }
 }
