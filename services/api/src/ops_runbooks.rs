@@ -40,6 +40,7 @@ const MAX_FAILURE_FEED_LIMIT: u32 = 120;
 const MAX_FAILED_STEP_HOTSPOTS: usize = 12;
 const DEFAULT_ALERT_LIMIT: u32 = 20;
 const MAX_ALERT_LIMIT: u32 = 120;
+const MAX_ALERT_LINK_SCAN_ROWS: u32 = 2000;
 const DEFAULT_ANALYTICS_POLICY_KEY: &str = "global";
 const DEFAULT_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT: i32 = 20;
 const MIN_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT: i32 = 1;
@@ -56,6 +57,15 @@ const DEFAULT_LIVE_STEP_TIMEOUT_SECONDS: i32 = 10;
 const MIN_LIVE_STEP_TIMEOUT_SECONDS: i32 = 1;
 const MAX_LIVE_STEP_TIMEOUT_SECONDS: i32 = 120;
 const MAX_LIVE_TEMPLATE_COUNT: usize = 32;
+const TICKET_STATUS_OPEN: &str = "open";
+const TICKET_STATUS_IN_PROGRESS: &str = "in_progress";
+const TICKET_STATUS_RESOLVED: &str = "resolved";
+const TICKET_STATUS_CLOSED: &str = "closed";
+const TICKET_STATUS_CANCELLED: &str = "cancelled";
+const TICKET_PRIORITY_LOW: &str = "low";
+const TICKET_PRIORITY_MEDIUM: &str = "medium";
+const TICKET_PRIORITY_HIGH: &str = "high";
+const TICKET_PRIORITY_CRITICAL: &str = "critical";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -470,7 +480,35 @@ struct RunbookRiskAlertItem {
     top_failed_step_id: Option<String>,
     latest_failed_execution_id: Option<i64>,
     latest_failed_at: Option<DateTime<Utc>>,
+    ticket_link: Option<RunbookRiskAlertTicketLinkItem>,
     recommended_action: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RunbookRiskAlertTicketLinkItem {
+    link_id: i64,
+    ticket_id: i64,
+    ticket_no: String,
+    ticket_status: String,
+    ticket_priority: String,
+    status: String,
+    source_key: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct RunbookRiskAlertTicketLinkRow {
+    id: i64,
+    template_key: String,
+    execution_mode: Option<String>,
+    window_days: i32,
+    source_key: String,
+    status: String,
+    ticket_id: i64,
+    ticket_no: String,
+    ticket_status: String,
+    ticket_priority: String,
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1576,6 +1614,13 @@ async fn list_runbook_risk_alerts(
     let generated_at = Utc::now();
     let start_at = generated_at - Duration::days(days as i64);
     let policy = parse_runbook_analytics_policy_row(load_or_seed_analytics_policy(&state).await?)?;
+    let ticket_links = load_runbook_risk_alert_ticket_links(
+        &state,
+        template_key.as_deref(),
+        execution_mode.as_deref(),
+        days,
+    )
+    .await?;
 
     let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT id, template_key, template_name, status, execution_mode, replay_source_execution_id,
@@ -1666,6 +1711,7 @@ async fn list_runbook_risk_alerts(
                 ),
                 None => "Review latest failed execution evidence and run guarded replay.".to_string(),
             };
+            let ticket_link = ticket_links.get(&template_key).cloned();
 
             Some(RunbookRiskAlertItem {
                 template_key,
@@ -1677,6 +1723,7 @@ async fn list_runbook_risk_alerts(
                 top_failed_step_id,
                 latest_failed_execution_id: aggregate.latest_failed_execution_id,
                 latest_failed_at: aggregate.latest_failed_at,
+                ticket_link,
                 recommended_action,
             })
         })
@@ -1718,6 +1765,134 @@ async fn list_runbook_risk_alerts(
         offset,
         items,
     }))
+}
+
+async fn load_runbook_risk_alert_ticket_links(
+    state: &AppState,
+    template_key: Option<&str>,
+    execution_mode: Option<&str>,
+    days: u32,
+) -> AppResult<BTreeMap<String, RunbookRiskAlertTicketLinkItem>> {
+    let normalized_template_key = template_key
+        .map(|raw| normalize_template_key(raw.to_string()))
+        .transpose()?;
+    let normalized_execution_mode = execution_mode
+        .map(|raw| normalize_execution_mode(raw.to_string()))
+        .transpose()?;
+    let expected_mode = normalized_execution_mode.as_deref();
+    let expected_days = days as i32;
+
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT l.id, l.template_key, l.execution_mode, l.window_days, l.source_key, l.status,
+                l.ticket_id, t.ticket_no, t.status AS ticket_status, t.priority AS ticket_priority,
+                l.updated_at
+         FROM ops_runbook_risk_alert_ticket_links l
+         JOIN tickets t ON t.id = l.ticket_id
+         WHERE l.window_days = ",
+    );
+    builder.push_bind(expected_days);
+
+    match expected_mode {
+        Some(mode) => {
+            builder.push(" AND l.execution_mode = ").push_bind(mode);
+        }
+        None => {
+            builder.push(" AND l.execution_mode IS NULL");
+        }
+    }
+    if let Some(template) = normalized_template_key.as_ref() {
+        builder.push(" AND l.template_key = ").push_bind(template);
+    }
+    builder
+        .push(" ORDER BY l.updated_at DESC, l.id DESC LIMIT ")
+        .push_bind(MAX_ALERT_LINK_SCAN_ROWS as i64);
+
+    let rows: Vec<RunbookRiskAlertTicketLinkRow> = builder.build_query_as().fetch_all(&state.db).await?;
+    let mut links = BTreeMap::new();
+    for row in rows {
+        let (item_template_key, item) =
+            parse_runbook_risk_alert_ticket_link_row(row, expected_mode, days)?;
+        links.entry(item_template_key).or_insert(item);
+    }
+    Ok(links)
+}
+
+fn parse_runbook_risk_alert_ticket_link_row(
+    row: RunbookRiskAlertTicketLinkRow,
+    expected_execution_mode: Option<&str>,
+    expected_days: u32,
+) -> AppResult<(String, RunbookRiskAlertTicketLinkItem)> {
+    let RunbookRiskAlertTicketLinkRow {
+        id,
+        template_key,
+        execution_mode,
+        window_days,
+        source_key,
+        status,
+        ticket_id,
+        ticket_no,
+        ticket_status,
+        ticket_priority,
+        updated_at,
+    } = row;
+
+    if id <= 0 {
+        return Err(AppError::Validation(
+            "runbook risk alert ticket link id must be a positive integer".to_string(),
+        ));
+    }
+    if ticket_id <= 0 {
+        return Err(AppError::Validation(
+            "runbook risk alert ticket link ticket_id must be a positive integer".to_string(),
+        ));
+    }
+    if window_days != expected_days as i32 {
+        return Err(AppError::Validation(format!(
+            "runbook risk alert ticket link window_days {} does not match expected days {}",
+            window_days, expected_days
+        )));
+    }
+
+    let normalized_template_key = normalize_template_key(template_key)?;
+    let normalized_execution_mode = execution_mode.map(normalize_execution_mode).transpose()?;
+    if normalized_execution_mode.as_deref() != expected_execution_mode {
+        return Err(AppError::Validation(format!(
+            "runbook risk alert ticket link execution_mode mismatch for template '{}'",
+            normalized_template_key
+        )));
+    }
+
+    let source_key = required_trimmed("source_key", source_key, 160)?;
+    let expected_source_key = build_runbook_risk_alert_source_key(
+        normalized_template_key.as_str(),
+        normalized_execution_mode.as_deref(),
+        expected_days,
+    );
+    if source_key != expected_source_key {
+        return Err(AppError::Validation(format!(
+            "runbook risk alert ticket link source_key mismatch for template '{}'",
+            normalized_template_key
+        )));
+    }
+
+    let status = normalize_ticket_lifecycle_status(status, "link status")?;
+    let ticket_status = normalize_ticket_lifecycle_status(ticket_status, "ticket status")?;
+    let ticket_priority = normalize_ticket_priority_for_link(ticket_priority)?;
+    let ticket_no = required_trimmed("ticket_no", ticket_no, 64)?;
+
+    Ok((
+        normalized_template_key,
+        RunbookRiskAlertTicketLinkItem {
+            link_id: id,
+            ticket_id,
+            ticket_no,
+            ticket_status,
+            ticket_priority,
+            status,
+            source_key,
+            updated_at,
+        },
+    ))
 }
 
 async fn get_runbook_analytics_summary(
@@ -3419,6 +3594,42 @@ fn normalize_execution_status(value: String) -> AppResult<String> {
     }
 }
 
+fn normalize_ticket_lifecycle_status(value: String, field_name: &str) -> AppResult<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        TICKET_STATUS_OPEN
+        | TICKET_STATUS_IN_PROGRESS
+        | TICKET_STATUS_RESOLVED
+        | TICKET_STATUS_CLOSED
+        | TICKET_STATUS_CANCELLED => Ok(normalized),
+        _ => Err(AppError::Validation(format!(
+            "{field_name} must be one of: open, in_progress, resolved, closed, cancelled"
+        ))),
+    }
+}
+
+fn normalize_ticket_priority_for_link(value: String) -> AppResult<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        TICKET_PRIORITY_LOW
+        | TICKET_PRIORITY_MEDIUM
+        | TICKET_PRIORITY_HIGH
+        | TICKET_PRIORITY_CRITICAL => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "ticket priority must be one of: low, medium, high, critical".to_string(),
+        )),
+    }
+}
+
+fn build_runbook_risk_alert_source_key(
+    template_key: &str,
+    execution_mode: Option<&str>,
+    days: u32,
+) -> String {
+    let mode = execution_mode.unwrap_or("all");
+    format!("runbook-risk-alert:{template_key}:{mode}:{days}d")
+}
+
 fn normalize_analytics_days(value: Option<u32>) -> u32 {
     value
         .unwrap_or(DEFAULT_ANALYTICS_DAYS)
@@ -3468,13 +3679,14 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        RunbookAnalyticsPolicyRow,
+        RunbookAnalyticsPolicyRow, RunbookRiskAlertTicketLinkRow,
         RunbookStepTimelineEvent, calculate_success_rate_percent,
-        enforce_template_supports_execution_mode, evaluate_step_failure, first_failed_timeline_step,
-        normalize_analytics_days, normalize_execution_mode, normalize_live_template_keys,
-        normalize_preflight_confirmations, normalize_preset_name, normalize_runbook_params,
-        parse_dependency_target, parse_preflight_snapshot_confirmed, parse_runbook_analytics_policy_row,
-        resolve_template_by_key, risk_severity_rank,
+        build_runbook_risk_alert_source_key, enforce_template_supports_execution_mode,
+        evaluate_step_failure, first_failed_timeline_step, normalize_analytics_days,
+        normalize_execution_mode, normalize_live_template_keys, normalize_preflight_confirmations,
+        normalize_preset_name, normalize_runbook_params, parse_dependency_target,
+        parse_preflight_snapshot_confirmed, parse_runbook_analytics_policy_row,
+        parse_runbook_risk_alert_ticket_link_row, resolve_template_by_key, risk_severity_rank,
     };
 
     #[test]
@@ -3691,6 +3903,65 @@ mod tests {
         })
         .expect_err("threshold range should fail");
         assert!(format!("{}", err).contains("failure_rate_threshold_percent"));
+    }
+
+    #[test]
+    fn builds_runbook_risk_alert_source_key() {
+        assert_eq!(
+            build_runbook_risk_alert_source_key("dependency-check", Some("simulate"), 14),
+            "runbook-risk-alert:dependency-check:simulate:14d"
+        );
+        assert_eq!(
+            build_runbook_risk_alert_source_key("dependency-check", None, 30),
+            "runbook-risk-alert:dependency-check:all:30d"
+        );
+    }
+
+    #[test]
+    fn validates_runbook_risk_alert_ticket_link_row() {
+        let now = Utc::now();
+        let valid_row = RunbookRiskAlertTicketLinkRow {
+            id: 1,
+            template_key: "dependency-check".to_string(),
+            execution_mode: Some("simulate".to_string()),
+            window_days: 14,
+            source_key: "runbook-risk-alert:dependency-check:simulate:14d".to_string(),
+            status: "open".to_string(),
+            ticket_id: 1001,
+            ticket_no: "TKT-20260310-001001".to_string(),
+            ticket_status: "in_progress".to_string(),
+            ticket_priority: "high".to_string(),
+            updated_at: now,
+        };
+
+        let (template_key, item) =
+            parse_runbook_risk_alert_ticket_link_row(valid_row, Some("simulate"), 14)
+                .expect("valid ticket link row");
+        assert_eq!(template_key, "dependency-check");
+        assert_eq!(item.ticket_status, "in_progress");
+        assert_eq!(item.ticket_priority, "high");
+        assert_eq!(item.status, "open");
+
+        let invalid_source_key_row = RunbookRiskAlertTicketLinkRow {
+            id: 2,
+            template_key: "dependency-check".to_string(),
+            execution_mode: Some("simulate".to_string()),
+            window_days: 14,
+            source_key: "runbook-risk-alert:dependency-check:live:14d".to_string(),
+            status: "open".to_string(),
+            ticket_id: 1002,
+            ticket_no: "TKT-20260310-001002".to_string(),
+            ticket_status: "open".to_string(),
+            ticket_priority: "medium".to_string(),
+            updated_at: now,
+        };
+        let err = parse_runbook_risk_alert_ticket_link_row(
+            invalid_source_key_row,
+            Some("simulate"),
+            14,
+        )
+        .expect_err("source key mismatch should fail");
+        assert!(format!("{}", err).contains("source_key mismatch"));
     }
 
     #[test]
