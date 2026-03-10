@@ -1434,6 +1434,51 @@ type RunbookExecutionPolicyDraft = {
   note: string;
 };
 
+type RunbookAnalyticsPolicyItem = {
+  policy_key: string;
+  failure_rate_threshold_percent: number;
+  minimum_sample_size: number;
+  note: string | null;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type RunbookAnalyticsPolicyResponse = {
+  generated_at: string;
+  policy: RunbookAnalyticsPolicyItem;
+};
+
+type RunbookAnalyticsPolicyDraft = {
+  failure_rate_threshold_percent: string;
+  minimum_sample_size: string;
+  note: string;
+};
+
+type RunbookRiskAlertItem = {
+  template_key: string;
+  template_name: string;
+  severity: "warning" | "critical";
+  executions: number;
+  failed: number;
+  failure_rate_percent: number;
+  top_failed_step_id: string | null;
+  latest_failed_execution_id: number | null;
+  latest_failed_at: string | null;
+  recommended_action: string;
+};
+
+type RunbookRiskAlertResponse = {
+  generated_at: string;
+  window: RunbookAnalyticsWindow;
+  filters: RunbookAnalyticsFilters;
+  policy: RunbookAnalyticsPolicyItem;
+  total: number;
+  limit: number;
+  offset: number;
+  items: RunbookRiskAlertItem[];
+};
+
 type RunbookExecutionPresetItem = {
   id: number;
   template_key: string;
@@ -2320,6 +2365,12 @@ const defaultRunbookExecutionPolicyDraft: RunbookExecutionPolicyDraft = {
   note: ""
 };
 
+const defaultRunbookAnalyticsPolicyDraft: RunbookAnalyticsPolicyDraft = {
+  failure_rate_threshold_percent: "20",
+  minimum_sample_size: "5",
+  note: ""
+};
+
 const defaultRunbookAnalyticsFilterDraft: RunbookAnalyticsFilterDraft = {
   days: "14",
   execution_mode: "all"
@@ -2433,6 +2484,14 @@ function buildRunbookExecutionPolicyDraft(policy: RunbookExecutionPolicyItem): R
     live_templates_csv: (policy.live_templates ?? []).join(","),
     max_live_step_timeout_seconds: String(policy.max_live_step_timeout_seconds),
     allow_simulate_failure: policy.allow_simulate_failure,
+    note: policy.note ?? ""
+  };
+}
+
+function buildRunbookAnalyticsPolicyDraft(policy: RunbookAnalyticsPolicyItem): RunbookAnalyticsPolicyDraft {
+  return {
+    failure_rate_threshold_percent: String(policy.failure_rate_threshold_percent),
+    minimum_sample_size: String(policy.minimum_sample_size),
     note: policy.note ?? ""
   };
 }
@@ -2601,10 +2660,14 @@ export function App() {
   const [runbookExecutionPolicy, setRunbookExecutionPolicy] = useState<RunbookExecutionPolicyItem | null>(null);
   const [runbookExecutionPolicyDraft, setRunbookExecutionPolicyDraft] =
     useState<RunbookExecutionPolicyDraft>(defaultRunbookExecutionPolicyDraft);
+  const [runbookAnalyticsPolicy, setRunbookAnalyticsPolicy] = useState<RunbookAnalyticsPolicyItem | null>(null);
+  const [runbookAnalyticsPolicyDraft, setRunbookAnalyticsPolicyDraft] =
+    useState<RunbookAnalyticsPolicyDraft>(defaultRunbookAnalyticsPolicyDraft);
   const [runbookAnalyticsFilterDraft, setRunbookAnalyticsFilterDraft] =
     useState<RunbookAnalyticsFilterDraft>(defaultRunbookAnalyticsFilterDraft);
   const [runbookAnalyticsSummary, setRunbookAnalyticsSummary] = useState<RunbookAnalyticsSummaryResponse | null>(null);
   const [runbookFailureFeed, setRunbookFailureFeed] = useState<RunbookFailureFeedResponse | null>(null);
+  const [runbookRiskAlerts, setRunbookRiskAlerts] = useState<RunbookRiskAlertResponse | null>(null);
   const [selectedRunbookTemplateKey, setSelectedRunbookTemplateKey] = useState("");
   const [selectedRunbookPresetId, setSelectedRunbookPresetId] = useState("");
   const [runbookExecutionMode, setRunbookExecutionMode] = useState<"simulate" | "live">("simulate");
@@ -2665,11 +2728,14 @@ export function App() {
   const [loadingRunbookExecutions, setLoadingRunbookExecutions] = useState(false);
   const [loadingRunbookPresets, setLoadingRunbookPresets] = useState(false);
   const [loadingRunbookExecutionPolicy, setLoadingRunbookExecutionPolicy] = useState(false);
+  const [loadingRunbookAnalyticsPolicy, setLoadingRunbookAnalyticsPolicy] = useState(false);
   const [loadingRunbookAnalyticsSummary, setLoadingRunbookAnalyticsSummary] = useState(false);
   const [loadingRunbookFailureFeed, setLoadingRunbookFailureFeed] = useState(false);
+  const [loadingRunbookRiskAlerts, setLoadingRunbookRiskAlerts] = useState(false);
   const [executingRunbookTemplate, setExecutingRunbookTemplate] = useState(false);
   const [savingRunbookPreset, setSavingRunbookPreset] = useState(false);
   const [savingRunbookExecutionPolicy, setSavingRunbookExecutionPolicy] = useState(false);
+  const [savingRunbookAnalyticsPolicy, setSavingRunbookAnalyticsPolicy] = useState(false);
   const [replayingRunbookExecutionId, setReplayingRunbookExecutionId] = useState<number | null>(null);
   const [savingIncidentCommand, setSavingIncidentCommand] = useState(false);
   const [loadingBackupPolicies, setLoadingBackupPolicies] = useState(false);
@@ -3808,6 +3874,122 @@ export function App() {
     }
   }, []);
 
+  const loadRunbookAnalyticsPolicy = useCallback(async () => {
+    setLoadingRunbookAnalyticsPolicy(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/analytics/policy`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookAnalyticsPolicyResponse = await response.json();
+      setRunbookAnalyticsPolicy(payload.policy);
+      setRunbookAnalyticsPolicyDraft(buildRunbookAnalyticsPolicyDraft(payload.policy));
+      return payload.policy;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setRunbookAnalyticsPolicy(null);
+      setRunbookAnalyticsPolicyDraft(defaultRunbookAnalyticsPolicyDraft);
+      return null;
+    } finally {
+      setLoadingRunbookAnalyticsPolicy(false);
+    }
+  }, []);
+
+  const loadRunbookRiskAlerts = useCallback(async () => {
+    setLoadingRunbookRiskAlerts(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("days", String(normalizeRunbookAnalyticsDays(runbookAnalyticsFilterDraft.days)));
+      params.set("limit", "20");
+      params.set("offset", "0");
+      if (selectedRunbookTemplateKey.trim().length > 0) {
+        params.set("template_key", selectedRunbookTemplateKey.trim());
+      }
+      if (runbookAnalyticsFilterDraft.execution_mode !== "all") {
+        params.set("execution_mode", runbookAnalyticsFilterDraft.execution_mode);
+      }
+
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/analytics/alerts?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookRiskAlertResponse = await response.json();
+      setRunbookRiskAlerts(payload);
+      setRunbookAnalyticsPolicy(payload.policy);
+      setRunbookAnalyticsPolicyDraft(buildRunbookAnalyticsPolicyDraft(payload.policy));
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setRunbookRiskAlerts(null);
+      return null;
+    } finally {
+      setLoadingRunbookRiskAlerts(false);
+    }
+  }, [
+    runbookAnalyticsFilterDraft.days,
+    runbookAnalyticsFilterDraft.execution_mode,
+    selectedRunbookTemplateKey
+  ]);
+
+  const saveRunbookAnalyticsPolicy = useCallback(async () => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const failureRateThresholdPercent = Number.parseInt(
+      runbookAnalyticsPolicyDraft.failure_rate_threshold_percent.trim(),
+      10
+    );
+    if (!Number.isFinite(failureRateThresholdPercent) || failureRateThresholdPercent < 1 || failureRateThresholdPercent > 100) {
+      setError("Failure rate threshold must be an integer between 1 and 100.");
+      return null;
+    }
+
+    const minimumSampleSize = Number.parseInt(runbookAnalyticsPolicyDraft.minimum_sample_size.trim(), 10);
+    if (!Number.isFinite(minimumSampleSize) || minimumSampleSize < 1 || minimumSampleSize > 500) {
+      setError("Minimum sample size must be an integer between 1 and 500.");
+      return null;
+    }
+
+    setSavingRunbookAnalyticsPolicy(true);
+    setRunbookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/analytics/policy`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          failure_rate_threshold_percent: failureRateThresholdPercent,
+          minimum_sample_size: minimumSampleSize,
+          note: trimToNull(runbookAnalyticsPolicyDraft.note)
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookAnalyticsPolicyResponse = await response.json();
+      setRunbookAnalyticsPolicy(payload.policy);
+      setRunbookAnalyticsPolicyDraft(buildRunbookAnalyticsPolicyDraft(payload.policy));
+      setRunbookNotice(
+        `Runbook analytics risk policy updated: failure_rate_threshold_percent=${payload.policy.failure_rate_threshold_percent}, minimum_sample_size=${payload.policy.minimum_sample_size}.`
+      );
+      await loadRunbookRiskAlerts();
+      return payload.policy;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setSavingRunbookAnalyticsPolicy(false);
+    }
+  }, [canWriteCmdb, loadRunbookRiskAlerts, runbookAnalyticsPolicyDraft, t]);
+
   const saveRunbookExecutionPolicy = useCallback(async () => {
     if (!canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
@@ -4264,7 +4446,8 @@ export function App() {
       await Promise.all([
         loadRunbookTemplateExecutions(),
         loadRunbookAnalyticsSummary(),
-        loadRunbookFailureFeed()
+        loadRunbookFailureFeed(),
+        loadRunbookRiskAlerts()
       ]);
       setRunbookNotice(
         `Runbook replay created execution #${replayed.execution.id} from source #${replayed.source_execution_id}.`
@@ -4280,6 +4463,7 @@ export function App() {
     canWriteCmdb,
     loadRunbookAnalyticsSummary,
     loadRunbookFailureFeed,
+    loadRunbookRiskAlerts,
     loadRunbookTemplateExecutions,
     runbookEvidenceDraft.artifact_url,
     runbookEvidenceDraft.note,
@@ -4381,7 +4565,8 @@ export function App() {
       await Promise.all([
         loadRunbookTemplateExecutions(),
         loadRunbookAnalyticsSummary(),
-        loadRunbookFailureFeed()
+        loadRunbookFailureFeed(),
+        loadRunbookRiskAlerts()
       ]);
       setRunbookPreflightDraft(buildRunbookPreflightDraft(template));
       const durationMs = Number(payload.execution.runtime_summary?.duration_ms ?? 0);
@@ -4399,6 +4584,7 @@ export function App() {
     canWriteCmdb,
     loadRunbookAnalyticsSummary,
     loadRunbookFailureFeed,
+    loadRunbookRiskAlerts,
     loadRunbookTemplateExecutions,
     runbookEvidenceDraft.artifact_url,
     runbookEvidenceDraft.note,
@@ -4450,12 +4636,20 @@ export function App() {
   }, [loadRunbookExecutionPresets]);
 
   useEffect(() => {
+    void loadRunbookAnalyticsPolicy();
+  }, [loadRunbookAnalyticsPolicy]);
+
+  useEffect(() => {
     void loadRunbookAnalyticsSummary();
   }, [loadRunbookAnalyticsSummary]);
 
   useEffect(() => {
     void loadRunbookFailureFeed();
   }, [loadRunbookFailureFeed]);
+
+  useEffect(() => {
+    void loadRunbookRiskAlerts();
+  }, [loadRunbookRiskAlerts]);
 
   const loadBackupPolicies = useCallback(async () => {
     setLoadingBackupPolicies(true);
@@ -5495,10 +5689,12 @@ export function App() {
       incidents,
       runbooks,
       runbookPolicy,
+      runbookAnalyticsPolicy,
       runbookExecutions,
       runbookPresets,
       runbookAnalyticsSummary,
       runbookFailureFeed,
+      runbookRiskAlerts,
       policies,
       runs,
       evidence,
@@ -5516,10 +5712,12 @@ export function App() {
       loadIncidentCommands(),
       loadRunbookTemplates(),
       loadRunbookExecutionPolicy(),
+      loadRunbookAnalyticsPolicy(),
       loadRunbookTemplateExecutions(),
       loadRunbookExecutionPresets(),
       loadRunbookAnalyticsSummary(),
       loadRunbookFailureFeed(),
+      loadRunbookRiskAlerts(),
       loadBackupPolicies(),
       loadBackupPolicyRuns(),
       loadBackupRestoreEvidence(),
@@ -5538,10 +5736,12 @@ export function App() {
       incidents,
       runbooks,
       runbookPolicy,
+      runbookAnalyticsPolicy,
       runbookExecutions,
       runbookPresets,
       runbookAnalyticsSummary,
       runbookFailureFeed,
+      runbookRiskAlerts,
       policies,
       runs,
       evidence,
@@ -5556,6 +5756,8 @@ export function App() {
   }, [
     loadBackupEvidenceCompliancePolicy,
     loadBackupEvidenceComplianceScorecard,
+    loadRunbookAnalyticsPolicy,
+    loadRunbookRiskAlerts,
     loadRunbookExecutionPolicy,
     loadRunbookExecutionPresets,
     loadRunbookAnalyticsSummary,
@@ -10452,9 +10654,12 @@ export function App() {
     runbookPresets,
     runbookExecutionPolicy,
     runbookExecutionPolicyDraft,
+    runbookAnalyticsPolicy,
+    runbookAnalyticsPolicyDraft,
     runbookAnalyticsFilterDraft,
     runbookAnalyticsSummary,
     runbookFailureFeed,
+    runbookRiskAlerts,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
     selectedRunbookPresetId,
@@ -10481,10 +10686,12 @@ export function App() {
     loadBackupPolicies,
     loadRunbookTemplates,
     loadRunbookExecutionPolicy,
+    loadRunbookAnalyticsPolicy,
     loadRunbookTemplateExecutions,
     loadRunbookExecutionPresets,
     loadRunbookAnalyticsSummary,
     loadRunbookFailureFeed,
+    loadRunbookRiskAlerts,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadBackupEvidenceCompliancePolicy,
@@ -10515,6 +10722,7 @@ export function App() {
     deleteRunbookExecutionPreset,
     replayRunbookTemplateExecution,
     saveRunbookExecutionPolicy,
+    saveRunbookAnalyticsPolicy,
     closeBackupRestoreEvidence,
     loadingDailyCockpit,
     loadingNextBestActions,
@@ -10525,11 +10733,14 @@ export function App() {
     loadingRunbookExecutions,
     loadingRunbookPresets,
     loadingRunbookExecutionPolicy,
+    loadingRunbookAnalyticsPolicy,
     loadingRunbookAnalyticsSummary,
     loadingRunbookFailureFeed,
+    loadingRunbookRiskAlerts,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,
+    savingRunbookAnalyticsPolicy,
     replayingRunbookExecutionId,
     loadingHandoverDigest,
     loadingHandoverReminders,
@@ -10591,6 +10802,7 @@ export function App() {
     setSelectedRunbookPresetId,
     setRunbookExecutionMode,
     setRunbookExecutionPolicyDraft,
+    setRunbookAnalyticsPolicyDraft,
     setRunbookAnalyticsFilterDraft,
     setRunbookParamDraft,
     setRunbookPreflightDraft,

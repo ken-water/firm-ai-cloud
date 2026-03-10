@@ -59,9 +59,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     runbookPresets,
     runbookExecutionPolicy,
     runbookExecutionPolicyDraft,
+    runbookAnalyticsPolicy,
+    runbookAnalyticsPolicyDraft,
     runbookAnalyticsFilterDraft,
     runbookAnalyticsSummary,
     runbookFailureFeed,
+    runbookRiskAlerts,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
     selectedRunbookPresetId,
@@ -90,10 +93,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadBackupPolicies,
     loadRunbookTemplates,
     loadRunbookExecutionPolicy,
+    loadRunbookAnalyticsPolicy,
     loadRunbookTemplateExecutions,
     loadRunbookExecutionPresets,
     loadRunbookAnalyticsSummary,
     loadRunbookFailureFeed,
+    loadRunbookRiskAlerts,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
     loadBackupEvidenceCompliancePolicy,
@@ -120,6 +125,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     deleteRunbookExecutionPreset,
     replayRunbookTemplateExecution,
     saveRunbookExecutionPolicy,
+    saveRunbookAnalyticsPolicy,
     closeBackupRestoreEvidence,
     runningBackupPolicyActionId,
     loadingDailyCockpit,
@@ -131,11 +137,14 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingRunbookExecutions,
     loadingRunbookPresets,
     loadingRunbookExecutionPolicy,
+    loadingRunbookAnalyticsPolicy,
     loadingRunbookAnalyticsSummary,
     loadingRunbookFailureFeed,
+    loadingRunbookRiskAlerts,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,
+    savingRunbookAnalyticsPolicy,
     replayingRunbookExecutionId,
     loadingHandoverDigest,
     loadingHandoverReminders,
@@ -195,6 +204,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setSelectedRunbookPresetId,
     setRunbookExecutionMode,
     setRunbookExecutionPolicyDraft,
+    setRunbookAnalyticsPolicyDraft,
     setRunbookAnalyticsFilterDraft,
     setRunbookParamDraft,
     setRunbookPreflightDraft,
@@ -776,7 +786,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   {loadingRunbookTemplates ? t("cmdb.actions.loading") : "Refresh templates"}
                 </button>
                 <button onClick={() => void loadRunbookExecutionPolicy()} disabled={loadingRunbookExecutionPolicy}>
-                  {loadingRunbookExecutionPolicy ? t("cmdb.actions.loading") : "Refresh policy"}
+                  {loadingRunbookExecutionPolicy ? t("cmdb.actions.loading") : "Refresh execution policy"}
+                </button>
+                <button onClick={() => void loadRunbookAnalyticsPolicy()} disabled={loadingRunbookAnalyticsPolicy}>
+                  {loadingRunbookAnalyticsPolicy ? t("cmdb.actions.loading") : "Refresh risk policy"}
                 </button>
                 <button onClick={() => void loadRunbookTemplateExecutions()} disabled={loadingRunbookExecutions}>
                   {loadingRunbookExecutions ? t("cmdb.actions.loading") : "Refresh executions"}
@@ -786,6 +799,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 </button>
                 <button onClick={() => void loadRunbookAnalyticsSummary()} disabled={loadingRunbookAnalyticsSummary}>
                   {loadingRunbookAnalyticsSummary ? t("cmdb.actions.loading") : "Refresh analytics"}
+                </button>
+                <button onClick={() => void loadRunbookRiskAlerts()} disabled={loadingRunbookRiskAlerts}>
+                  {loadingRunbookRiskAlerts ? t("cmdb.actions.loading") : "Refresh risk alerts"}
                 </button>
                 <button onClick={() => void loadRunbookFailureFeed()} disabled={loadingRunbookFailureFeed}>
                   {loadingRunbookFailureFeed ? t("cmdb.actions.loading") : "Refresh failure feed"}
@@ -874,6 +890,62 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
               <div className="toolbar-row" style={{ marginTop: "0.45rem" }}>
                 <button onClick={() => void saveRunbookExecutionPolicy()} disabled={!canWriteCmdb || savingRunbookExecutionPolicy}>
                   {savingRunbookExecutionPolicy ? t("cmdb.actions.loading") : "Save execution policy"}
+                </button>
+              </div>
+            </div>
+
+            <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+              <p className="section-note" style={{ marginTop: 0, marginBottom: "0.35rem" }}>
+                risk policy={runbookAnalyticsPolicy?.policy_key ?? "not-loaded"}
+                {" | "}failure_rate_threshold={runbookAnalyticsPolicy?.failure_rate_threshold_percent ?? "-"}%
+                {" | "}minimum_sample_size={runbookAnalyticsPolicy?.minimum_sample_size ?? "-"}
+                {" | "}updated_by={runbookAnalyticsPolicy?.updated_by ?? "-"}
+              </p>
+              <div className="form-grid">
+                <label className="control-field">
+                  <span>Failure rate threshold (%)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={runbookAnalyticsPolicyDraft.failure_rate_threshold_percent}
+                    onChange={(event) => setRunbookAnalyticsPolicyDraft((prev: any) => ({
+                      ...prev,
+                      failure_rate_threshold_percent: event.target.value
+                    }))}
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+                <label className="control-field">
+                  <span>Minimum sample size</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={runbookAnalyticsPolicyDraft.minimum_sample_size}
+                    onChange={(event) => setRunbookAnalyticsPolicyDraft((prev: any) => ({
+                      ...prev,
+                      minimum_sample_size: event.target.value
+                    }))}
+                    disabled={!canWriteCmdb}
+                  />
+                </label>
+                <label className="control-field" style={{ gridColumn: "1 / -1" }}>
+                  <span>Risk policy note</span>
+                  <input
+                    value={runbookAnalyticsPolicyDraft.note}
+                    onChange={(event) => setRunbookAnalyticsPolicyDraft((prev: any) => ({
+                      ...prev,
+                      note: event.target.value
+                    }))}
+                    disabled={!canWriteCmdb}
+                    placeholder="analytics risk policy context"
+                  />
+                </label>
+              </div>
+              <div className="toolbar-row" style={{ marginTop: "0.45rem" }}>
+                <button onClick={() => void saveRunbookAnalyticsPolicy()} disabled={!canWriteCmdb || savingRunbookAnalyticsPolicy}>
+                  {savingRunbookAnalyticsPolicy ? t("cmdb.actions.loading") : "Save risk policy"}
                 </button>
               </div>
             </div>
@@ -1186,6 +1258,64 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                           No failed step hotspot in current filter window.
                         </p>
                       )}
+                    </>
+                  )}
+                </div>
+
+                <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                  <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Runbook risk alerts</h4>
+                  {loadingRunbookRiskAlerts ? (
+                    <p>{t("cmdb.actions.loading")}</p>
+                  ) : !runbookRiskAlerts || (runbookRiskAlerts.items ?? []).length === 0 ? (
+                    <p>No runbook risk alert in current filter window.</p>
+                  ) : (
+                    <>
+                      <p className="section-note" style={{ marginTop: 0, marginBottom: "0.35rem" }}>
+                        window={runbookRiskAlerts.window?.days ?? "-"}d
+                        {" | "}threshold={runbookRiskAlerts.policy?.failure_rate_threshold_percent ?? "-"}%
+                        {" | "}minimum_sample_size={runbookRiskAlerts.policy?.minimum_sample_size ?? "-"}
+                        {" | "}total={runbookRiskAlerts.total ?? 0}
+                      </p>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                          <thead>
+                            <tr>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Template</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Severity</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Failure rate</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Failure context</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Recommended action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(runbookRiskAlerts.items ?? []).map((item: any) => (
+                              <tr key={`runbook-risk-alert-${item.template_key}`}>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                  {item.template_name}
+                                  <div className="inline-note">{item.template_key}</div>
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                  {item.severity}
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                  {item.failure_rate_percent}%
+                                  <div className="inline-note">{item.failed} / {item.executions}</div>
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                  top_failed_step={item.top_failed_step_id ?? "-"}
+                                  <div className="inline-note">latest_failed_execution=#{item.latest_failed_execution_id ?? "-"}</div>
+                                  <div className="inline-note">
+                                    latest_failed_at={item.latest_failed_at ? new Date(item.latest_failed_at).toLocaleString() : "-"}
+                                  </div>
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                  {item.recommended_action}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </>
                   )}
                 </div>
