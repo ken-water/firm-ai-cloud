@@ -18,6 +18,37 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.11] - 2026-03-10
+
+### Added
+
+- v0.1.11 planning and release-gate documentation:
+  - `docs/42-v0.1.11-runbook-risk-ticket-closure-plan.md`
+  - `docs/43-v0.1.11-release-gate-checklist.md`
+- v0.1.11 issue baseline and closure track: GitHub issues `#169` to `#174`.
+- Runbook risk-alert ticket linkage persistence:
+  - migration: `202603100002_create_runbook_risk_alert_ticket_links.sql`
+  - risk alert read model now includes `ticket_link`.
+- Runbook risk-alert one-click ticket action API:
+  - `POST /api/v1/ops/cockpit/runbook-templates/analytics/alerts/tickets`
+  - supports create-or-reuse semantics with deterministic dedup by source key.
+- v0.1.11 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.11-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- v0.1.x planning document now includes v0.1.11 issue map and closure snapshot (`docs/20-v0.1x-operator-simplicity-plan.md`).
+- Web console runbook risk alerts panel now adds:
+  - ticket linkage status rendering per alert row,
+  - one-click `Create/reuse ticket` action with row-level loading state,
+  - runbook notice feedback for created vs reused ticket outcomes.
+- RBAC route coverage tests now include the risk-alert ticket action endpoint.
+
+### Fixed
+
+- None.
+
 ## [0.1.10] - 2026-03-10
 
 ### Added
