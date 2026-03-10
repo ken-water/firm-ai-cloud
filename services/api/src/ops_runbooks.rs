@@ -28,6 +28,9 @@ const MAX_PRESET_NAME_LEN: usize = 128;
 const MAX_PRESET_DESCRIPTION_LEN: usize = 512;
 const MAX_TICKET_REF_LEN: usize = 128;
 const MAX_ARTIFACT_URL_LEN: usize = 1024;
+const MAX_RISK_TICKET_TITLE_LEN: usize = 255;
+const MAX_RISK_TICKET_DESCRIPTION_LEN: usize = 8_000;
+const RISK_TICKET_CATEGORY: &str = "runbook-risk";
 const DEFAULT_EXECUTION_LIMIT: u32 = 30;
 const MAX_EXECUTION_LIMIT: u32 = 120;
 const DEFAULT_PRESET_LIMIT: u32 = 50;
@@ -101,6 +104,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/cockpit/runbook-templates/analytics/alerts",
             get(list_runbook_risk_alerts),
+        )
+        .route(
+            "/cockpit/runbook-templates/analytics/alerts/tickets",
+            post(create_runbook_risk_alert_ticket),
         )
         .route(
             "/cockpit/runbook-templates/analytics/failures",
@@ -521,6 +528,23 @@ struct RunbookRiskAlertResponse {
     limit: u32,
     offset: u32,
     items: Vec<RunbookRiskAlertItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateRunbookRiskAlertTicketRequest {
+    template_key: String,
+    execution_mode: Option<String>,
+    days: Option<u32>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateRunbookRiskAlertTicketResponse {
+    generated_at: DateTime<Utc>,
+    created: bool,
+    source_key: String,
+    alert: RunbookRiskAlertItem,
+    ticket_link: RunbookRiskAlertTicketLinkItem,
 }
 
 #[derive(Debug, Default)]
@@ -1672,60 +1696,8 @@ async fn list_runbook_risk_alerts(
     let mut alerts = aggregates
         .into_iter()
         .filter_map(|(template_key, aggregate)| {
-            if aggregate.executions < policy.minimum_sample_size as usize {
-                return None;
-            }
-            if aggregate.failed == 0 {
-                return None;
-            }
-
-            let failure_rate_percent =
-                ((aggregate.failed as f64 * 1000.0) / aggregate.executions as f64).round() / 10.0;
-            if failure_rate_percent < policy.failure_rate_threshold_percent as f64 {
-                return None;
-            }
-
-            let top_failed_step_id = aggregate
-                .failed_step_counts
-                .iter()
-                .max_by(|(left_step, left_count), (right_step, right_count)| {
-                    left_count
-                        .cmp(right_count)
-                        .then_with(|| right_step.cmp(left_step))
-                })
-                .map(|(step_id, _)| step_id.clone());
-
-            let severity =
-                if failure_rate_percent >= (policy.failure_rate_threshold_percent + 20) as f64
-                    || aggregate.failed >= policy.minimum_sample_size as usize
-                {
-                    "critical".to_string()
-                } else {
-                    "warning".to_string()
-                };
-
-            let recommended_action = match top_failed_step_id.as_ref() {
-                Some(step_id) => format!(
-                    "Review failed step '{}' and run guarded replay after dependency confirmation.",
-                    step_id
-                ),
-                None => "Review latest failed execution evidence and run guarded replay.".to_string(),
-            };
             let ticket_link = ticket_links.get(&template_key).cloned();
-
-            Some(RunbookRiskAlertItem {
-                template_key,
-                template_name: aggregate.template_name,
-                severity,
-                executions: aggregate.executions,
-                failed: aggregate.failed,
-                failure_rate_percent,
-                top_failed_step_id,
-                latest_failed_execution_id: aggregate.latest_failed_execution_id,
-                latest_failed_at: aggregate.latest_failed_at,
-                ticket_link,
-                recommended_action,
-            })
+            build_runbook_risk_alert_item(template_key, aggregate, &policy, ticket_link)
         })
         .collect::<Vec<_>>();
     alerts.sort_by(|left, right| {
@@ -1765,6 +1737,67 @@ async fn list_runbook_risk_alerts(
         offset,
         items,
     }))
+}
+
+fn build_runbook_risk_alert_item(
+    template_key: String,
+    aggregate: RunbookRiskAggregate,
+    policy: &RunbookAnalyticsPolicyItem,
+    ticket_link: Option<RunbookRiskAlertTicketLinkItem>,
+) -> Option<RunbookRiskAlertItem> {
+    if aggregate.executions < policy.minimum_sample_size as usize {
+        return None;
+    }
+    if aggregate.failed == 0 {
+        return None;
+    }
+
+    let failure_rate_percent = ((aggregate.failed as f64 * 1000.0) / aggregate.executions as f64)
+        .round()
+        / 10.0;
+    if failure_rate_percent < policy.failure_rate_threshold_percent as f64 {
+        return None;
+    }
+
+    let top_failed_step_id = aggregate
+        .failed_step_counts
+        .iter()
+        .max_by(|(left_step, left_count), (right_step, right_count)| {
+            left_count
+                .cmp(right_count)
+                .then_with(|| right_step.cmp(left_step))
+        })
+        .map(|(step_id, _)| step_id.clone());
+
+    let severity = if failure_rate_percent >= (policy.failure_rate_threshold_percent + 20) as f64
+        || aggregate.failed >= policy.minimum_sample_size as usize
+    {
+        "critical".to_string()
+    } else {
+        "warning".to_string()
+    };
+
+    let recommended_action = match top_failed_step_id.as_ref() {
+        Some(step_id) => format!(
+            "Review failed step '{}' and run guarded replay after dependency confirmation.",
+            step_id
+        ),
+        None => "Review latest failed execution evidence and run guarded replay.".to_string(),
+    };
+
+    Some(RunbookRiskAlertItem {
+        template_key,
+        template_name: aggregate.template_name,
+        severity,
+        executions: aggregate.executions,
+        failed: aggregate.failed,
+        failure_rate_percent,
+        top_failed_step_id,
+        latest_failed_execution_id: aggregate.latest_failed_execution_id,
+        latest_failed_at: aggregate.latest_failed_at,
+        ticket_link,
+        recommended_action,
+    })
 }
 
 async fn load_runbook_risk_alert_ticket_links(
@@ -1893,6 +1926,270 @@ fn parse_runbook_risk_alert_ticket_link_row(
             updated_at,
         },
     ))
+}
+
+async fn create_runbook_risk_alert_ticket(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateRunbookRiskAlertTicketRequest>,
+) -> AppResult<Json<CreateRunbookRiskAlertTicketResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let template_key = normalize_template_key(payload.template_key)?;
+    let execution_mode = payload
+        .execution_mode
+        .map(normalize_execution_mode)
+        .transpose()?;
+    let days = normalize_analytics_days(payload.days);
+    let note = trim_optional(payload.note, MAX_NOTE_LEN);
+
+    let policy = parse_runbook_analytics_policy_row(load_or_seed_analytics_policy(&state).await?)?;
+    let aggregate = load_runbook_risk_template_aggregate(
+        &state,
+        template_key.as_str(),
+        execution_mode.as_deref(),
+        days,
+    )
+    .await?;
+    let mut alert = build_runbook_risk_alert_item(template_key.clone(), aggregate, &policy, None)
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "template '{}' has no active risk alert in current policy window",
+                template_key
+            ))
+        })?;
+
+    let source_key =
+        build_runbook_risk_alert_source_key(template_key.as_str(), execution_mode.as_deref(), days);
+
+    let mut tx = state.db.begin().await?;
+    let existing_open_link: Option<RunbookRiskAlertTicketLinkRow> = sqlx::query_as(
+        "SELECT l.id, l.template_key, l.execution_mode, l.window_days, l.source_key, l.status,
+                l.ticket_id, t.ticket_no, t.status AS ticket_status, t.priority AS ticket_priority,
+                l.updated_at
+         FROM ops_runbook_risk_alert_ticket_links l
+         JOIN tickets t ON t.id = l.ticket_id
+         WHERE l.source_key = $1
+           AND l.status IN ('open', 'in_progress')
+           AND t.status IN ('open', 'in_progress')
+         ORDER BY l.updated_at DESC, l.id DESC
+         LIMIT 1",
+    )
+    .bind(source_key.as_str())
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (created, link_row) = if let Some(existing) = existing_open_link {
+        (false, existing)
+    } else {
+        let ticket_id: i64 = sqlx::query_scalar("SELECT nextval('tickets_id_seq')")
+            .fetch_one(&mut *tx)
+            .await?;
+        let ticket_no = format!("TKT-{}-{ticket_id:06}", Utc::now().format("%Y%m%d"));
+        let title = format!(
+            "Runbook risk [{}] {}",
+            alert.severity.to_ascii_uppercase(),
+            alert.template_name
+        );
+        let title: String = title.chars().take(MAX_RISK_TICKET_TITLE_LEN).collect();
+        let description = format!(
+            "Auto-generated from runbook risk alert.\n\nTemplate: {} ({})\nExecution mode: {}\nWindow days: {}\nExecutions: {}\nFailed: {}\nFailure rate: {}%\nTop failed step: {}\nLatest failed execution: {}\nRecommended action: {}",
+            alert.template_name,
+            alert.template_key,
+            execution_mode.as_deref().unwrap_or("all"),
+            days,
+            alert.executions,
+            alert.failed,
+            alert.failure_rate_percent,
+            alert
+                .top_failed_step_id
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
+            alert
+                .latest_failed_execution_id
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            alert.recommended_action
+        );
+        let description: String = description
+            .chars()
+            .take(MAX_RISK_TICKET_DESCRIPTION_LEN)
+            .collect();
+        let metadata = json!({
+            "source": "runbook_risk_alert",
+            "source_key": source_key,
+            "template_key": alert.template_key,
+            "template_name": alert.template_name,
+            "execution_mode": execution_mode,
+            "window_days": days,
+            "severity": alert.severity,
+            "executions": alert.executions,
+            "failed": alert.failed,
+            "failure_rate_percent": alert.failure_rate_percent,
+            "top_failed_step_id": alert.top_failed_step_id,
+            "latest_failed_execution_id": alert.latest_failed_execution_id,
+            "latest_failed_at": alert.latest_failed_at,
+            "recommended_action": alert.recommended_action
+        });
+
+        sqlx::query(
+            "INSERT INTO tickets (
+                id, ticket_no, title, description, status, priority, category, requester, metadata
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(ticket_id)
+        .bind(ticket_no)
+        .bind(title)
+        .bind(description)
+        .bind(TICKET_STATUS_OPEN)
+        .bind(ticket_priority_for_risk_severity(alert.severity.as_str()))
+        .bind(RISK_TICKET_CATEGORY)
+        .bind(actor.as_str())
+        .bind(metadata)
+        .execute(&mut *tx)
+        .await?;
+
+        let link_id: i64 = sqlx::query_scalar(
+            "INSERT INTO ops_runbook_risk_alert_ticket_links (
+                template_key, execution_mode, window_days, source_key, status,
+                ticket_id, note, created_by
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             ON CONFLICT (source_key) DO UPDATE
+             SET template_key = EXCLUDED.template_key,
+                 execution_mode = EXCLUDED.execution_mode,
+                 window_days = EXCLUDED.window_days,
+                 status = EXCLUDED.status,
+                 ticket_id = EXCLUDED.ticket_id,
+                 note = COALESCE(EXCLUDED.note, ops_runbook_risk_alert_ticket_links.note),
+                 updated_at = NOW()
+             RETURNING id",
+        )
+        .bind(template_key.as_str())
+        .bind(execution_mode.as_deref())
+        .bind(days as i32)
+        .bind(source_key.as_str())
+        .bind(TICKET_STATUS_OPEN)
+        .bind(ticket_id)
+        .bind(note.clone())
+        .bind(actor.as_str())
+        .fetch_one(&mut *tx)
+        .await?;
+
+        let row: RunbookRiskAlertTicketLinkRow = sqlx::query_as(
+            "SELECT l.id, l.template_key, l.execution_mode, l.window_days, l.source_key, l.status,
+                    l.ticket_id, t.ticket_no, t.status AS ticket_status, t.priority AS ticket_priority,
+                    l.updated_at
+             FROM ops_runbook_risk_alert_ticket_links l
+             JOIN tickets t ON t.id = l.ticket_id
+             WHERE l.id = $1",
+        )
+        .bind(link_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        (true, row)
+    };
+    tx.commit().await?;
+
+    let (_, ticket_link) =
+        parse_runbook_risk_alert_ticket_link_row(link_row, execution_mode.as_deref(), days)?;
+    alert.ticket_link = Some(ticket_link.clone());
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor,
+            action: "ops.runbook.risk_alert.ticket.link".to_string(),
+            target_type: "ops_runbook_risk_alert_ticket_link".to_string(),
+            target_id: Some(ticket_link.link_id.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "created": created,
+                "source_key": source_key,
+                "template_key": alert.template_key,
+                "execution_mode": execution_mode,
+                "window_days": days,
+                "ticket_id": ticket_link.ticket_id,
+                "ticket_no": ticket_link.ticket_no,
+                "ticket_status": ticket_link.ticket_status
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(CreateRunbookRiskAlertTicketResponse {
+        generated_at: Utc::now(),
+        created,
+        source_key,
+        alert,
+        ticket_link,
+    }))
+}
+
+async fn load_runbook_risk_template_aggregate(
+    state: &AppState,
+    template_key: &str,
+    execution_mode: Option<&str>,
+    days: u32,
+) -> AppResult<RunbookRiskAggregate> {
+    let generated_at = Utc::now();
+    let start_at = generated_at - Duration::days(days as i64);
+    let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT id, template_key, template_name, status, execution_mode, replay_source_execution_id,
+                actor, params, preflight, timeline, evidence, runtime_summary, remediation_hints,
+                note, created_at, updated_at
+         FROM ops_runbook_template_executions e
+         WHERE e.created_at >= ",
+    );
+    list_builder.push_bind(start_at);
+    append_analytics_filters(
+        &mut list_builder,
+        Some(template_key.to_string()),
+        execution_mode.map(|value| value.to_string()),
+    );
+    list_builder
+        .push(" ORDER BY e.created_at DESC, e.id DESC LIMIT ")
+        .push_bind(MAX_ANALYTICS_SCAN_ROWS as i64);
+
+    let rows: Vec<RunbookTemplateExecutionRow> =
+        list_builder.build_query_as().fetch_all(&state.db).await?;
+
+    let mut aggregate = RunbookRiskAggregate::default();
+    for row in rows {
+        let execution = parse_execution_row(row)?;
+        if aggregate.template_name.is_empty() {
+            aggregate.template_name = execution.template_name.clone();
+        }
+        aggregate.executions += 1;
+        if execution.status != "failed" {
+            continue;
+        }
+
+        aggregate.failed += 1;
+        if aggregate
+            .latest_failed_at
+            .map(|current| execution.created_at > current)
+            .unwrap_or(true)
+        {
+            aggregate.latest_failed_at = Some(execution.created_at);
+            aggregate.latest_failed_execution_id = Some(execution.id);
+        }
+        if let Some(step) = first_failed_timeline_step(&execution.timeline) {
+            *aggregate
+                .failed_step_counts
+                .entry(step.step_id.clone())
+                .or_insert(0) += 1;
+        }
+    }
+
+    if aggregate.template_name.is_empty() {
+        aggregate.template_name = resolve_template_by_key(template_key)
+            .map(|item| item.name.to_string())
+            .unwrap_or_else(|_| template_key.to_string());
+    }
+
+    Ok(aggregate)
 }
 
 async fn get_runbook_analytics_summary(
@@ -3628,6 +3925,14 @@ fn build_runbook_risk_alert_source_key(
 ) -> String {
     let mode = execution_mode.unwrap_or("all");
     format!("runbook-risk-alert:{template_key}:{mode}:{days}d")
+}
+
+fn ticket_priority_for_risk_severity(severity: &str) -> &'static str {
+    if severity == "critical" {
+        TICKET_PRIORITY_CRITICAL
+    } else {
+        TICKET_PRIORITY_HIGH
+    }
 }
 
 fn normalize_analytics_days(value: Option<u32>) -> u32 {

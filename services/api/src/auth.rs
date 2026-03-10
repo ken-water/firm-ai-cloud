@@ -831,6 +831,11 @@ mod tests {
             "ops.cockpit.read",
         );
         assert_permission(
+            Method::POST,
+            "/api/v1/ops/cockpit/runbook-templates/analytics/alerts/tickets",
+            "ops.cockpit.write",
+        );
+        assert_permission(
             Method::GET,
             "/api/v1/ops/cockpit/runbook-templates/analytics/failures",
             "ops.cockpit.read",
@@ -1224,6 +1229,11 @@ mod tests {
                 Method::GET,
                 "/api/v1/ops/cockpit/runbook-templates/analytics/alerts",
                 "ops.cockpit.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/runbook-templates/analytics/alerts/tickets",
+                "ops.cockpit.write",
             ),
             (
                 Method::GET,
