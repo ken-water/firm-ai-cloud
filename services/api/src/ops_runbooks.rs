@@ -126,6 +126,10 @@ pub fn routes() -> Router<AppState> {
             get(list_runbook_risk_owner_routing_rules).put(replace_runbook_risk_owner_routing_rules),
         )
         .route(
+            "/cockpit/runbook-templates/analytics/owner-readiness",
+            get(list_runbook_risk_owner_readiness),
+        )
+        .route(
             "/cockpit/runbook-templates/analytics/alerts/notifications",
             get(list_runbook_risk_alert_notification_deliveries),
         )
@@ -408,6 +412,11 @@ struct UpsertRunbookRiskOwnerRoutingRuleItem {
     is_enabled: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct RunbookRiskOwnerReadinessQuery {
+    template_key: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct ListRunbookTemplateExecutionsResponse {
     generated_at: DateTime<Utc>,
@@ -654,6 +663,44 @@ struct RunbookRiskOwnerRoutingRulesResponse {
     generated_at: DateTime<Utc>,
     total: usize,
     items: Vec<RunbookRiskOwnerRoutingRuleItem>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RunbookRiskOwnerReadinessItem {
+    template_key: String,
+    template_name: String,
+    owner_key: Option<String>,
+    owner_label: Option<String>,
+    owner_ref: Option<String>,
+    notification_target: Option<String>,
+    readiness_status: String,
+    gap_reason: String,
+    notification_template_enabled: bool,
+    matched_channel_count: usize,
+    matched_subscription_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookRiskOwnerReadinessResponse {
+    generated_at: DateTime<Utc>,
+    total: usize,
+    items: Vec<RunbookRiskOwnerReadinessItem>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+struct NotificationReadinessChannelRow {
+    id: i64,
+    target: String,
+    is_enabled: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow)]
+struct NotificationReadinessSubscriptionRow {
+    id: i64,
+    channel_id: i64,
+    event_type: String,
+    is_enabled: bool,
 }
 
 #[derive(Debug, FromRow)]
@@ -1984,6 +2031,77 @@ async fn replace_runbook_risk_owner_routing_rules(
     list_runbook_risk_owner_routing_rules(State(state)).await
 }
 
+async fn list_runbook_risk_owner_readiness(
+    State(state): State<AppState>,
+    Query(query): Query<RunbookRiskOwnerReadinessQuery>,
+) -> AppResult<Json<RunbookRiskOwnerReadinessResponse>> {
+    let template_filter = query.template_key.map(normalize_template_key).transpose()?;
+    let owner_directory = load_runbook_risk_owner_directory_map(&state.db).await?;
+    let rules = load_runbook_risk_owner_routing_rule_rows(&state.db).await?;
+    let channels = load_notification_readiness_channels(&state.db).await?;
+    let subscriptions = load_notification_readiness_subscriptions(&state.db).await?;
+    let template_enabled =
+        is_notification_template_enabled(&state.db, NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED)
+            .await?;
+
+    let mut items = Vec::new();
+    for template in built_in_runbook_templates() {
+        if let Some(filter) = template_filter.as_deref() {
+            if template.key != filter {
+                continue;
+            }
+        }
+
+        let template_rules = rules
+            .iter()
+            .filter(|row| row.is_enabled && row.template_key == template.key)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if template_rules.is_empty() {
+            items.push(RunbookRiskOwnerReadinessItem {
+                template_key: template.key.to_string(),
+                template_name: template.name.to_string(),
+                owner_key: None,
+                owner_label: None,
+                owner_ref: None,
+                notification_target: None,
+                readiness_status: "missing_routing_rule".to_string(),
+                gap_reason: "No enabled owner routing rule is configured for this template."
+                    .to_string(),
+                notification_template_enabled: template_enabled,
+                matched_channel_count: 0,
+                matched_subscription_count: 0,
+            });
+            continue;
+        }
+
+        for rule in template_rules {
+            items.push(build_runbook_risk_owner_readiness_item(
+                &template,
+                &rule,
+                &owner_directory,
+                &channels,
+                &subscriptions,
+                template_enabled,
+            )?);
+        }
+    }
+
+    items.sort_by(|left, right| {
+        left.template_key
+            .cmp(&right.template_key)
+            .then_with(|| left.readiness_status.cmp(&right.readiness_status))
+            .then_with(|| left.owner_key.cmp(&right.owner_key))
+    });
+
+    Ok(Json(RunbookRiskOwnerReadinessResponse {
+        generated_at: Utc::now(),
+        total: items.len(),
+        items,
+    }))
+}
+
 async fn update_runbook_analytics_policy(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2614,6 +2732,188 @@ fn normalize_runbook_risk_owner_routing_rule_item(
         priority: item.priority.unwrap_or(100).clamp(1, 1000),
         note: trim_optional(item.note, MAX_NOTE_LEN),
         is_enabled: item.is_enabled.unwrap_or(true),
+    })
+}
+
+async fn load_notification_readiness_channels(
+    db: &sqlx::PgPool,
+) -> AppResult<Vec<NotificationReadinessChannelRow>> {
+    let rows: Vec<NotificationReadinessChannelRow> = sqlx::query_as(
+        "SELECT id, target, is_enabled
+         FROM discovery_notification_channels",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+async fn load_notification_readiness_subscriptions(
+    db: &sqlx::PgPool,
+) -> AppResult<Vec<NotificationReadinessSubscriptionRow>> {
+    let rows: Vec<NotificationReadinessSubscriptionRow> = sqlx::query_as(
+        "SELECT id, channel_id, event_type, is_enabled
+         FROM discovery_notification_subscriptions
+         WHERE event_type = $1",
+    )
+    .bind(NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+async fn is_notification_template_enabled(db: &sqlx::PgPool, event_type: &str) -> AppResult<bool> {
+    let enabled: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM discovery_notification_templates
+            WHERE event_type = $1
+              AND is_enabled = TRUE
+        )",
+    )
+    .bind(event_type)
+    .fetch_one(db)
+    .await?;
+    Ok(enabled)
+}
+
+fn build_runbook_risk_owner_readiness_item(
+    template: &RunbookTemplateDefinition,
+    rule: &RunbookRiskOwnerRoutingRuleRow,
+    owner_directory: &BTreeMap<String, RunbookRiskOwnerDirectoryItem>,
+    channels: &[NotificationReadinessChannelRow],
+    subscriptions: &[NotificationReadinessSubscriptionRow],
+    notification_template_enabled: bool,
+) -> AppResult<RunbookRiskOwnerReadinessItem> {
+    let owner_key = normalize_owner_key(rule.owner_key.clone())?;
+    let owner = owner_directory.get(&owner_key);
+    let owner_label = owner.map(|item| item.display_name.clone());
+    let owner_ref = owner.map(|item| item.owner_ref.clone());
+    let notification_target = owner.and_then(|item| item.notification_target.clone());
+
+    if !notification_template_enabled {
+        return Ok(RunbookRiskOwnerReadinessItem {
+            template_key: template.key.to_string(),
+            template_name: template.name.to_string(),
+            owner_key: Some(owner_key),
+            owner_label,
+            owner_ref,
+            notification_target,
+            readiness_status: "missing_notification_template".to_string(),
+            gap_reason: "Notification template for runbook risk ticket linkage is not enabled."
+                .to_string(),
+            notification_template_enabled,
+            matched_channel_count: 0,
+            matched_subscription_count: 0,
+        });
+    }
+
+    let Some(owner) = owner else {
+        return Ok(RunbookRiskOwnerReadinessItem {
+            template_key: template.key.to_string(),
+            template_name: template.name.to_string(),
+            owner_key: Some(owner_key),
+            owner_label: None,
+            owner_ref: None,
+            notification_target: None,
+            readiness_status: "missing_owner_directory".to_string(),
+            gap_reason: "Routing rule references an owner that is not present in the owner directory."
+                .to_string(),
+            notification_template_enabled,
+            matched_channel_count: 0,
+            matched_subscription_count: 0,
+        });
+    };
+
+    if !owner.is_enabled {
+        return Ok(RunbookRiskOwnerReadinessItem {
+            template_key: template.key.to_string(),
+            template_name: template.name.to_string(),
+            owner_key: Some(owner.owner_key.clone()),
+            owner_label: Some(owner.display_name.clone()),
+            owner_ref: Some(owner.owner_ref.clone()),
+            notification_target: owner.notification_target.clone(),
+            readiness_status: "owner_disabled".to_string(),
+            gap_reason: "Owner directory entry is disabled.".to_string(),
+            notification_template_enabled,
+            matched_channel_count: 0,
+            matched_subscription_count: 0,
+        });
+    }
+
+    let Some(target) = owner.notification_target.as_deref() else {
+        return Ok(RunbookRiskOwnerReadinessItem {
+            template_key: template.key.to_string(),
+            template_name: template.name.to_string(),
+            owner_key: Some(owner.owner_key.clone()),
+            owner_label: Some(owner.display_name.clone()),
+            owner_ref: Some(owner.owner_ref.clone()),
+            notification_target: None,
+            readiness_status: "missing_notification_target".to_string(),
+            gap_reason: "Owner directory entry has no notification target configured.".to_string(),
+            notification_template_enabled,
+            matched_channel_count: 0,
+            matched_subscription_count: 0,
+        });
+    };
+
+    let matched_channels = channels
+        .iter()
+        .filter(|row| row.is_enabled && row.target == target)
+        .collect::<Vec<_>>();
+    if matched_channels.is_empty() {
+        return Ok(RunbookRiskOwnerReadinessItem {
+            template_key: template.key.to_string(),
+            template_name: template.name.to_string(),
+            owner_key: Some(owner.owner_key.clone()),
+            owner_label: Some(owner.display_name.clone()),
+            owner_ref: Some(owner.owner_ref.clone()),
+            notification_target: Some(target.to_string()),
+            readiness_status: "missing_notification_channel".to_string(),
+            gap_reason: "No enabled notification channel matches the owner's notification target."
+                .to_string(),
+            notification_template_enabled,
+            matched_channel_count: 0,
+            matched_subscription_count: 0,
+        });
+    }
+
+    let matched_channel_ids = matched_channels
+        .iter()
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    let matched_subscription_count = subscriptions
+        .iter()
+        .filter(|row| row.is_enabled && matched_channel_ids.contains(&row.channel_id))
+        .count();
+    if matched_subscription_count == 0 {
+        return Ok(RunbookRiskOwnerReadinessItem {
+            template_key: template.key.to_string(),
+            template_name: template.name.to_string(),
+            owner_key: Some(owner.owner_key.clone()),
+            owner_label: Some(owner.display_name.clone()),
+            owner_ref: Some(owner.owner_ref.clone()),
+            notification_target: Some(target.to_string()),
+            readiness_status: "missing_notification_subscription".to_string(),
+            gap_reason: "No enabled subscription matches the owner's notification channel for runbook risk events."
+                .to_string(),
+            notification_template_enabled,
+            matched_channel_count: matched_channel_ids.len(),
+            matched_subscription_count: 0,
+        });
+    }
+
+    Ok(RunbookRiskOwnerReadinessItem {
+        template_key: template.key.to_string(),
+        template_name: template.name.to_string(),
+        owner_key: Some(owner.owner_key.clone()),
+        owner_label: Some(owner.display_name.clone()),
+        owner_ref: Some(owner.owner_ref.clone()),
+        notification_target: Some(target.to_string()),
+        readiness_status: "ready".to_string(),
+        gap_reason: "Owner routing and notification coverage are configured.".to_string(),
+        notification_template_enabled,
+        matched_channel_count: matched_channel_ids.len(),
+        matched_subscription_count,
     })
 }
 
@@ -5732,14 +6032,18 @@ fn trim_optional(value: Option<String>, max_len: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use chrono::Utc;
     use serde_json::json;
 
     use super::{
+        NotificationReadinessChannelRow, NotificationReadinessSubscriptionRow,
         RunbookRiskOwnerRoutingRuleRow,
         RunbookAnalyticsPolicyRow, RunbookRiskAlertNotificationDeliveryRow,
         RunbookRiskAlertTicketLinkRow,
         RunbookStepTimelineEvent, calculate_success_rate_percent,
+        build_runbook_risk_owner_readiness_item,
         build_runbook_risk_alert_source_key, enforce_template_supports_execution_mode,
         evaluate_step_failure, first_failed_timeline_step, normalize_analytics_days,
         normalize_execution_mode, normalize_live_template_keys, normalize_owner_key,
@@ -5747,10 +6051,12 @@ mod tests {
         normalize_risk_severity, normalize_runbook_params,
         normalize_runbook_risk_alert_notification_status,
         parse_dependency_target, parse_preflight_snapshot_confirmed,
+        parse_runbook_risk_owner_directory_row,
         parse_runbook_analytics_policy_row,
         parse_runbook_risk_alert_owner_route_from_ticket_metadata,
         parse_runbook_risk_alert_notification_delivery_row,
         parse_runbook_risk_alert_ticket_link_row, resolve_template_by_key,
+        RunbookRiskOwnerDirectoryRow,
         risk_severity_rank,
         select_runbook_risk_owner_routing_rule,
     };
@@ -6151,6 +6457,108 @@ mod tests {
         );
         assert!(normalize_owner_key("".to_string()).is_err());
         assert!(normalize_risk_severity("info".to_string()).is_err());
+    }
+
+    #[test]
+    fn builds_runbook_risk_owner_readiness_gap_when_subscription_missing() {
+        let now = Utc::now();
+        let template = resolve_template_by_key("dependency-check").expect("template");
+        let owner = parse_runbook_risk_owner_directory_row(RunbookRiskOwnerDirectoryRow {
+            id: 1,
+            owner_key: "dependency_owner".to_string(),
+            display_name: "Dependency Owner".to_string(),
+            owner_type: "team".to_string(),
+            owner_ref: "dependency-owner".to_string(),
+            notification_target: Some("ops@example.com".to_string()),
+            note: None,
+            is_enabled: true,
+            updated_by: "admin".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("owner");
+        let mut owner_directory = BTreeMap::new();
+        owner_directory.insert(owner.owner_key.clone(), owner);
+        let item = build_runbook_risk_owner_readiness_item(
+            &template,
+            &RunbookRiskOwnerRoutingRuleRow {
+                id: 1,
+                template_key: "dependency-check".to_string(),
+                execution_mode: None,
+                severity: None,
+                owner_key: "dependency_owner".to_string(),
+                priority: 100,
+                note: None,
+                is_enabled: true,
+                updated_by: "admin".to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+            &owner_directory,
+            &[NotificationReadinessChannelRow {
+                id: 10,
+                target: "ops@example.com".to_string(),
+                is_enabled: true,
+            }],
+            &[],
+            true,
+        )
+        .expect("item");
+        assert_eq!(item.readiness_status, "missing_notification_subscription");
+    }
+
+    #[test]
+    fn builds_runbook_risk_owner_readiness_ready_state() {
+        let now = Utc::now();
+        let template = resolve_template_by_key("dependency-check").expect("template");
+        let owner = parse_runbook_risk_owner_directory_row(RunbookRiskOwnerDirectoryRow {
+            id: 1,
+            owner_key: "dependency_owner".to_string(),
+            display_name: "Dependency Owner".to_string(),
+            owner_type: "team".to_string(),
+            owner_ref: "dependency-owner".to_string(),
+            notification_target: Some("ops@example.com".to_string()),
+            note: None,
+            is_enabled: true,
+            updated_by: "admin".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("owner");
+        let mut owner_directory = BTreeMap::new();
+        owner_directory.insert(owner.owner_key.clone(), owner);
+        let item = build_runbook_risk_owner_readiness_item(
+            &template,
+            &RunbookRiskOwnerRoutingRuleRow {
+                id: 1,
+                template_key: "dependency-check".to_string(),
+                execution_mode: None,
+                severity: None,
+                owner_key: "dependency_owner".to_string(),
+                priority: 100,
+                note: None,
+                is_enabled: true,
+                updated_by: "admin".to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+            &owner_directory,
+            &[NotificationReadinessChannelRow {
+                id: 10,
+                target: "ops@example.com".to_string(),
+                is_enabled: true,
+            }],
+            &[NotificationReadinessSubscriptionRow {
+                id: 20,
+                channel_id: 10,
+                event_type: "runbook_risk.ticket_linked".to_string(),
+                is_enabled: true,
+            }],
+            true,
+        )
+        .expect("item");
+        assert_eq!(item.readiness_status, "ready");
+        assert_eq!(item.matched_subscription_count, 1);
     }
 
     #[test]
