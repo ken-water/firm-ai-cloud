@@ -18,6 +18,41 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.13] - 2026-03-11
+
+### Added
+
+- v0.1.13 planning and release-gate documentation:
+  - `docs/46-v0.1.13-owner-directory-readiness-plan.md`
+  - `docs/47-v0.1.13-release-gate-checklist.md`
+- v0.1.13 issue baseline and closure track: GitHub issues `#181` to `#186`.
+- Configurable runbook risk owner directory and routing rules:
+  - migration: `202603110002_create_runbook_risk_owner_routing_tables.sql`
+  - endpoints:
+    - `GET /api/v1/ops/cockpit/runbook-templates/analytics/owners`
+    - `PUT /api/v1/ops/cockpit/runbook-templates/analytics/owners`
+    - `GET /api/v1/ops/cockpit/runbook-templates/analytics/owner-routing-rules`
+    - `PUT /api/v1/ops/cockpit/runbook-templates/analytics/owner-routing-rules`
+- Owner notification readiness endpoint:
+  - `GET /api/v1/ops/cockpit/runbook-templates/analytics/owner-readiness`
+- v0.1.13 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.13-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- Runbook risk ticket routing now resolves with the chain:
+  - existing assignee,
+  - configured owner-routing rule,
+  - previous template/default fallback.
+- Runbook risk alert payloads and cockpit views now expose configured owner labels and readiness state to operators.
+- RBAC route coverage now includes owner directory, routing rules, and readiness endpoints.
+
+### Fixed
+
+- Operators no longer need to rely on hardcoded owner assumptions to route runbook-risk follow-up.
+- Readiness gaps for owner directory, notification targets, channels, and subscriptions are now visible before operators depend on automatic follow-up.
+
 ## [0.1.12] - 2026-03-11
 
 ### Added
