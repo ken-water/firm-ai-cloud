@@ -18,6 +18,41 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.12] - 2026-03-11
+
+### Added
+
+- v0.1.12 planning and release-gate documentation:
+  - `docs/44-v0.1.12-runbook-risk-dispatch-routing-plan.md`
+  - `docs/45-v0.1.12-release-gate-checklist.md`
+- v0.1.12 issue baseline and closure track: GitHub issues `#175` to `#180`.
+- Runbook risk-alert notification dispatch evidence:
+  - migration: `202603110001_create_runbook_risk_alert_notification_deliveries.sql`
+  - endpoint: `GET /api/v1/ops/cockpit/runbook-templates/analytics/alerts/notifications`
+  - alert-ticket action now records queued/delivered/failed/skipped delivery evidence for `runbook_risk.ticket_linked`.
+- Deterministic runbook risk ticket owner routing:
+  - alert-linked tickets now persist `assignee` and `runbook_risk_owner_route` metadata,
+  - route chain: existing assignee -> template rule -> default escalation owner fallback.
+- v0.1.12 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.12-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- Runbook risk alert response now includes:
+  - `ticket_link.ticket_assignee`,
+  - `ticket_link.owner_route`,
+  - aggregated `notification_summary`.
+- Cockpit runbook risk alert table now adds:
+  - owner-route visibility,
+  - dispatch summary visibility,
+  - create/reuse notices with routed owner and notification status.
+- RBAC route coverage tests now include the notification evidence read endpoint.
+
+### Fixed
+
+- Runbook risk follow-up no longer requires operators to infer ownership or notification state from raw ticket records alone.
+
 ## [0.1.11] - 2026-03-10
 
 ### Added
