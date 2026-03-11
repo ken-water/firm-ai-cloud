@@ -1592,6 +1592,54 @@ type RunbookRiskOwnerReadinessResponse = {
   items: RunbookRiskOwnerReadinessItem[];
 };
 
+type RunbookRiskOwnerReadinessRepairAction = {
+  action_key: string;
+  resource_kind: string;
+  operation: string;
+  auto_applicable: boolean;
+  description: string;
+  proposed_name: string | null;
+  proposed_target: string | null;
+  proposed_channel_type: "email" | "webhook" | null;
+  reuse_hint: string | null;
+  scope_event_type: string | null;
+};
+
+type RunbookRiskOwnerReadinessRepairPlanItem = {
+  template_key: string;
+  template_name: string;
+  owner_key: string | null;
+  owner_label: string | null;
+  owner_ref: string | null;
+  notification_target: string | null;
+  readiness_status: RunbookRiskOwnerReadinessItem["readiness_status"];
+  gap_reason: string;
+  action: RunbookRiskOwnerReadinessRepairAction;
+};
+
+type RunbookRiskOwnerReadinessRepairPlanResponse = {
+  generated_at: string;
+  total: number;
+  items: RunbookRiskOwnerReadinessRepairPlanItem[];
+};
+
+type ApplyRunbookRiskOwnerReadinessRepairResponse = {
+  applied: boolean;
+  template_key: string;
+  owner_key: string | null;
+  action: RunbookRiskOwnerReadinessRepairAction;
+  results: Array<{
+    resource_kind: string;
+    operation: string;
+    resource_id: number | null;
+    resource_name: string | null;
+    resource_target: string | null;
+    event_type: string | null;
+  }>;
+  readiness_before: RunbookRiskOwnerReadinessItem;
+  readiness_after: RunbookRiskOwnerReadinessItem;
+};
+
 type RunbookExecutionPresetItem = {
   id: number;
   template_key: string;
@@ -2617,6 +2665,10 @@ function normalizeRunbookAnalyticsDays(value: string): number {
   return Math.min(90, Math.max(1, parsed));
 }
 
+function buildRunbookRiskOwnerRepairKey(templateKey: string, ownerKey: string | null, readinessStatus: string): string {
+  return `${templateKey}::${ownerKey ?? "none"}::${readinessStatus}`;
+}
+
 export function App() {
   const { t, i18n } = useTranslation();
   const currentLanguage = normalizeUiLanguage(i18n.resolvedLanguage ?? i18n.language);
@@ -2784,6 +2836,8 @@ export function App() {
   const [runbookRiskOwnerDirectory, setRunbookRiskOwnerDirectory] = useState<RunbookRiskOwnerDirectoryItem[]>([]);
   const [runbookRiskOwnerRoutingRules, setRunbookRiskOwnerRoutingRules] = useState<RunbookRiskOwnerRoutingRuleItem[]>([]);
   const [runbookRiskOwnerReadiness, setRunbookRiskOwnerReadiness] = useState<RunbookRiskOwnerReadinessResponse | null>(null);
+  const [runbookRiskOwnerRepairPlan, setRunbookRiskOwnerRepairPlan] =
+    useState<RunbookRiskOwnerReadinessRepairPlanResponse | null>(null);
   const [selectedRunbookTemplateKey, setSelectedRunbookTemplateKey] = useState("");
   const [selectedRunbookPresetId, setSelectedRunbookPresetId] = useState("");
   const [runbookExecutionMode, setRunbookExecutionMode] = useState<"simulate" | "live">("simulate");
@@ -2851,7 +2905,9 @@ export function App() {
   const [loadingRunbookRiskOwnerDirectory, setLoadingRunbookRiskOwnerDirectory] = useState(false);
   const [loadingRunbookRiskOwnerRoutingRules, setLoadingRunbookRiskOwnerRoutingRules] = useState(false);
   const [loadingRunbookRiskOwnerReadiness, setLoadingRunbookRiskOwnerReadiness] = useState(false);
+  const [loadingRunbookRiskOwnerRepairPlan, setLoadingRunbookRiskOwnerRepairPlan] = useState(false);
   const [runningRunbookRiskTicketTemplateKey, setRunningRunbookRiskTicketTemplateKey] = useState<string | null>(null);
+  const [runningRunbookRiskOwnerRepairKey, setRunningRunbookRiskOwnerRepairKey] = useState<string | null>(null);
   const [executingRunbookTemplate, setExecutingRunbookTemplate] = useState(false);
   const [savingRunbookPreset, setSavingRunbookPreset] = useState(false);
   const [savingRunbookExecutionPolicy, setSavingRunbookExecutionPolicy] = useState(false);
@@ -4117,6 +4173,96 @@ export function App() {
     }
   }, []);
 
+  const loadRunbookRiskOwnerRepairPlan = useCallback(async () => {
+    setLoadingRunbookRiskOwnerRepairPlan(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/analytics/owner-readiness/repair-plan`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: RunbookRiskOwnerReadinessRepairPlanResponse = await response.json();
+      setRunbookRiskOwnerRepairPlan(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setRunbookRiskOwnerRepairPlan(null);
+      return null;
+    } finally {
+      setLoadingRunbookRiskOwnerRepairPlan(false);
+    }
+  }, []);
+
+  const applyRunbookRiskOwnerReadinessRepair = useCallback(async (
+    templateKey: string,
+    ownerKey: string | null
+  ) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const normalizedTemplateKey = templateKey.trim();
+    const normalizedOwnerKey = trimToNull(ownerKey ?? "");
+    if (normalizedTemplateKey.length === 0) {
+      setError("Runbook template key is required.");
+      return null;
+    }
+
+    const repairKey = buildRunbookRiskOwnerRepairKey(normalizedTemplateKey, normalizedOwnerKey, "apply");
+    setRunningRunbookRiskOwnerRepairKey(repairKey);
+    setRunbookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/runbook-templates/analytics/owner-readiness/repair-actions`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            template_key: normalizedTemplateKey,
+            owner_key: normalizedOwnerKey
+          })
+        }
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: ApplyRunbookRiskOwnerReadinessRepairResponse = await response.json();
+      const resultSummary = payload.results
+        .map((item) => `${item.resource_kind}:${item.operation}${item.resource_name ? `(${item.resource_name})` : ""}`)
+        .join(", ");
+      setRunbookNotice(
+        payload.results.length > 0
+          ? `Runbook readiness repair applied for ${payload.template_key}/${payload.owner_key ?? "none"}: ${resultSummary}.`
+          : `Runbook readiness repair skipped for ${payload.template_key}/${payload.owner_key ?? "none"}.`
+      );
+      await Promise.all([
+        loadRunbookRiskOwnerDirectory(),
+        loadRunbookRiskOwnerRoutingRules(),
+        loadRunbookRiskOwnerReadiness(),
+        loadRunbookRiskOwnerRepairPlan(),
+        loadRunbookRiskAlerts()
+      ]);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningRunbookRiskOwnerRepairKey(null);
+    }
+  }, [
+    canWriteCmdb,
+    loadRunbookRiskAlerts,
+    loadRunbookRiskOwnerDirectory,
+    loadRunbookRiskOwnerReadiness,
+    loadRunbookRiskOwnerRepairPlan,
+    loadRunbookRiskOwnerRoutingRules,
+    t
+  ]);
+
   const createRunbookRiskAlertTicket = useCallback(async (templateKey: string) => {
     if (!canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
@@ -4275,6 +4421,7 @@ export function App() {
       await Promise.all([
         loadRunbookRiskOwnerRoutingRules(),
         loadRunbookRiskOwnerReadiness(),
+        loadRunbookRiskOwnerRepairPlan(),
         loadRunbookRiskAlerts()
       ]);
       return payload.items;
@@ -4288,6 +4435,7 @@ export function App() {
     canWriteCmdb,
     loadRunbookRiskAlerts,
     loadRunbookRiskOwnerReadiness,
+    loadRunbookRiskOwnerRepairPlan,
     loadRunbookRiskOwnerRoutingRules,
     runbookRiskOwnerDirectory,
     t
@@ -4330,7 +4478,7 @@ export function App() {
       const payload: RunbookRiskOwnerRoutingRulesResponse = await response.json();
       setRunbookRiskOwnerRoutingRules(payload.items);
       setRunbookNotice(`Runbook risk owner routing rules updated: ${payload.total} rules.`);
-      await Promise.all([loadRunbookRiskOwnerReadiness(), loadRunbookRiskAlerts()]);
+      await Promise.all([loadRunbookRiskOwnerReadiness(), loadRunbookRiskOwnerRepairPlan(), loadRunbookRiskAlerts()]);
       return payload.items;
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
@@ -4342,6 +4490,7 @@ export function App() {
     canWriteCmdb,
     loadRunbookRiskAlerts,
     loadRunbookRiskOwnerReadiness,
+    loadRunbookRiskOwnerRepairPlan,
     runbookRiskOwnerRoutingRules,
     t
   ]);
@@ -5018,6 +5167,10 @@ export function App() {
   useEffect(() => {
     void loadRunbookRiskOwnerReadiness();
   }, [loadRunbookRiskOwnerReadiness]);
+
+  useEffect(() => {
+    void loadRunbookRiskOwnerRepairPlan();
+  }, [loadRunbookRiskOwnerRepairPlan]);
 
   const loadBackupPolicies = useCallback(async () => {
     setLoadingBackupPolicies(true);
@@ -6089,6 +6242,7 @@ export function App() {
       loadRunbookRiskOwnerDirectory(),
       loadRunbookRiskOwnerRoutingRules(),
       loadRunbookRiskOwnerReadiness(),
+      loadRunbookRiskOwnerRepairPlan(),
       loadBackupPolicies(),
       loadBackupPolicyRuns(),
       loadBackupRestoreEvidence(),
@@ -11034,6 +11188,7 @@ export function App() {
     runbookRiskOwnerDirectory,
     runbookRiskOwnerRoutingRules,
     runbookRiskOwnerReadiness,
+    runbookRiskOwnerRepairPlan,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
     selectedRunbookPresetId,
@@ -11069,6 +11224,8 @@ export function App() {
     loadRunbookRiskOwnerDirectory,
     loadRunbookRiskOwnerRoutingRules,
     loadRunbookRiskOwnerReadiness,
+    loadRunbookRiskOwnerRepairPlan,
+    applyRunbookRiskOwnerReadinessRepair,
     createRunbookRiskAlertTicket,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
@@ -11120,7 +11277,9 @@ export function App() {
     loadingRunbookRiskOwnerDirectory,
     loadingRunbookRiskOwnerRoutingRules,
     loadingRunbookRiskOwnerReadiness,
+    loadingRunbookRiskOwnerRepairPlan,
     runningRunbookRiskTicketTemplateKey,
+    runningRunbookRiskOwnerRepairKey,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,

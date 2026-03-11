@@ -68,6 +68,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     runbookRiskOwnerDirectory,
     runbookRiskOwnerRoutingRules,
     runbookRiskOwnerReadiness,
+    runbookRiskOwnerRepairPlan,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
     selectedRunbookPresetId,
@@ -105,6 +106,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadRunbookRiskOwnerDirectory,
     loadRunbookRiskOwnerRoutingRules,
     loadRunbookRiskOwnerReadiness,
+    loadRunbookRiskOwnerRepairPlan,
+    applyRunbookRiskOwnerReadinessRepair,
     createRunbookRiskAlertTicket,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
@@ -153,7 +156,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingRunbookRiskOwnerDirectory,
     loadingRunbookRiskOwnerRoutingRules,
     loadingRunbookRiskOwnerReadiness,
+    loadingRunbookRiskOwnerRepairPlan,
     runningRunbookRiskTicketTemplateKey,
+    runningRunbookRiskOwnerRepairKey,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,
@@ -243,6 +248,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
   } = rawProps as any;
   const selectedRunbookTemplate =
     (runbookTemplates as any[]).find((item) => item.key === selectedRunbookTemplateKey) ?? null;
+  const runbookRiskOwnerRepairPlanByKey = new Map(
+    ((runbookRiskOwnerRepairPlan?.items ?? []) as any[]).map((item) => [
+      `${item.template_key}::${item.owner_key ?? "none"}::${item.readiness_status}`,
+      item
+    ])
+  );
 
   return (
     <>
@@ -1282,8 +1293,18 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
                   <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Runbook risk owner directory</h4>
                   <div className="toolbar-row" style={{ marginBottom: "0.45rem" }}>
-                    <button onClick={() => void Promise.all([loadRunbookRiskOwnerDirectory(), loadRunbookRiskOwnerRoutingRules(), loadRunbookRiskOwnerReadiness()])}>
-                      {loadingRunbookRiskOwnerDirectory || loadingRunbookRiskOwnerRoutingRules || loadingRunbookRiskOwnerReadiness
+                    <button
+                      onClick={() => void Promise.all([
+                        loadRunbookRiskOwnerDirectory(),
+                        loadRunbookRiskOwnerRoutingRules(),
+                        loadRunbookRiskOwnerReadiness(),
+                        loadRunbookRiskOwnerRepairPlan()
+                      ])}
+                    >
+                      {loadingRunbookRiskOwnerDirectory
+                        || loadingRunbookRiskOwnerRoutingRules
+                        || loadingRunbookRiskOwnerReadiness
+                        || loadingRunbookRiskOwnerRepairPlan
                         ? t("cmdb.actions.loading")
                         : "Refresh owner readiness"}
                     </button>
@@ -1572,13 +1593,13 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
 
                 <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
                   <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Runbook risk owner readiness</h4>
-                  {loadingRunbookRiskOwnerReadiness ? (
+                  {loadingRunbookRiskOwnerReadiness || loadingRunbookRiskOwnerRepairPlan ? (
                     <p>{t("cmdb.actions.loading")}</p>
                   ) : !runbookRiskOwnerReadiness || (runbookRiskOwnerReadiness.items ?? []).length === 0 ? (
                     <p>No readiness data available.</p>
                   ) : (
                     <div style={{ overflowX: "auto" }}>
-                      <table style={{ borderCollapse: "collapse", minWidth: "1180px", width: "100%" }}>
+                      <table style={{ borderCollapse: "collapse", minWidth: "1500px", width: "100%" }}>
                         <thead>
                           <tr>
                             <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Template</th>
@@ -1587,10 +1608,18 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                             <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Target</th>
                             <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Coverage</th>
                             <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Gap reason</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Repair plan</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {(runbookRiskOwnerReadiness.items ?? []).map((item: any) => (
+                          {(runbookRiskOwnerReadiness.items ?? []).map((item: any) => {
+                            const repairPlan = runbookRiskOwnerRepairPlanByKey.get(
+                              `${item.template_key}::${item.owner_key ?? "none"}::${item.readiness_status}`
+                            );
+                            const runningRepair =
+                              runningRunbookRiskOwnerRepairKey === `${item.template_key}::${item.owner_key ?? "none"}::apply`;
+                            return (
                             <tr key={`runbook-risk-readiness-${item.template_key}-${item.owner_key ?? "none"}-${item.readiness_status}`}>
                               <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
                                 {item.template_name}
@@ -1607,8 +1636,46 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                                 <div className="inline-note">template_enabled={String(item.notification_template_enabled)}</div>
                               </td>
                               <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>{item.gap_reason}</td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                {repairPlan ? (
+                                  <>
+                                    <div>{repairPlan.action.description}</div>
+                                    <div className="inline-note">
+                                      {repairPlan.action.resource_kind}/{repairPlan.action.operation}
+                                    </div>
+                                    {repairPlan.action.proposed_name && (
+                                      <div className="inline-note">name={repairPlan.action.proposed_name}</div>
+                                    )}
+                                    {repairPlan.action.proposed_target && (
+                                      <div className="inline-note">target={repairPlan.action.proposed_target}</div>
+                                    )}
+                                    {repairPlan.action.proposed_channel_type && (
+                                      <div className="inline-note">channel={repairPlan.action.proposed_channel_type}</div>
+                                    )}
+                                    {repairPlan.action.reuse_hint && (
+                                      <div className="inline-note">{repairPlan.action.reuse_hint}</div>
+                                    )}
+                                  </>
+                                ) : (
+                                  "-"
+                                )}
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                {repairPlan?.action.auto_applicable && canWriteCmdb ? (
+                                  <button
+                                    onClick={() => void applyRunbookRiskOwnerReadinessRepair(item.template_key, item.owner_key ?? null)}
+                                    disabled={runningRepair}
+                                  >
+                                    {runningRepair ? t("cmdb.actions.loading") : "Apply repair"}
+                                  </button>
+                                ) : repairPlan?.action.auto_applicable ? (
+                                  <span>read-only</span>
+                                ) : (
+                                  <span>manual</span>
+                                )}
+                              </td>
                             </tr>
-                          ))}
+                          )})}
                         </tbody>
                       </table>
                     </div>
