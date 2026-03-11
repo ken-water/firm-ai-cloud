@@ -832,6 +832,26 @@ mod tests {
         );
         assert_permission(
             Method::GET,
+            "/api/v1/ops/cockpit/runbook-templates/analytics/owners",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::PUT,
+            "/api/v1/ops/cockpit/runbook-templates/analytics/owners",
+            "ops.cockpit.write",
+        );
+        assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/runbook-templates/analytics/owner-routing-rules",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::PUT,
+            "/api/v1/ops/cockpit/runbook-templates/analytics/owner-routing-rules",
+            "ops.cockpit.write",
+        );
+        assert_permission(
+            Method::GET,
             "/api/v1/ops/cockpit/runbook-templates/analytics/alerts/notifications",
             "ops.cockpit.read",
         );
@@ -1234,6 +1254,26 @@ mod tests {
                 Method::GET,
                 "/api/v1/ops/cockpit/runbook-templates/analytics/alerts",
                 "ops.cockpit.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/runbook-templates/analytics/owners",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::PUT,
+                "/api/v1/ops/cockpit/runbook-templates/analytics/owners",
+                "ops.cockpit.write",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/runbook-templates/analytics/owner-routing-rules",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::PUT,
+                "/api/v1/ops/cockpit/runbook-templates/analytics/owner-routing-rules",
+                "ops.cockpit.write",
             ),
             (
                 Method::GET,

@@ -45,6 +45,12 @@ const MAX_FAILED_STEP_HOTSPOTS: usize = 12;
 const DEFAULT_ALERT_LIMIT: u32 = 20;
 const MAX_ALERT_LIMIT: u32 = 120;
 const MAX_ALERT_LINK_SCAN_ROWS: u32 = 2000;
+const MAX_OWNER_DIRECTORY_ITEMS: usize = 200;
+const MAX_OWNER_KEY_LEN: usize = 64;
+const MAX_OWNER_DISPLAY_NAME_LEN: usize = 128;
+const MAX_OWNER_REF_LEN: usize = 128;
+const MAX_NOTIFICATION_TARGET_LEN: usize = 512;
+const MAX_ROUTING_RULES: usize = 200;
 const DEFAULT_ANALYTICS_POLICY_KEY: &str = "global";
 const DEFAULT_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT: i32 = 20;
 const MIN_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT: i32 = 1;
@@ -110,6 +116,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/cockpit/runbook-templates/analytics/alerts",
             get(list_runbook_risk_alerts),
+        )
+        .route(
+            "/cockpit/runbook-templates/analytics/owners",
+            get(list_runbook_risk_owner_directory).put(replace_runbook_risk_owner_directory),
+        )
+        .route(
+            "/cockpit/runbook-templates/analytics/owner-routing-rules",
+            get(list_runbook_risk_owner_routing_rules).put(replace_runbook_risk_owner_routing_rules),
         )
         .route(
             "/cockpit/runbook-templates/analytics/alerts/notifications",
@@ -362,6 +376,38 @@ struct RunbookRiskAlertNotificationDeliveryQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReplaceRunbookRiskOwnerDirectoryRequest {
+    items: Vec<UpsertRunbookRiskOwnerDirectoryItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpsertRunbookRiskOwnerDirectoryItem {
+    owner_key: String,
+    display_name: String,
+    owner_type: String,
+    owner_ref: String,
+    notification_target: Option<String>,
+    note: Option<String>,
+    is_enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplaceRunbookRiskOwnerRoutingRulesRequest {
+    items: Vec<UpsertRunbookRiskOwnerRoutingRuleItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpsertRunbookRiskOwnerRoutingRuleItem {
+    template_key: String,
+    execution_mode: Option<String>,
+    severity: Option<String>,
+    owner_key: String,
+    priority: Option<i32>,
+    note: Option<String>,
+    is_enabled: Option<bool>,
+}
+
 #[derive(Debug, Serialize)]
 struct ListRunbookTemplateExecutionsResponse {
     generated_at: DateTime<Utc>,
@@ -529,8 +575,85 @@ struct RunbookRiskAlertTicketLinkItem {
 #[derive(Debug, Serialize, Clone)]
 struct RunbookRiskAlertOwnerRouteItem {
     owner: String,
+    owner_key: Option<String>,
+    owner_label: Option<String>,
     source: String,
     reason: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RunbookRiskOwnerDirectoryItem {
+    owner_key: String,
+    display_name: String,
+    owner_type: String,
+    owner_ref: String,
+    notification_target: Option<String>,
+    note: Option<String>,
+    is_enabled: bool,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow, Clone)]
+struct RunbookRiskOwnerDirectoryRow {
+    id: i64,
+    owner_key: String,
+    display_name: String,
+    owner_type: String,
+    owner_ref: String,
+    notification_target: Option<String>,
+    note: Option<String>,
+    is_enabled: bool,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RunbookRiskOwnerRoutingRuleItem {
+    rule_id: i64,
+    template_key: String,
+    execution_mode: Option<String>,
+    severity: Option<String>,
+    owner_key: String,
+    owner_label: Option<String>,
+    owner_ref: Option<String>,
+    priority: i32,
+    note: Option<String>,
+    is_enabled: bool,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow, Clone)]
+struct RunbookRiskOwnerRoutingRuleRow {
+    id: i64,
+    template_key: String,
+    execution_mode: Option<String>,
+    severity: Option<String>,
+    owner_key: String,
+    priority: i32,
+    note: Option<String>,
+    is_enabled: bool,
+    updated_by: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookRiskOwnerDirectoryResponse {
+    generated_at: DateTime<Utc>,
+    total: usize,
+    items: Vec<RunbookRiskOwnerDirectoryItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookRiskOwnerRoutingRulesResponse {
+    generated_at: DateTime<Utc>,
+    total: usize,
+    items: Vec<RunbookRiskOwnerRoutingRuleItem>,
 }
 
 #[derive(Debug, FromRow)]
@@ -1654,6 +1777,213 @@ async fn get_runbook_analytics_policy(
     }))
 }
 
+async fn list_runbook_risk_owner_directory(
+    State(state): State<AppState>,
+) -> AppResult<Json<RunbookRiskOwnerDirectoryResponse>> {
+    let rows = load_runbook_risk_owner_directory_rows(&state.db).await?;
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        items.push(parse_runbook_risk_owner_directory_row(row)?);
+    }
+    Ok(Json(RunbookRiskOwnerDirectoryResponse {
+        generated_at: Utc::now(),
+        total: items.len(),
+        items,
+    }))
+}
+
+async fn replace_runbook_risk_owner_directory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ReplaceRunbookRiskOwnerDirectoryRequest>,
+) -> AppResult<Json<RunbookRiskOwnerDirectoryResponse>> {
+    if payload.items.len() > MAX_OWNER_DIRECTORY_ITEMS {
+        return Err(AppError::Validation(format!(
+            "owner directory item count must be <= {}",
+            MAX_OWNER_DIRECTORY_ITEMS
+        )));
+    }
+
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let mut normalized = Vec::with_capacity(payload.items.len());
+    let mut seen_keys = BTreeSet::new();
+    for item in payload.items {
+        let normalized_item = normalize_runbook_risk_owner_directory_item(item)?;
+        if !seen_keys.insert(normalized_item.owner_key.clone()) {
+            return Err(AppError::Validation(format!(
+                "duplicate owner_key '{}'",
+                normalized_item.owner_key
+            )));
+        }
+        normalized.push(normalized_item);
+    }
+
+    let mut tx = state.db.begin().await?;
+    let owner_keys: Vec<String> = normalized.iter().map(|item| item.owner_key.clone()).collect();
+    if owner_keys.is_empty() {
+        sqlx::query("DELETE FROM ops_runbook_risk_owner_routing_rules")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM ops_runbook_risk_owner_directory")
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        sqlx::query(
+            "DELETE FROM ops_runbook_risk_owner_routing_rules
+             WHERE owner_key NOT IN (SELECT unnest($1::text[]))",
+        )
+        .bind(&owner_keys)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "DELETE FROM ops_runbook_risk_owner_directory
+             WHERE owner_key NOT IN (SELECT unnest($1::text[]))",
+        )
+        .bind(&owner_keys)
+        .execute(&mut *tx)
+        .await?;
+
+        for item in &normalized {
+            sqlx::query(
+                "INSERT INTO ops_runbook_risk_owner_directory (
+                    owner_key, display_name, owner_type, owner_ref, notification_target, note, is_enabled, updated_by
+                 )
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (owner_key) DO UPDATE
+                 SET display_name = EXCLUDED.display_name,
+                     owner_type = EXCLUDED.owner_type,
+                     owner_ref = EXCLUDED.owner_ref,
+                     notification_target = EXCLUDED.notification_target,
+                     note = EXCLUDED.note,
+                     is_enabled = EXCLUDED.is_enabled,
+                     updated_by = EXCLUDED.updated_by,
+                     updated_at = NOW()",
+            )
+            .bind(item.owner_key.as_str())
+            .bind(item.display_name.as_str())
+            .bind(item.owner_type.as_str())
+            .bind(item.owner_ref.as_str())
+            .bind(item.notification_target.as_deref())
+            .bind(item.note.as_deref())
+            .bind(item.is_enabled)
+            .bind(actor.as_str())
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor,
+            action: "ops.runbook.risk_owner_directory.replace".to_string(),
+            target_type: "ops_runbook_risk_owner_directory".to_string(),
+            target_id: None,
+            result: "success".to_string(),
+            message: None,
+            metadata: json!({
+                "item_count": normalized.len()
+            }),
+        },
+    )
+    .await;
+
+    list_runbook_risk_owner_directory(State(state)).await
+}
+
+async fn list_runbook_risk_owner_routing_rules(
+    State(state): State<AppState>,
+) -> AppResult<Json<RunbookRiskOwnerRoutingRulesResponse>> {
+    let owner_directory = load_runbook_risk_owner_directory_map(&state.db).await?;
+    let rows = load_runbook_risk_owner_routing_rule_rows(&state.db).await?;
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        items.push(parse_runbook_risk_owner_routing_rule_row(row, &owner_directory)?);
+    }
+    Ok(Json(RunbookRiskOwnerRoutingRulesResponse {
+        generated_at: Utc::now(),
+        total: items.len(),
+        items,
+    }))
+}
+
+async fn replace_runbook_risk_owner_routing_rules(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ReplaceRunbookRiskOwnerRoutingRulesRequest>,
+) -> AppResult<Json<RunbookRiskOwnerRoutingRulesResponse>> {
+    if payload.items.len() > MAX_ROUTING_RULES {
+        return Err(AppError::Validation(format!(
+            "owner routing rule count must be <= {}",
+            MAX_ROUTING_RULES
+        )));
+    }
+
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let owner_directory = load_runbook_risk_owner_directory_map(&state.db).await?;
+    let mut normalized = Vec::with_capacity(payload.items.len());
+    let mut seen_keys = BTreeSet::new();
+    for item in payload.items {
+        let normalized_item = normalize_runbook_risk_owner_routing_rule_item(item, &owner_directory)?;
+        let dedup_key = format!(
+            "{}:{}:{}:{}",
+            normalized_item.template_key,
+            normalized_item.execution_mode.as_deref().unwrap_or("all"),
+            normalized_item.severity.as_deref().unwrap_or("all"),
+            normalized_item.owner_key
+        );
+        if !seen_keys.insert(dedup_key) {
+            return Err(AppError::Validation(
+                "duplicate owner routing rule detected".to_string(),
+            ));
+        }
+        normalized.push(normalized_item);
+    }
+
+    let mut tx = state.db.begin().await?;
+    sqlx::query("DELETE FROM ops_runbook_risk_owner_routing_rules")
+        .execute(&mut *tx)
+        .await?;
+    for item in &normalized {
+        sqlx::query(
+            "INSERT INTO ops_runbook_risk_owner_routing_rules (
+                template_key, execution_mode, severity, owner_key, priority, note, is_enabled, updated_by
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(item.template_key.as_str())
+        .bind(item.execution_mode.as_deref())
+        .bind(item.severity.as_deref())
+        .bind(item.owner_key.as_str())
+        .bind(item.priority)
+        .bind(item.note.as_deref())
+        .bind(item.is_enabled)
+        .bind(actor.as_str())
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor,
+            action: "ops.runbook.risk_owner_routing_rules.replace".to_string(),
+            target_type: "ops_runbook_risk_owner_routing_rules".to_string(),
+            target_id: None,
+            result: "success".to_string(),
+            message: None,
+            metadata: json!({
+                "item_count": normalized.len()
+            }),
+        },
+    )
+    .await;
+
+    list_runbook_risk_owner_routing_rules(State(state)).await
+}
+
 async fn update_runbook_analytics_policy(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2134,6 +2464,159 @@ fn parse_runbook_risk_alert_ticket_link_row(
     ))
 }
 
+#[derive(Debug, Clone)]
+struct NormalizedRunbookRiskOwnerDirectoryItem {
+    owner_key: String,
+    display_name: String,
+    owner_type: String,
+    owner_ref: String,
+    notification_target: Option<String>,
+    note: Option<String>,
+    is_enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedRunbookRiskOwnerRoutingRuleItem {
+    template_key: String,
+    execution_mode: Option<String>,
+    severity: Option<String>,
+    owner_key: String,
+    priority: i32,
+    note: Option<String>,
+    is_enabled: bool,
+}
+
+async fn load_runbook_risk_owner_directory_rows(
+    db: &sqlx::PgPool,
+) -> AppResult<Vec<RunbookRiskOwnerDirectoryRow>> {
+    let rows: Vec<RunbookRiskOwnerDirectoryRow> = sqlx::query_as(
+        "SELECT id, owner_key, display_name, owner_type, owner_ref, notification_target, note,
+                is_enabled, updated_by, created_at, updated_at
+         FROM ops_runbook_risk_owner_directory
+         ORDER BY is_enabled DESC, display_name ASC, id ASC",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+fn parse_runbook_risk_owner_directory_row(
+    row: RunbookRiskOwnerDirectoryRow,
+) -> AppResult<RunbookRiskOwnerDirectoryItem> {
+    if row.id <= 0 {
+        return Err(AppError::Validation(
+            "runbook risk owner directory id must be a positive integer".to_string(),
+        ));
+    }
+    Ok(RunbookRiskOwnerDirectoryItem {
+        owner_key: normalize_owner_key(row.owner_key)?,
+        display_name: required_trimmed(
+            "display_name",
+            row.display_name,
+            MAX_OWNER_DISPLAY_NAME_LEN,
+        )?,
+        owner_type: normalize_owner_type_ref(row.owner_type)?,
+        owner_ref: required_trimmed("owner_ref", row.owner_ref, MAX_OWNER_REF_LEN)?,
+        notification_target: trim_optional(row.notification_target, MAX_NOTIFICATION_TARGET_LEN),
+        note: trim_optional(row.note, MAX_NOTE_LEN),
+        is_enabled: row.is_enabled,
+        updated_by: required_trimmed("updated_by", row.updated_by, MAX_OWNER_REF_LEN)?,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+
+async fn load_runbook_risk_owner_directory_map(
+    db: &sqlx::PgPool,
+) -> AppResult<BTreeMap<String, RunbookRiskOwnerDirectoryItem>> {
+    let rows = load_runbook_risk_owner_directory_rows(db).await?;
+    let mut items = BTreeMap::new();
+    for row in rows {
+        let item = parse_runbook_risk_owner_directory_row(row)?;
+        items.insert(item.owner_key.clone(), item);
+    }
+    Ok(items)
+}
+
+async fn load_runbook_risk_owner_routing_rule_rows(
+    db: &sqlx::PgPool,
+) -> AppResult<Vec<RunbookRiskOwnerRoutingRuleRow>> {
+    let rows: Vec<RunbookRiskOwnerRoutingRuleRow> = sqlx::query_as(
+        "SELECT id, template_key, execution_mode, severity, owner_key, priority, note,
+                is_enabled, updated_by, created_at, updated_at
+         FROM ops_runbook_risk_owner_routing_rules
+         ORDER BY priority ASC, updated_at DESC, id DESC",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+fn parse_runbook_risk_owner_routing_rule_row(
+    row: RunbookRiskOwnerRoutingRuleRow,
+    owner_directory: &BTreeMap<String, RunbookRiskOwnerDirectoryItem>,
+) -> AppResult<RunbookRiskOwnerRoutingRuleItem> {
+    if row.id <= 0 {
+        return Err(AppError::Validation(
+            "runbook risk owner routing rule id must be a positive integer".to_string(),
+        ));
+    }
+    let template_key = normalize_template_key(row.template_key)?;
+    let owner_key = normalize_owner_key(row.owner_key)?;
+    let owner = owner_directory.get(&owner_key);
+    Ok(RunbookRiskOwnerRoutingRuleItem {
+        rule_id: row.id,
+        template_key,
+        execution_mode: row.execution_mode.map(normalize_execution_mode).transpose()?,
+        severity: row.severity.map(normalize_risk_severity).transpose()?,
+        owner_key,
+        owner_label: owner.map(|item| item.display_name.clone()),
+        owner_ref: owner.map(|item| item.owner_ref.clone()),
+        priority: row.priority.clamp(1, 1000),
+        note: trim_optional(row.note, MAX_NOTE_LEN),
+        is_enabled: row.is_enabled,
+        updated_by: required_trimmed("updated_by", row.updated_by, MAX_OWNER_REF_LEN)?,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
+}
+
+fn normalize_runbook_risk_owner_directory_item(
+    item: UpsertRunbookRiskOwnerDirectoryItem,
+) -> AppResult<NormalizedRunbookRiskOwnerDirectoryItem> {
+    Ok(NormalizedRunbookRiskOwnerDirectoryItem {
+        owner_key: normalize_owner_key(item.owner_key)?,
+        display_name: required_trimmed("display_name", item.display_name, MAX_OWNER_DISPLAY_NAME_LEN)?,
+        owner_type: normalize_owner_type_ref(item.owner_type)?,
+        owner_ref: required_trimmed("owner_ref", item.owner_ref, MAX_OWNER_REF_LEN)?,
+        notification_target: trim_optional(item.notification_target, MAX_NOTIFICATION_TARGET_LEN),
+        note: trim_optional(item.note, MAX_NOTE_LEN),
+        is_enabled: item.is_enabled.unwrap_or(true),
+    })
+}
+
+fn normalize_runbook_risk_owner_routing_rule_item(
+    item: UpsertRunbookRiskOwnerRoutingRuleItem,
+    owner_directory: &BTreeMap<String, RunbookRiskOwnerDirectoryItem>,
+) -> AppResult<NormalizedRunbookRiskOwnerRoutingRuleItem> {
+    let owner_key = normalize_owner_key(item.owner_key)?;
+    if !owner_directory.contains_key(&owner_key) {
+        return Err(AppError::Validation(format!(
+            "owner_key '{}' does not exist in owner directory",
+            owner_key
+        )));
+    }
+    Ok(NormalizedRunbookRiskOwnerRoutingRuleItem {
+        template_key: normalize_template_key(item.template_key)?,
+        execution_mode: item.execution_mode.map(normalize_execution_mode).transpose()?,
+        severity: item.severity.map(normalize_risk_severity).transpose()?,
+        owner_key,
+        priority: item.priority.unwrap_or(100).clamp(1, 1000),
+        note: trim_optional(item.note, MAX_NOTE_LEN),
+        is_enabled: item.is_enabled.unwrap_or(true),
+    })
+}
+
 async fn load_runbook_risk_alert_notification_summaries(
     state: &AppState,
     template_key: Option<&str>,
@@ -2227,6 +2710,8 @@ fn parse_runbook_risk_alert_owner_route_from_ticket_metadata(
     else {
         return Ok(fallback_assignee.map(|owner| RunbookRiskAlertOwnerRouteItem {
             owner,
+            owner_key: None,
+            owner_label: None,
             source: "ticket_assignee".to_string(),
             reason: "Existing ticket assignee retained.".to_string(),
         }));
@@ -2260,6 +2745,14 @@ fn parse_runbook_risk_alert_owner_route_from_ticket_metadata(
 
     Ok(Some(RunbookRiskAlertOwnerRouteItem {
         owner,
+        owner_key: route
+            .get("owner_key")
+            .and_then(Value::as_str)
+            .map(|value| value.to_string()),
+        owner_label: route
+            .get("owner_label")
+            .and_then(Value::as_str)
+            .map(|value| value.to_string()),
         source,
         reason,
     }))
@@ -2268,21 +2761,37 @@ fn parse_runbook_risk_alert_owner_route_from_ticket_metadata(
 async fn resolve_runbook_risk_alert_owner_route(
     state: &AppState,
     alert: &RunbookRiskAlertItem,
+    execution_mode: Option<&str>,
     ticket_priority: &str,
     existing_assignee: Option<&str>,
 ) -> AppResult<RunbookRiskAlertOwnerRouteItem> {
     if let Some(owner) = existing_assignee {
         return Ok(RunbookRiskAlertOwnerRouteItem {
             owner: required_trimmed("ticket_assignee", owner.to_string(), 128)?,
+            owner_key: None,
+            owner_label: None,
             source: "ticket_assignee".to_string(),
             reason: "Existing ticket assignee retained.".to_string(),
         });
+    }
+
+    if let Some(configured) = resolve_runbook_risk_alert_owner_route_from_config(
+        state,
+        alert.template_key.as_str(),
+        execution_mode,
+        alert.severity.as_str(),
+    )
+    .await?
+    {
+        return Ok(configured);
     }
 
     if ticket_priority == TICKET_PRIORITY_CRITICAL {
         let policy = load_default_ticket_escalation_owner(&state.db).await?;
         return Ok(RunbookRiskAlertOwnerRouteItem {
             owner: policy,
+            owner_key: None,
+            owner_label: None,
             source: "escalation_policy".to_string(),
             reason: "Critical runbook-risk tickets route to the default escalation owner."
                 .to_string(),
@@ -2310,6 +2819,8 @@ async fn resolve_runbook_risk_alert_owner_route(
             let policy = load_default_ticket_escalation_owner(&state.db).await?;
             return Ok(RunbookRiskAlertOwnerRouteItem {
                 owner: policy,
+                owner_key: None,
+                owner_label: None,
                 source: "escalation_policy".to_string(),
                 reason: "No template-specific route exists, so the default escalation owner is used."
                     .to_string(),
@@ -2319,9 +2830,106 @@ async fn resolve_runbook_risk_alert_owner_route(
 
     Ok(RunbookRiskAlertOwnerRouteItem {
         owner: owner.to_string(),
+        owner_key: None,
+        owner_label: None,
         source: "template_rule".to_string(),
         reason: reason.to_string(),
     })
+}
+
+async fn resolve_runbook_risk_alert_owner_route_from_config(
+    state: &AppState,
+    template_key: &str,
+    execution_mode: Option<&str>,
+    severity: &str,
+) -> AppResult<Option<RunbookRiskAlertOwnerRouteItem>> {
+    let owner_directory = load_runbook_risk_owner_directory_map(&state.db).await?;
+    if owner_directory.is_empty() {
+        return Ok(None);
+    }
+    let rules = load_runbook_risk_owner_routing_rule_rows(&state.db).await?;
+    let selected = select_runbook_risk_owner_routing_rule(
+        &rules,
+        template_key,
+        execution_mode,
+        severity,
+    )?;
+    let Some(rule) = selected else {
+        return Ok(None);
+    };
+    let owner_key = normalize_owner_key(rule.owner_key.clone())?;
+    let Some(owner) = owner_directory.get(&owner_key) else {
+        return Ok(None);
+    };
+    if !owner.is_enabled {
+        return Ok(None);
+    }
+    Ok(Some(RunbookRiskAlertOwnerRouteItem {
+        owner: owner.owner_ref.clone(),
+        owner_key: Some(owner.owner_key.clone()),
+        owner_label: Some(owner.display_name.clone()),
+        source: "configured_rule".to_string(),
+        reason: format!(
+            "Configured routing rule matched template='{}', severity='{}', mode='{}'.",
+            template_key,
+            severity,
+            execution_mode.unwrap_or("all")
+        ),
+    }))
+}
+
+fn select_runbook_risk_owner_routing_rule(
+    rows: &[RunbookRiskOwnerRoutingRuleRow],
+    template_key: &str,
+    execution_mode: Option<&str>,
+    severity: &str,
+) -> AppResult<Option<RunbookRiskOwnerRoutingRuleRow>> {
+    let normalized_template_key = normalize_template_key(template_key.to_string())?;
+    let normalized_execution_mode = execution_mode
+        .map(|value| normalize_execution_mode(value.to_string()))
+        .transpose()?;
+    let normalized_severity = normalize_risk_severity(severity.to_string())?;
+
+    let mut best: Option<(i32, RunbookRiskOwnerRoutingRuleRow)> = None;
+    for row in rows {
+        if !row.is_enabled {
+            continue;
+        }
+        if normalize_template_key(row.template_key.clone())? != normalized_template_key {
+            continue;
+        }
+        let row_mode = row.execution_mode.clone().map(normalize_execution_mode).transpose()?;
+        if let Some(mode) = row_mode.as_deref() {
+            if Some(mode) != normalized_execution_mode.as_deref() {
+                continue;
+            }
+        }
+        let row_severity = row.severity.clone().map(normalize_risk_severity).transpose()?;
+        if let Some(item_severity) = row_severity.as_deref() {
+            if item_severity != normalized_severity {
+                continue;
+            }
+        }
+
+        let specificity = match (row_mode.is_some(), row_severity.is_some()) {
+            (true, true) => 0,
+            (false, true) | (true, false) => 1,
+            (false, false) => 2,
+        };
+        match &best {
+            Some((best_specificity, best_row)) => {
+                if specificity < *best_specificity
+                    || (specificity == *best_specificity
+                        && (row.priority < best_row.priority
+                            || (row.priority == best_row.priority && row.id > best_row.id)))
+                {
+                    best = Some((specificity, row.clone()));
+                }
+            }
+            None => best = Some((specificity, row.clone())),
+        }
+    }
+    Ok(best.map(|(_, row)| row))
 }
 
 async fn load_default_ticket_escalation_owner(db: &sqlx::PgPool) -> AppResult<String> {
@@ -2350,6 +2958,8 @@ fn merge_runbook_risk_owner_route_metadata(
         "runbook_risk_owner_route".to_string(),
         json!({
             "owner": owner_route.owner,
+            "owner_key": owner_route.owner_key,
+            "owner_label": owner_route.owner_label,
             "source": owner_route.source,
             "reason": owner_route.reason
         }),
@@ -3029,6 +3639,7 @@ async fn create_runbook_risk_alert_ticket(
             let owner_route = resolve_runbook_risk_alert_owner_route(
                 &state,
                 &alert,
+                execution_mode.as_deref(),
                 existing.ticket_priority.as_str(),
                 None,
             )
@@ -3088,7 +3699,14 @@ async fn create_runbook_risk_alert_ticket(
             .collect();
         let ticket_priority = ticket_priority_for_risk_severity(alert.severity.as_str());
         let owner_route =
-            resolve_runbook_risk_alert_owner_route(&state, &alert, ticket_priority, None).await?;
+            resolve_runbook_risk_alert_owner_route(
+                &state,
+                &alert,
+                execution_mode.as_deref(),
+                ticket_priority,
+                None,
+            )
+            .await?;
         let metadata = merge_runbook_risk_owner_route_metadata(
             json!({
             "source": "runbook_risk_alert",
@@ -5010,6 +5628,48 @@ fn normalize_ticket_priority_for_link(value: String) -> AppResult<String> {
     }
 }
 
+fn normalize_owner_key(value: String) -> AppResult<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(AppError::Validation("owner_key is required".to_string()));
+    }
+    if normalized.len() > MAX_OWNER_KEY_LEN {
+        return Err(AppError::Validation(format!(
+            "owner_key length must be <= {}",
+            MAX_OWNER_KEY_LEN
+        )));
+    }
+    if !normalized
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
+    {
+        return Err(AppError::Validation(
+            "owner_key must only contain lowercase letters, digits, '-', or '_'".to_string(),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn normalize_owner_type_ref(value: String) -> AppResult<String> {
+    let normalized = required_trimmed("owner_type", value, 32)?.to_ascii_lowercase();
+    match normalized.as_str() {
+        "team" | "user" | "group" | "external" => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "owner_type must be one of: team, user, group, external".to_string(),
+        )),
+    }
+}
+
+fn normalize_risk_severity(value: String) -> AppResult<String> {
+    let normalized = required_trimmed("severity", value, 32)?.to_ascii_lowercase();
+    match normalized.as_str() {
+        "warning" | "critical" => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "severity must be one of: warning, critical".to_string(),
+        )),
+    }
+}
+
 fn build_runbook_risk_alert_source_key(
     template_key: &str,
     execution_mode: Option<&str>,
@@ -5076,20 +5736,23 @@ mod tests {
     use serde_json::json;
 
     use super::{
+        RunbookRiskOwnerRoutingRuleRow,
         RunbookAnalyticsPolicyRow, RunbookRiskAlertNotificationDeliveryRow,
         RunbookRiskAlertTicketLinkRow,
         RunbookStepTimelineEvent, calculate_success_rate_percent,
         build_runbook_risk_alert_source_key, enforce_template_supports_execution_mode,
         evaluate_step_failure, first_failed_timeline_step, normalize_analytics_days,
-        normalize_execution_mode, normalize_live_template_keys,
+        normalize_execution_mode, normalize_live_template_keys, normalize_owner_key,
         normalize_preflight_confirmations, normalize_preset_name,
-        normalize_runbook_params, normalize_runbook_risk_alert_notification_status,
+        normalize_risk_severity, normalize_runbook_params,
+        normalize_runbook_risk_alert_notification_status,
         parse_dependency_target, parse_preflight_snapshot_confirmed,
         parse_runbook_analytics_policy_row,
         parse_runbook_risk_alert_owner_route_from_ticket_metadata,
         parse_runbook_risk_alert_notification_delivery_row,
         parse_runbook_risk_alert_ticket_link_row, resolve_template_by_key,
         risk_severity_rank,
+        select_runbook_risk_owner_routing_rule,
     };
 
     #[test]
@@ -5394,6 +6057,8 @@ mod tests {
             &json!({
                 "runbook_risk_owner_route": {
                     "owner": "change-owner",
+                    "owner_key": "change-primary",
+                    "owner_label": "Change Primary",
                     "source": "template_rule",
                     "reason": "Maintenance closeout gaps route to the change owner for signoff and handover."
                 }
@@ -5403,6 +6068,8 @@ mod tests {
         .expect("route")
         .expect("some route");
         assert_eq!(route.owner, "change-owner");
+        assert_eq!(route.owner_key.as_deref(), Some("change-primary"));
+        assert_eq!(route.owner_label.as_deref(), Some("Change Primary"));
         assert_eq!(route.source, "template_rule");
 
         let fallback = parse_runbook_risk_alert_owner_route_from_ticket_metadata(
@@ -5412,7 +6079,78 @@ mod tests {
         .expect("fallback")
         .expect("fallback route");
         assert_eq!(fallback.owner, "ops-escalation");
+        assert_eq!(fallback.owner_key, None);
         assert_eq!(fallback.source, "ticket_assignee");
+    }
+
+    #[test]
+    fn selects_most_specific_runbook_risk_owner_routing_rule() {
+        let now = Utc::now();
+        let rows = vec![
+            RunbookRiskOwnerRoutingRuleRow {
+                id: 1,
+                template_key: "dependency-check".to_string(),
+                execution_mode: None,
+                severity: None,
+                owner_key: "fallback-owner".to_string(),
+                priority: 100,
+                note: None,
+                is_enabled: true,
+                updated_by: "admin".to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+            RunbookRiskOwnerRoutingRuleRow {
+                id: 2,
+                template_key: "dependency-check".to_string(),
+                execution_mode: Some("simulate".to_string()),
+                severity: Some("warning".to_string()),
+                owner_key: "simulate-warning-owner".to_string(),
+                priority: 50,
+                note: None,
+                is_enabled: true,
+                updated_by: "admin".to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+            RunbookRiskOwnerRoutingRuleRow {
+                id: 3,
+                template_key: "dependency-check".to_string(),
+                execution_mode: None,
+                severity: Some("warning".to_string()),
+                owner_key: "warning-owner".to_string(),
+                priority: 10,
+                note: None,
+                is_enabled: true,
+                updated_by: "admin".to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let selected = select_runbook_risk_owner_routing_rule(
+            &rows,
+            "dependency-check",
+            Some("simulate"),
+            "warning",
+        )
+        .expect("selected")
+        .expect("rule");
+        assert_eq!(selected.owner_key, "simulate-warning-owner");
+    }
+
+    #[test]
+    fn normalizes_owner_config_fields() {
+        assert_eq!(
+            normalize_owner_key(" Team_A ".to_string()).expect("owner key"),
+            "team_a"
+        );
+        assert_eq!(
+            normalize_risk_severity("Critical".to_string()).expect("severity"),
+            "critical"
+        );
+        assert!(normalize_owner_key("".to_string()).is_err());
+        assert!(normalize_risk_severity("info".to_string()).is_err());
     }
 
     #[test]
