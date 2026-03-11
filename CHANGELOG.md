@@ -18,6 +18,43 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.14] - 2026-03-11
+
+### Added
+
+- v0.1.14 planning and release-gate documentation:
+  - `docs/48-v0.1.14-owner-readiness-repair-plan.md`
+  - `docs/49-v0.1.14-release-gate-checklist.md`
+- v0.1.14 issue baseline and closure track: GitHub issues `#187` to `#192`.
+- Runbook risk owner-readiness repair APIs:
+  - `GET /api/v1/ops/cockpit/runbook-templates/analytics/owner-readiness/repair-plan`
+  - `POST /api/v1/ops/cockpit/runbook-templates/analytics/owner-readiness/repair-actions`
+- v0.1.14 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.14-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- Owner readiness now returns deterministic repair guidance with:
+  - action key,
+  - resource kind,
+  - proposed name/target/channel type,
+  - conflict-safe reuse hints.
+- Repair apply now bootstraps the minimal runbook-risk notification chain with create-or-enable semantics for:
+  - notification templates,
+  - notification channels,
+  - notification subscriptions.
+- Cockpit runbook owner-readiness panel now adds:
+  - inline repair guidance,
+  - one-click repair action,
+  - post-repair no-op visibility.
+- RBAC coverage now includes owner-readiness repair-plan and repair-actions endpoints.
+
+### Fixed
+
+- Operators no longer need to leave the runbook setup flow to manually infer how to repair notification-readiness gaps.
+- Re-applying readiness repair after a successful bootstrap is now a safe no-op instead of an error.
+
 ## [0.1.13] - 2026-03-11
 
 ### Added
