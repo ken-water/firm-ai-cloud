@@ -8,11 +8,12 @@ use axum::{
     routing::{get, patch, post},
 };
 use chrono::{DateTime, Duration, Utc};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value, json};
 use sqlx::{FromRow, Postgres, QueryBuilder};
 use tokio::net::TcpStream;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 use crate::{
     audit::{AuditLogWriteInput, write_audit_log_best_effort},
@@ -69,6 +70,11 @@ const TICKET_PRIORITY_LOW: &str = "low";
 const TICKET_PRIORITY_MEDIUM: &str = "medium";
 const TICKET_PRIORITY_HIGH: &str = "high";
 const TICKET_PRIORITY_CRITICAL: &str = "critical";
+const NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED: &str = "runbook_risk.ticket_linked";
+const NOTIFICATION_STATUS_QUEUED: &str = "queued";
+const NOTIFICATION_STATUS_DELIVERED: &str = "delivered";
+const NOTIFICATION_STATUS_FAILED: &str = "failed";
+const NOTIFICATION_STATUS_SKIPPED: &str = "skipped";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -104,6 +110,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/cockpit/runbook-templates/analytics/alerts",
             get(list_runbook_risk_alerts),
+        )
+        .route(
+            "/cockpit/runbook-templates/analytics/alerts/notifications",
+            get(list_runbook_risk_alert_notification_deliveries),
         )
         .route(
             "/cockpit/runbook-templates/analytics/alerts/tickets",
@@ -342,6 +352,16 @@ struct RunbookRiskAlertQuery {
     offset: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct RunbookRiskAlertNotificationDeliveryQuery {
+    template_key: Option<String>,
+    execution_mode: Option<String>,
+    days: Option<u32>,
+    source_key: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 struct ListRunbookTemplateExecutionsResponse {
     generated_at: DateTime<Utc>,
@@ -488,6 +508,7 @@ struct RunbookRiskAlertItem {
     latest_failed_execution_id: Option<i64>,
     latest_failed_at: Option<DateTime<Utc>>,
     ticket_link: Option<RunbookRiskAlertTicketLinkItem>,
+    notification_summary: Option<RunbookRiskAlertNotificationSummaryItem>,
     recommended_action: String,
 }
 
@@ -518,6 +539,78 @@ struct RunbookRiskAlertTicketLinkRow {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+struct RunbookRiskAlertNotificationSummaryItem {
+    total: usize,
+    delivered: usize,
+    failed: usize,
+    skipped: usize,
+    latest_status: String,
+    latest_channel_type: Option<String>,
+    latest_target: String,
+    latest_delivered_at: Option<DateTime<Utc>>,
+    latest_created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RunbookRiskAlertNotificationDeliveryItem {
+    delivery_id: i64,
+    source_key: String,
+    template_key: String,
+    execution_mode: Option<String>,
+    window_days: u32,
+    ticket_id: i64,
+    ticket_no: String,
+    event_type: String,
+    dispatch_status: String,
+    subscription_id: Option<i64>,
+    channel_id: Option<i64>,
+    channel_type: Option<String>,
+    target: String,
+    attempts: i32,
+    response_code: Option<i32>,
+    last_error: Option<String>,
+    delivered_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct RunbookRiskAlertNotificationDeliveryRow {
+    id: i64,
+    source_key: String,
+    template_key: String,
+    execution_mode: Option<String>,
+    window_days: i32,
+    ticket_id: i64,
+    ticket_no: String,
+    event_type: String,
+    dispatch_status: String,
+    subscription_id: Option<i64>,
+    channel_id: Option<i64>,
+    channel_type: Option<String>,
+    target: String,
+    attempts: i32,
+    response_code: Option<i32>,
+    last_error: Option<String>,
+    delivered_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct NotificationDispatchTarget {
+    subscription_id: i64,
+    channel_id: i64,
+    channel_type: String,
+    target: String,
+    config: Value,
+}
+
+#[derive(Debug, FromRow)]
+struct NotificationTemplateRecord {
+    title_template: String,
+    body_template: String,
+}
+
 #[derive(Debug, Serialize)]
 struct RunbookRiskAlertResponse {
     generated_at: DateTime<Utc>,
@@ -528,6 +621,17 @@ struct RunbookRiskAlertResponse {
     limit: u32,
     offset: u32,
     items: Vec<RunbookRiskAlertItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct RunbookRiskAlertNotificationDeliveryResponse {
+    generated_at: DateTime<Utc>,
+    window: RunbookAnalyticsWindow,
+    filters: RunbookAnalyticsFilters,
+    total: usize,
+    limit: u32,
+    offset: u32,
+    items: Vec<RunbookRiskAlertNotificationDeliveryItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -545,6 +649,7 @@ struct CreateRunbookRiskAlertTicketResponse {
     source_key: String,
     alert: RunbookRiskAlertItem,
     ticket_link: RunbookRiskAlertTicketLinkItem,
+    notification_summary: Option<RunbookRiskAlertNotificationSummaryItem>,
 }
 
 #[derive(Debug, Default)]
@@ -1645,6 +1750,13 @@ async fn list_runbook_risk_alerts(
         days,
     )
     .await?;
+    let notification_summaries = load_runbook_risk_alert_notification_summaries(
+        &state,
+        template_key.as_deref(),
+        execution_mode.as_deref(),
+        days,
+    )
+    .await?;
 
     let mut list_builder: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT id, template_key, template_name, status, execution_mode, replay_source_execution_id,
@@ -1697,7 +1809,14 @@ async fn list_runbook_risk_alerts(
         .into_iter()
         .filter_map(|(template_key, aggregate)| {
             let ticket_link = ticket_links.get(&template_key).cloned();
-            build_runbook_risk_alert_item(template_key, aggregate, &policy, ticket_link)
+            let notification_summary = notification_summaries.get(&template_key).cloned();
+            build_runbook_risk_alert_item(
+                template_key,
+                aggregate,
+                &policy,
+                ticket_link,
+                notification_summary,
+            )
         })
         .collect::<Vec<_>>();
     alerts.sort_by(|left, right| {
@@ -1739,11 +1858,77 @@ async fn list_runbook_risk_alerts(
     }))
 }
 
+async fn list_runbook_risk_alert_notification_deliveries(
+    State(state): State<AppState>,
+    Query(query): Query<RunbookRiskAlertNotificationDeliveryQuery>,
+) -> AppResult<Json<RunbookRiskAlertNotificationDeliveryResponse>> {
+    let template_key = query.template_key.map(normalize_template_key).transpose()?;
+    let execution_mode = query
+        .execution_mode
+        .map(normalize_execution_mode)
+        .transpose()?;
+    let source_key = trim_optional(query.source_key.clone(), 160);
+    let days = normalize_analytics_days(query.days);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_FAILURE_FEED_LIMIT)
+        .clamp(1, MAX_FAILURE_FEED_LIMIT);
+    let offset = query.offset.unwrap_or(0);
+    let generated_at = Utc::now();
+    let start_at = generated_at - Duration::days(days as i64);
+
+    let rows = load_runbook_risk_alert_notification_delivery_rows(
+        &state,
+        template_key.clone(),
+        execution_mode.clone(),
+        days,
+        source_key,
+        Some(limit),
+        Some(offset),
+    )
+    .await?;
+    let total = load_runbook_risk_alert_notification_delivery_count(
+        &state,
+        template_key.clone(),
+        execution_mode.clone(),
+        days,
+        query.source_key,
+    )
+    .await?;
+
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        items.push(parse_runbook_risk_alert_notification_delivery_row(
+            row,
+            execution_mode.as_deref(),
+            days,
+        )?);
+    }
+
+    Ok(Json(RunbookRiskAlertNotificationDeliveryResponse {
+        generated_at,
+        window: RunbookAnalyticsWindow {
+            start_at,
+            end_at: generated_at,
+            days,
+        },
+        filters: RunbookAnalyticsFilters {
+            template_key,
+            execution_mode,
+        },
+        total,
+        limit,
+        offset,
+        items,
+    }))
+}
+
 fn build_runbook_risk_alert_item(
     template_key: String,
     aggregate: RunbookRiskAggregate,
     policy: &RunbookAnalyticsPolicyItem,
     ticket_link: Option<RunbookRiskAlertTicketLinkItem>,
+    notification_summary: Option<RunbookRiskAlertNotificationSummaryItem>,
 ) -> Option<RunbookRiskAlertItem> {
     if aggregate.executions < policy.minimum_sample_size as usize {
         return None;
@@ -1796,6 +1981,7 @@ fn build_runbook_risk_alert_item(
         latest_failed_execution_id: aggregate.latest_failed_execution_id,
         latest_failed_at: aggregate.latest_failed_at,
         ticket_link,
+        notification_summary,
         recommended_action,
     })
 }
@@ -1928,6 +2114,695 @@ fn parse_runbook_risk_alert_ticket_link_row(
     ))
 }
 
+async fn load_runbook_risk_alert_notification_summaries(
+    state: &AppState,
+    template_key: Option<&str>,
+    execution_mode: Option<&str>,
+    days: u32,
+) -> AppResult<BTreeMap<String, RunbookRiskAlertNotificationSummaryItem>> {
+    let rows = load_runbook_risk_alert_notification_delivery_rows(
+        state,
+        template_key.map(|value| value.to_string()),
+        execution_mode.map(|value| value.to_string()),
+        days,
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    let mut grouped = BTreeMap::<String, Vec<RunbookRiskAlertNotificationDeliveryItem>>::new();
+    for row in rows {
+        let item = parse_runbook_risk_alert_notification_delivery_row(
+            row,
+            execution_mode,
+            days,
+        )?;
+        grouped
+            .entry(item.template_key.clone())
+            .or_default()
+            .push(item);
+    }
+
+    let mut summaries = BTreeMap::new();
+    for (item_template_key, deliveries) in grouped {
+        let latest = deliveries
+            .iter()
+            .max_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.delivery_id.cmp(&right.delivery_id))
+            })
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "notification delivery group for template '{}' is empty",
+                    item_template_key
+                ))
+            })?;
+
+        let mut delivered = 0usize;
+        let mut failed = 0usize;
+        let mut skipped = 0usize;
+        for delivery in &deliveries {
+            match delivery.dispatch_status.as_str() {
+                NOTIFICATION_STATUS_DELIVERED => delivered += 1,
+                NOTIFICATION_STATUS_FAILED => failed += 1,
+                NOTIFICATION_STATUS_SKIPPED => skipped += 1,
+                _ => {}
+            }
+        }
+
+        summaries.insert(
+            item_template_key,
+            RunbookRiskAlertNotificationSummaryItem {
+                total: deliveries.len(),
+                delivered,
+                failed,
+                skipped,
+                latest_status: latest.dispatch_status,
+                latest_channel_type: latest.channel_type,
+                latest_target: latest.target,
+                latest_delivered_at: latest.delivered_at,
+                latest_created_at: latest.created_at,
+            },
+        );
+    }
+
+    Ok(summaries)
+}
+
+async fn load_runbook_risk_alert_notification_delivery_count(
+    state: &AppState,
+    template_key: Option<String>,
+    execution_mode: Option<String>,
+    days: u32,
+    source_key: Option<String>,
+) -> AppResult<usize> {
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT COUNT(*) FROM ops_runbook_risk_alert_notification_deliveries d WHERE d.window_days = ",
+    );
+    append_runbook_risk_alert_notification_filters(
+        &mut builder,
+        template_key,
+        execution_mode,
+        days,
+        source_key,
+    )?;
+    let total: i64 = builder.build_query_scalar().fetch_one(&state.db).await?;
+    Ok(total.max(0) as usize)
+}
+
+async fn load_runbook_risk_alert_notification_delivery_rows(
+    state: &AppState,
+    template_key: Option<String>,
+    execution_mode: Option<String>,
+    days: u32,
+    source_key: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> AppResult<Vec<RunbookRiskAlertNotificationDeliveryRow>> {
+    let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+        "SELECT d.id, d.source_key, d.template_key, d.execution_mode, d.window_days,
+                d.ticket_id, d.ticket_no, d.event_type, d.dispatch_status,
+                d.subscription_id, d.channel_id, d.channel_type, d.target,
+                d.attempts, d.response_code, d.last_error, d.delivered_at, d.created_at
+         FROM ops_runbook_risk_alert_notification_deliveries d
+         WHERE d.window_days = ",
+    );
+    append_runbook_risk_alert_notification_filters(
+        &mut builder,
+        template_key,
+        execution_mode,
+        days,
+        source_key,
+    )?;
+    builder.push(" ORDER BY d.created_at DESC, d.id DESC");
+    if let Some(limit_value) = limit {
+        builder.push(" LIMIT ").push_bind(limit_value as i64);
+    }
+    if let Some(offset_value) = offset {
+        builder.push(" OFFSET ").push_bind(offset_value as i64);
+    }
+
+    let rows: Vec<RunbookRiskAlertNotificationDeliveryRow> =
+        builder.build_query_as().fetch_all(&state.db).await?;
+    Ok(rows)
+}
+
+fn append_runbook_risk_alert_notification_filters(
+    builder: &mut QueryBuilder<Postgres>,
+    template_key: Option<String>,
+    execution_mode: Option<String>,
+    days: u32,
+    source_key: Option<String>,
+) -> AppResult<()> {
+    builder.push_bind(days as i32);
+
+    let normalized_execution_mode = execution_mode.map(normalize_execution_mode).transpose()?;
+    match normalized_execution_mode {
+        Some(mode) => {
+            builder.push(" AND d.execution_mode = ").push_bind(mode);
+        }
+        None => {
+            builder.push(" AND d.execution_mode IS NULL");
+        }
+    }
+
+    if let Some(template) = template_key {
+        let normalized_template = normalize_template_key(template)?;
+        builder
+            .push(" AND d.template_key = ")
+            .push_bind(normalized_template);
+    }
+    if let Some(source) = trim_optional(source_key, 160) {
+        builder.push(" AND d.source_key = ").push_bind(source);
+    }
+
+    Ok(())
+}
+
+fn parse_runbook_risk_alert_notification_delivery_row(
+    row: RunbookRiskAlertNotificationDeliveryRow,
+    expected_execution_mode: Option<&str>,
+    expected_days: u32,
+) -> AppResult<RunbookRiskAlertNotificationDeliveryItem> {
+    let execution_mode = row
+        .execution_mode
+        .map(normalize_execution_mode)
+        .transpose()?;
+    if execution_mode.as_deref() != expected_execution_mode {
+        return Err(AppError::Validation(format!(
+            "runbook risk alert notification delivery execution_mode mismatch for template '{}'",
+            row.template_key
+        )));
+    }
+    if row.window_days != expected_days as i32 {
+        return Err(AppError::Validation(format!(
+            "runbook risk alert notification delivery window_days {} does not match expected days {}",
+            row.window_days, expected_days
+        )));
+    }
+    if row.id <= 0 || row.ticket_id <= 0 {
+        return Err(AppError::Validation(
+            "runbook risk alert notification delivery ids must be positive integers".to_string(),
+        ));
+    }
+    if row.attempts < 0 {
+        return Err(AppError::Validation(
+            "runbook risk alert notification delivery attempts must be >= 0".to_string(),
+        ));
+    }
+
+    let template_key = normalize_template_key(row.template_key)?;
+    let source_key = required_trimmed("source_key", row.source_key, 160)?;
+    let expected_source_key = build_runbook_risk_alert_source_key(
+        template_key.as_str(),
+        execution_mode.as_deref(),
+        expected_days,
+    );
+    if source_key != expected_source_key {
+        return Err(AppError::Validation(format!(
+            "runbook risk alert notification delivery source_key mismatch for template '{}'",
+            template_key
+        )));
+    }
+
+    let dispatch_status =
+        normalize_runbook_risk_alert_notification_status(row.dispatch_status.as_str())?;
+    let event_type = required_trimmed("event_type", row.event_type, 64)?;
+    let target = required_trimmed("target", row.target, 512)?;
+    let ticket_no = required_trimmed("ticket_no", row.ticket_no, 64)?;
+
+    Ok(RunbookRiskAlertNotificationDeliveryItem {
+        delivery_id: row.id,
+        source_key,
+        template_key,
+        execution_mode,
+        window_days: expected_days,
+        ticket_id: row.ticket_id,
+        ticket_no,
+        event_type,
+        dispatch_status,
+        subscription_id: row.subscription_id,
+        channel_id: row.channel_id,
+        channel_type: row.channel_type,
+        target,
+        attempts: row.attempts,
+        response_code: row.response_code,
+        last_error: row.last_error,
+        delivered_at: row.delivered_at,
+        created_at: row.created_at,
+    })
+}
+
+async fn dispatch_runbook_risk_alert_notifications(
+    state: &AppState,
+    actor: &str,
+    source_key: &str,
+    alert: &RunbookRiskAlertItem,
+    execution_mode: Option<&str>,
+    days: u32,
+    ticket_link: &RunbookRiskAlertTicketLinkItem,
+    created: bool,
+) -> AppResult<Option<RunbookRiskAlertNotificationSummaryItem>> {
+    let mut payload = JsonMap::new();
+    payload.insert(
+        "source_key".to_string(),
+        Value::String(source_key.to_string()),
+    );
+    payload.insert(
+        "template_key".to_string(),
+        Value::String(alert.template_key.clone()),
+    );
+    payload.insert(
+        "template_name".to_string(),
+        Value::String(alert.template_name.clone()),
+    );
+    payload.insert(
+        "execution_mode".to_string(),
+        execution_mode
+            .map(|value| Value::String(value.to_string()))
+            .unwrap_or(Value::String("all".to_string())),
+    );
+    payload.insert("window_days".to_string(), Value::from(days));
+    payload.insert(
+        "severity".to_string(),
+        Value::String(alert.severity.clone()),
+    );
+    payload.insert("executions".to_string(), Value::from(alert.executions as i64));
+    payload.insert("failed".to_string(), Value::from(alert.failed as i64));
+    payload.insert(
+        "failure_rate_percent".to_string(),
+        Value::from(alert.failure_rate_percent),
+    );
+    payload.insert(
+        "top_failed_step_id".to_string(),
+        alert.top_failed_step_id
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null),
+    );
+    payload.insert(
+        "ticket_id".to_string(),
+        Value::from(ticket_link.ticket_id),
+    );
+    payload.insert(
+        "ticket_no".to_string(),
+        Value::String(ticket_link.ticket_no.clone()),
+    );
+    payload.insert(
+        "ticket_status".to_string(),
+        Value::String(ticket_link.ticket_status.clone()),
+    );
+    payload.insert("created".to_string(), Value::Bool(created));
+    payload.insert(
+        "action_label".to_string(),
+        Value::String(if created { "created" } else { "reused" }.to_string()),
+    );
+    payload.insert(
+        "recommended_action".to_string(),
+        Value::String(alert.recommended_action.clone()),
+    );
+    let message_payload = Value::Object(payload.clone());
+
+    let targets = load_runbook_risk_notification_targets(
+        &state.db,
+        NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED,
+    )
+    .await?;
+    let template = load_runbook_risk_notification_template(
+        &state.db,
+        NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED,
+    )
+    .await?;
+
+    if targets.is_empty() {
+        create_runbook_risk_alert_notification_delivery_record(
+            &state.db,
+            source_key,
+            alert.template_key.as_str(),
+            execution_mode,
+            days,
+            ticket_link,
+            NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED,
+            None,
+            None,
+            None,
+            "-",
+            0,
+            None,
+            Some(
+                "no enabled notification subscription matched runbook risk alert event"
+                    .to_string(),
+            ),
+            &json!({
+                "event_type": NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED,
+                "payload": message_payload
+            }),
+            None,
+            actor,
+            NOTIFICATION_STATUS_SKIPPED,
+        )
+        .await?;
+        return load_runbook_risk_alert_notification_summaries(
+            state,
+            Some(alert.template_key.as_str()),
+            execution_mode,
+            days,
+        )
+        .await
+        .map(|items| items.get(alert.template_key.as_str()).cloned());
+    }
+
+    let title_template = template
+        .as_ref()
+        .map(|item| item.title_template.as_str())
+        .unwrap_or("Runbook risk ticket {{ticket_no}}");
+    let body_template = template
+        .as_ref()
+        .map(|item| item.body_template.as_str())
+        .unwrap_or("Runbook risk alert {{template_key}} was {{action_label}} into ticket {{ticket_no}}.");
+    let title = render_notification_template(title_template, &payload);
+    let body = render_notification_template(body_template, &payload);
+    let message = json!({
+        "event_type": NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED,
+        "title": title,
+        "body": body,
+        "payload": message_payload,
+    });
+
+    for target in targets {
+        let delivery_id = create_runbook_risk_alert_notification_delivery_record(
+            &state.db,
+            source_key,
+            alert.template_key.as_str(),
+            execution_mode,
+            days,
+            ticket_link,
+            NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED,
+            Some(target.subscription_id),
+            Some(target.channel_id),
+            Some(target.channel_type.as_str()),
+            target.target.as_str(),
+            0,
+            None,
+            None,
+            &message,
+            None,
+            actor,
+            NOTIFICATION_STATUS_QUEUED,
+        )
+        .await?;
+        let outcome = send_notification_to_target(&target, &message).await;
+        finalize_runbook_risk_alert_notification_delivery_record(
+            &state.db,
+            delivery_id,
+            outcome.status,
+            outcome.attempts,
+            outcome.response_code,
+            outcome.last_error.as_deref(),
+        )
+        .await?;
+    }
+
+    let items = load_runbook_risk_alert_notification_summaries(
+        state,
+        Some(alert.template_key.as_str()),
+        execution_mode,
+        days,
+    )
+    .await?;
+    Ok(items.get(alert.template_key.as_str()).cloned())
+}
+
+async fn load_runbook_risk_notification_targets(
+    db: &sqlx::PgPool,
+    event_type: &str,
+) -> AppResult<Vec<NotificationDispatchTarget>> {
+    let targets: Vec<NotificationDispatchTarget> = sqlx::query_as(
+        "SELECT
+            s.id AS subscription_id,
+            c.id AS channel_id,
+            c.channel_type,
+            c.target,
+            c.config
+         FROM discovery_notification_subscriptions s
+         INNER JOIN discovery_notification_channels c ON c.id = s.channel_id
+         WHERE s.is_enabled = TRUE
+           AND c.is_enabled = TRUE
+           AND s.event_type = $1
+         ORDER BY s.id ASC",
+    )
+    .bind(event_type)
+    .fetch_all(db)
+    .await?;
+
+    Ok(targets)
+}
+
+async fn load_runbook_risk_notification_template(
+    db: &sqlx::PgPool,
+    event_type: &str,
+) -> AppResult<Option<NotificationTemplateRecord>> {
+    let item: Option<NotificationTemplateRecord> = sqlx::query_as(
+        "SELECT title_template, body_template
+         FROM discovery_notification_templates
+         WHERE event_type = $1
+           AND is_enabled = TRUE
+         ORDER BY id DESC
+         LIMIT 1",
+    )
+    .bind(event_type)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(item)
+}
+
+async fn create_runbook_risk_alert_notification_delivery_record(
+    db: &sqlx::PgPool,
+    source_key: &str,
+    template_key: &str,
+    execution_mode: Option<&str>,
+    days: u32,
+    ticket_link: &RunbookRiskAlertTicketLinkItem,
+    event_type: &str,
+    subscription_id: Option<i64>,
+    channel_id: Option<i64>,
+    channel_type: Option<&str>,
+    target: &str,
+    attempts: i32,
+    response_code: Option<i32>,
+    last_error: Option<String>,
+    payload: &Value,
+    delivered_at: Option<DateTime<Utc>>,
+    actor: &str,
+    dispatch_status: &str,
+) -> AppResult<i64> {
+    let delivery_id: i64 = sqlx::query_scalar(
+        "INSERT INTO ops_runbook_risk_alert_notification_deliveries (
+            source_key, template_key, execution_mode, window_days, ticket_id, ticket_no,
+            event_type, dispatch_status, subscription_id, channel_id, channel_type,
+            target, attempts, response_code, last_error, payload, delivered_at, created_by
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+         RETURNING id",
+    )
+    .bind(source_key)
+    .bind(template_key)
+    .bind(execution_mode)
+    .bind(days as i32)
+    .bind(ticket_link.ticket_id)
+    .bind(ticket_link.ticket_no.as_str())
+    .bind(event_type)
+    .bind(dispatch_status)
+    .bind(subscription_id)
+    .bind(channel_id)
+    .bind(channel_type)
+    .bind(target)
+    .bind(attempts)
+    .bind(response_code)
+    .bind(last_error)
+    .bind(payload)
+    .bind(delivered_at)
+    .bind(actor)
+    .fetch_one(db)
+    .await?;
+
+    Ok(delivery_id)
+}
+
+async fn finalize_runbook_risk_alert_notification_delivery_record(
+    db: &sqlx::PgPool,
+    delivery_id: i64,
+    dispatch_status: &str,
+    attempts: i32,
+    response_code: Option<i32>,
+    last_error: Option<&str>,
+) -> AppResult<()> {
+    let delivered_at = if dispatch_status == NOTIFICATION_STATUS_DELIVERED {
+        Some(Utc::now())
+    } else {
+        None
+    };
+
+    sqlx::query(
+        "UPDATE ops_runbook_risk_alert_notification_deliveries
+         SET dispatch_status = $2,
+             attempts = $3,
+             response_code = $4,
+             last_error = $5,
+             delivered_at = $6,
+             updated_at = NOW()
+         WHERE id = $1",
+    )
+    .bind(delivery_id)
+    .bind(dispatch_status)
+    .bind(attempts)
+    .bind(response_code)
+    .bind(last_error)
+    .bind(delivered_at)
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
+struct DeliveryOutcome {
+    status: &'static str,
+    attempts: i32,
+    response_code: Option<i32>,
+    last_error: Option<String>,
+}
+
+async fn send_notification_to_target(
+    target: &NotificationDispatchTarget,
+    message: &Value,
+) -> DeliveryOutcome {
+    match target.channel_type.as_str() {
+        "webhook" => send_webhook_with_retry(target, message).await,
+        "email" => DeliveryOutcome {
+            status: NOTIFICATION_STATUS_DELIVERED,
+            attempts: 1,
+            response_code: Some(202),
+            last_error: None,
+        },
+        _ => DeliveryOutcome {
+            status: NOTIFICATION_STATUS_FAILED,
+            attempts: 1,
+            response_code: None,
+            last_error: Some(format!(
+                "unsupported channel_type '{}'",
+                target.channel_type
+            )),
+        },
+    }
+}
+
+async fn send_webhook_with_retry(
+    target: &NotificationDispatchTarget,
+    message: &Value,
+) -> DeliveryOutcome {
+    let max_attempts = target
+        .config
+        .get("max_attempts")
+        .and_then(Value::as_i64)
+        .map(|value| value.clamp(1, 5) as i32)
+        .unwrap_or(3);
+    let base_delay_ms = target
+        .config
+        .get("base_delay_ms")
+        .and_then(Value::as_u64)
+        .map(|value| value.clamp(50, 10_000))
+        .unwrap_or(200);
+
+    let client = match Client::builder().timeout(StdDuration::from_secs(10)).build() {
+        Ok(client) => client,
+        Err(err) => {
+            return DeliveryOutcome {
+                status: NOTIFICATION_STATUS_FAILED,
+                attempts: 1,
+                response_code: None,
+                last_error: Some(err.to_string()),
+            };
+        }
+    };
+
+    let mut attempts: i32 = 0;
+    let mut last_error: Option<String> = None;
+    let mut last_code: Option<i32> = None;
+
+    while attempts < max_attempts {
+        attempts += 1;
+        let response = client.post(&target.target).json(message).send().await;
+        match response {
+            Ok(response) => {
+                let code = response.status().as_u16() as i32;
+                last_code = Some(code);
+                if response.status().is_success() {
+                    return DeliveryOutcome {
+                        status: NOTIFICATION_STATUS_DELIVERED,
+                        attempts,
+                        response_code: Some(code),
+                        last_error: None,
+                    };
+                }
+                let body = response.text().await.unwrap_or_default();
+                last_error = Some(format!("webhook responded with status {code}: {body}"));
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+
+        if attempts < max_attempts {
+            let factor = 1_u64 << (attempts as u32 - 1);
+            sleep(StdDuration::from_millis(
+                base_delay_ms.saturating_mul(factor),
+            ))
+            .await;
+        }
+    }
+
+    DeliveryOutcome {
+        status: NOTIFICATION_STATUS_FAILED,
+        attempts,
+        response_code: last_code,
+        last_error,
+    }
+}
+
+fn render_notification_template(template: &str, payload: &JsonMap<String, Value>) -> String {
+    let mut rendered = template.to_string();
+    for (key, value) in payload {
+        let replacement = match value {
+            Value::String(item) => item.clone(),
+            Value::Number(item) => item.to_string(),
+            Value::Bool(item) => item.to_string(),
+            _ => continue,
+        };
+        rendered = rendered.replace(&format!("{{{{{key}}}}}"), &replacement);
+    }
+    rendered
+}
+
+fn normalize_runbook_risk_alert_notification_status(value: &str) -> AppResult<String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        NOTIFICATION_STATUS_QUEUED => Ok(NOTIFICATION_STATUS_QUEUED.to_string()),
+        NOTIFICATION_STATUS_DELIVERED => Ok(NOTIFICATION_STATUS_DELIVERED.to_string()),
+        NOTIFICATION_STATUS_FAILED => Ok(NOTIFICATION_STATUS_FAILED.to_string()),
+        NOTIFICATION_STATUS_SKIPPED => Ok(NOTIFICATION_STATUS_SKIPPED.to_string()),
+        _ => Err(AppError::Validation(format!(
+            "notification dispatch_status must be one of: {}, {}, {}, {}",
+            NOTIFICATION_STATUS_QUEUED,
+            NOTIFICATION_STATUS_DELIVERED,
+            NOTIFICATION_STATUS_FAILED,
+            NOTIFICATION_STATUS_SKIPPED
+        ))),
+    }
+}
+
 async fn create_runbook_risk_alert_ticket(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1950,13 +2825,19 @@ async fn create_runbook_risk_alert_ticket(
         days,
     )
     .await?;
-    let mut alert = build_runbook_risk_alert_item(template_key.clone(), aggregate, &policy, None)
-        .ok_or_else(|| {
-            AppError::Validation(format!(
-                "template '{}' has no active risk alert in current policy window",
-                template_key
-            ))
-        })?;
+    let mut alert = build_runbook_risk_alert_item(
+        template_key.clone(),
+        aggregate,
+        &policy,
+        None,
+        None,
+    )
+    .ok_or_else(|| {
+        AppError::Validation(format!(
+            "template '{}' has no active risk alert in current policy window",
+            template_key
+        ))
+    })?;
 
     let source_key =
         build_runbook_risk_alert_source_key(template_key.as_str(), execution_mode.as_deref(), days);
@@ -2094,6 +2975,18 @@ async fn create_runbook_risk_alert_ticket(
     let (_, ticket_link) =
         parse_runbook_risk_alert_ticket_link_row(link_row, execution_mode.as_deref(), days)?;
     alert.ticket_link = Some(ticket_link.clone());
+    let notification_summary = dispatch_runbook_risk_alert_notifications(
+        &state,
+        actor.as_str(),
+        source_key.as_str(),
+        &alert,
+        execution_mode.as_deref(),
+        days,
+        &ticket_link,
+        created,
+    )
+    .await?;
+    alert.notification_summary = notification_summary.clone();
 
     write_audit_log_best_effort(
         &state.db,
@@ -2124,6 +3017,7 @@ async fn create_runbook_risk_alert_ticket(
         source_key,
         alert,
         ticket_link,
+        notification_summary,
     }))
 }
 
@@ -3984,14 +4878,19 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        RunbookAnalyticsPolicyRow, RunbookRiskAlertTicketLinkRow,
+        RunbookAnalyticsPolicyRow, RunbookRiskAlertNotificationDeliveryRow,
+        RunbookRiskAlertTicketLinkRow,
         RunbookStepTimelineEvent, calculate_success_rate_percent,
         build_runbook_risk_alert_source_key, enforce_template_supports_execution_mode,
         evaluate_step_failure, first_failed_timeline_step, normalize_analytics_days,
-        normalize_execution_mode, normalize_live_template_keys, normalize_preflight_confirmations,
-        normalize_preset_name, normalize_runbook_params, parse_dependency_target,
-        parse_preflight_snapshot_confirmed, parse_runbook_analytics_policy_row,
-        parse_runbook_risk_alert_ticket_link_row, resolve_template_by_key, risk_severity_rank,
+        normalize_execution_mode, normalize_live_template_keys,
+        normalize_preflight_confirmations, normalize_preset_name,
+        normalize_runbook_params, normalize_runbook_risk_alert_notification_status,
+        parse_dependency_target, parse_preflight_snapshot_confirmed,
+        parse_runbook_analytics_policy_row,
+        parse_runbook_risk_alert_notification_delivery_row,
+        parse_runbook_risk_alert_ticket_link_row, resolve_template_by_key,
+        risk_severity_rank,
     };
 
     #[test]
@@ -4273,5 +5172,93 @@ mod tests {
     fn ranks_risk_severity_levels() {
         assert!(risk_severity_rank("critical") > risk_severity_rank("warning"));
         assert!(risk_severity_rank("warning") > risk_severity_rank("unknown"));
+    }
+
+    #[test]
+    fn validates_runbook_risk_alert_notification_status_values() {
+        assert_eq!(
+            normalize_runbook_risk_alert_notification_status("queued")
+                .expect("queued"),
+            "queued"
+        );
+        assert_eq!(
+            normalize_runbook_risk_alert_notification_status("delivered")
+                .expect("delivered"),
+            "delivered"
+        );
+        assert_eq!(
+            normalize_runbook_risk_alert_notification_status("failed")
+                .expect("failed"),
+            "failed"
+        );
+        assert_eq!(
+            normalize_runbook_risk_alert_notification_status("skipped")
+                .expect("skipped"),
+            "skipped"
+        );
+
+        let err = normalize_runbook_risk_alert_notification_status("unknown")
+            .expect_err("invalid status should fail");
+        assert!(format!("{}", err).contains("dispatch_status must be one of"));
+    }
+
+    #[test]
+    fn validates_runbook_risk_alert_notification_delivery_row() {
+        let now = Utc::now();
+        let item = parse_runbook_risk_alert_notification_delivery_row(
+            RunbookRiskAlertNotificationDeliveryRow {
+                id: 1,
+                source_key: "runbook-risk-alert:dependency-check:all:14d".to_string(),
+                template_key: "dependency-check".to_string(),
+                execution_mode: None,
+                window_days: 14,
+                ticket_id: 1001,
+                ticket_no: "TKT-20260311-001001".to_string(),
+                event_type: "runbook_risk.ticket_linked".to_string(),
+                dispatch_status: "delivered".to_string(),
+                subscription_id: Some(1),
+                channel_id: Some(2),
+                channel_type: Some("email".to_string()),
+                target: "ops@example.com".to_string(),
+                attempts: 1,
+                response_code: Some(202),
+                last_error: None,
+                delivered_at: Some(now),
+                created_at: now,
+            },
+            None,
+            14,
+        )
+        .expect("valid notification row");
+        assert_eq!(item.template_key, "dependency-check");
+        assert_eq!(item.dispatch_status, "delivered");
+        assert_eq!(item.channel_type.as_deref(), Some("email"));
+
+        let err = parse_runbook_risk_alert_notification_delivery_row(
+            RunbookRiskAlertNotificationDeliveryRow {
+                id: 2,
+                source_key: "runbook-risk-alert:dependency-check:simulate:14d".to_string(),
+                template_key: "dependency-check".to_string(),
+                execution_mode: None,
+                window_days: 14,
+                ticket_id: 1002,
+                ticket_no: "TKT-20260311-001002".to_string(),
+                event_type: "runbook_risk.ticket_linked".to_string(),
+                dispatch_status: "failed".to_string(),
+                subscription_id: None,
+                channel_id: None,
+                channel_type: None,
+                target: "-".to_string(),
+                attempts: 0,
+                response_code: None,
+                last_error: Some("no subscription".to_string()),
+                delivered_at: None,
+                created_at: now,
+            },
+            None,
+            14,
+        )
+        .expect_err("source key mismatch should fail");
+        assert!(format!("{}", err).contains("source_key mismatch"));
     }
 }
