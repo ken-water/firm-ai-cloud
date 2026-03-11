@@ -65,6 +65,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     runbookAnalyticsSummary,
     runbookFailureFeed,
     runbookRiskAlerts,
+    runbookRiskOwnerDirectory,
+    runbookRiskOwnerRoutingRules,
+    runbookRiskOwnerReadiness,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
     selectedRunbookPresetId,
@@ -99,6 +102,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadRunbookAnalyticsSummary,
     loadRunbookFailureFeed,
     loadRunbookRiskAlerts,
+    loadRunbookRiskOwnerDirectory,
+    loadRunbookRiskOwnerRoutingRules,
+    loadRunbookRiskOwnerReadiness,
     createRunbookRiskAlertTicket,
     loadBackupPolicyRuns,
     loadBackupRestoreEvidence,
@@ -127,6 +133,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     replayRunbookTemplateExecution,
     saveRunbookExecutionPolicy,
     saveRunbookAnalyticsPolicy,
+    saveRunbookRiskOwnerDirectory,
+    saveRunbookRiskOwnerRoutingRules,
     closeBackupRestoreEvidence,
     runningBackupPolicyActionId,
     loadingDailyCockpit,
@@ -142,11 +150,16 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingRunbookAnalyticsSummary,
     loadingRunbookFailureFeed,
     loadingRunbookRiskAlerts,
+    loadingRunbookRiskOwnerDirectory,
+    loadingRunbookRiskOwnerRoutingRules,
+    loadingRunbookRiskOwnerReadiness,
     runningRunbookRiskTicketTemplateKey,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,
     savingRunbookAnalyticsPolicy,
+    savingRunbookRiskOwnerDirectory,
+    savingRunbookRiskOwnerRoutingRules,
     replayingRunbookExecutionId,
     loadingHandoverDigest,
     loadingHandoverReminders,
@@ -212,6 +225,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setRunbookPreflightDraft,
     setRunbookPresetDraft,
     setRunbookEvidenceDraft,
+    setRunbookRiskOwnerDirectory,
+    setRunbookRiskOwnerRoutingRules,
     setMenuAxis,
     setOpsChecklistDate,
     setSelectedIncidentAlertId,
@@ -1265,6 +1280,342 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 </div>
 
                 <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                  <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Runbook risk owner directory</h4>
+                  <div className="toolbar-row" style={{ marginBottom: "0.45rem" }}>
+                    <button onClick={() => void Promise.all([loadRunbookRiskOwnerDirectory(), loadRunbookRiskOwnerRoutingRules(), loadRunbookRiskOwnerReadiness()])}>
+                      {loadingRunbookRiskOwnerDirectory || loadingRunbookRiskOwnerRoutingRules || loadingRunbookRiskOwnerReadiness
+                        ? t("cmdb.actions.loading")
+                        : "Refresh owner readiness"}
+                    </button>
+                    {canWriteCmdb && (
+                      <>
+                        <button
+                          onClick={() => setRunbookRiskOwnerDirectory((prev: any[]) => ([
+                            ...prev,
+                            {
+                              owner_key: `owner_${prev.length + 1}`,
+                              display_name: "",
+                              owner_type: "team",
+                              owner_ref: "",
+                              notification_target: "",
+                              note: "",
+                              is_enabled: true,
+                              updated_by: "draft",
+                              created_at: "",
+                              updated_at: ""
+                            }
+                          ]))}
+                        >
+                          Add owner
+                        </button>
+                        <button onClick={() => void saveRunbookRiskOwnerDirectory()} disabled={savingRunbookRiskOwnerDirectory}>
+                          {savingRunbookRiskOwnerDirectory ? t("cmdb.actions.loading") : "Save owners"}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {loadingRunbookRiskOwnerDirectory ? (
+                    <p>{t("cmdb.actions.loading")}</p>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ borderCollapse: "collapse", minWidth: "1080px", width: "100%" }}>
+                        <thead>
+                          <tr>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner key</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Display name</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Type</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner ref</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Notification target</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Enabled</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Note</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(runbookRiskOwnerDirectory ?? []).map((item: any, index: number) => (
+                            <tr key={`runbook-risk-owner-${item.owner_key}-${index}`}>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <input
+                                  value={item.owner_key ?? ""}
+                                  readOnly={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerDirectory((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, owner_key: event.target.value } : entry
+                                  )))}
+                                />
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <input
+                                  value={item.display_name ?? ""}
+                                  readOnly={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerDirectory((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, display_name: event.target.value } : entry
+                                  )))}
+                                />
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <select
+                                  value={item.owner_type ?? "team"}
+                                  disabled={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerDirectory((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, owner_type: event.target.value } : entry
+                                  )))}
+                                >
+                                  <option value="team">team</option>
+                                  <option value="user">user</option>
+                                  <option value="group">group</option>
+                                  <option value="external">external</option>
+                                </select>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <input
+                                  value={item.owner_ref ?? ""}
+                                  readOnly={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerDirectory((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, owner_ref: event.target.value } : entry
+                                  )))}
+                                />
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <input
+                                  value={item.notification_target ?? ""}
+                                  readOnly={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerDirectory((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, notification_target: event.target.value } : entry
+                                  )))}
+                                  placeholder="ops@example.com / webhook target"
+                                />
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <label style={{ display: "inline-flex", gap: "0.35rem", alignItems: "center" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(item.is_enabled)}
+                                    disabled={!canWriteCmdb}
+                                    onChange={(event) => setRunbookRiskOwnerDirectory((prev: any[]) => prev.map((entry, entryIndex) => (
+                                      entryIndex === index ? { ...entry, is_enabled: event.target.checked } : entry
+                                    )))}
+                                  />
+                                  enabled
+                                </label>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <input
+                                  value={item.note ?? ""}
+                                  readOnly={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerDirectory((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, note: event.target.value } : entry
+                                  )))}
+                                />
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                {canWriteCmdb ? (
+                                  <button onClick={() => setRunbookRiskOwnerDirectory((prev: any[]) => prev.filter((_, entryIndex) => entryIndex !== index))}>
+                                    Remove
+                                  </button>
+                                ) : (
+                                  <span>-</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                  <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Runbook risk routing rules</h4>
+                  <div className="toolbar-row" style={{ marginBottom: "0.45rem" }}>
+                    {canWriteCmdb && (
+                      <>
+                        <button
+                          onClick={() => setRunbookRiskOwnerRoutingRules((prev: any[]) => ([
+                            ...prev,
+                            {
+                              rule_id: Date.now(),
+                              template_key: selectedRunbookTemplateKey || "dependency-check",
+                              execution_mode: null,
+                              severity: null,
+                              owner_key: runbookRiskOwnerDirectory[0]?.owner_key ?? "",
+                              owner_label: null,
+                              owner_ref: null,
+                              priority: 100,
+                              note: "",
+                              is_enabled: true,
+                              updated_by: "draft",
+                              created_at: "",
+                              updated_at: ""
+                            }
+                          ]))}
+                        >
+                          Add rule
+                        </button>
+                        <button onClick={() => void saveRunbookRiskOwnerRoutingRules()} disabled={savingRunbookRiskOwnerRoutingRules}>
+                          {savingRunbookRiskOwnerRoutingRules ? t("cmdb.actions.loading") : "Save rules"}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {loadingRunbookRiskOwnerRoutingRules ? (
+                    <p>{t("cmdb.actions.loading")}</p>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                        <thead>
+                          <tr>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Template</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Mode</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Severity</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner key</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Priority</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Enabled</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Note</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(runbookRiskOwnerRoutingRules ?? []).map((item: any, index: number) => (
+                            <tr key={`runbook-risk-rule-${item.rule_id}-${index}`}>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <input
+                                  value={item.template_key ?? ""}
+                                  readOnly={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerRoutingRules((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, template_key: event.target.value } : entry
+                                  )))}
+                                />
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <select
+                                  value={item.execution_mode ?? "all"}
+                                  disabled={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerRoutingRules((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, execution_mode: event.target.value === "all" ? null : event.target.value } : entry
+                                  )))}
+                                >
+                                  <option value="all">all</option>
+                                  <option value="simulate">simulate</option>
+                                  <option value="live">live</option>
+                                </select>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <select
+                                  value={item.severity ?? "all"}
+                                  disabled={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerRoutingRules((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, severity: event.target.value === "all" ? null : event.target.value } : entry
+                                  )))}
+                                >
+                                  <option value="all">all</option>
+                                  <option value="warning">warning</option>
+                                  <option value="critical">critical</option>
+                                </select>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <input
+                                  value={item.owner_key ?? ""}
+                                  readOnly={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerRoutingRules((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, owner_key: event.target.value } : entry
+                                  )))}
+                                />
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <input
+                                  type="number"
+                                  value={item.priority ?? 100}
+                                  readOnly={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerRoutingRules((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, priority: Number.parseInt(event.target.value, 10) || 100 } : entry
+                                  )))}
+                                />
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <label style={{ display: "inline-flex", gap: "0.35rem", alignItems: "center" }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(item.is_enabled)}
+                                    disabled={!canWriteCmdb}
+                                    onChange={(event) => setRunbookRiskOwnerRoutingRules((prev: any[]) => prev.map((entry, entryIndex) => (
+                                      entryIndex === index ? { ...entry, is_enabled: event.target.checked } : entry
+                                    )))}
+                                  />
+                                  enabled
+                                </label>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                <input
+                                  value={item.note ?? ""}
+                                  readOnly={!canWriteCmdb}
+                                  onChange={(event) => setRunbookRiskOwnerRoutingRules((prev: any[]) => prev.map((entry, entryIndex) => (
+                                    entryIndex === index ? { ...entry, note: event.target.value } : entry
+                                  )))}
+                                />
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                {canWriteCmdb ? (
+                                  <button onClick={() => setRunbookRiskOwnerRoutingRules((prev: any[]) => prev.filter((_, entryIndex) => entryIndex !== index))}>
+                                    Remove
+                                  </button>
+                                ) : (
+                                  <span>-</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                  <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Runbook risk owner readiness</h4>
+                  {loadingRunbookRiskOwnerReadiness ? (
+                    <p>{t("cmdb.actions.loading")}</p>
+                  ) : !runbookRiskOwnerReadiness || (runbookRiskOwnerReadiness.items ?? []).length === 0 ? (
+                    <p>No readiness data available.</p>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ borderCollapse: "collapse", minWidth: "1180px", width: "100%" }}>
+                        <thead>
+                          <tr>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Template</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Target</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Coverage</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Gap reason</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(runbookRiskOwnerReadiness.items ?? []).map((item: any) => (
+                            <tr key={`runbook-risk-readiness-${item.template_key}-${item.owner_key ?? "none"}-${item.readiness_status}`}>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                {item.template_name}
+                                <div className="inline-note">{item.template_key}</div>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                {item.owner_label ?? item.owner_ref ?? "-"}
+                                <div className="inline-note">owner_key={item.owner_key ?? "-"}</div>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>{item.readiness_status}</td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>{item.notification_target ?? "-"}</td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                                channels={item.matched_channel_count} subscriptions={item.matched_subscription_count}
+                                <div className="inline-note">template_enabled={String(item.notification_template_enabled)}</div>
+                              </td>
+                              <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>{item.gap_reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
                   <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Runbook risk alerts</h4>
                   {loadingRunbookRiskAlerts ? (
                     <p>{t("cmdb.actions.loading")}</p>
@@ -1322,7 +1673,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                                   <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                                     {ownerRoute || ticketLink?.ticket_assignee ? (
                                       <>
-                                        <div>{ownerRoute?.owner ?? ticketLink?.ticket_assignee ?? "-"}</div>
+                                        <div>{ownerRoute?.owner_label ?? ownerRoute?.owner ?? ticketLink?.ticket_assignee ?? "-"}</div>
+                                        <div className="inline-note">owner={ownerRoute?.owner ?? ticketLink?.ticket_assignee ?? "-"}</div>
                                         <div className="inline-note">source={ownerRoute?.source ?? "ticket_assignee"}</div>
                                         <div className="inline-note">ticket_assignee={ticketLink?.ticket_assignee ?? "-"}</div>
                                         <div className="inline-note">{ownerRoute?.reason ?? "Existing ticket assignee retained."}</div>
