@@ -857,6 +857,16 @@ mod tests {
         );
         assert_permission(
             Method::GET,
+            "/api/v1/ops/cockpit/runbook-templates/analytics/owner-readiness/repair-plan",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/ops/cockpit/runbook-templates/analytics/owner-readiness/repair-actions",
+            "ops.cockpit.write",
+        );
+        assert_permission(
+            Method::GET,
             "/api/v1/ops/cockpit/runbook-templates/analytics/alerts/notifications",
             "ops.cockpit.read",
         );
@@ -1284,6 +1294,16 @@ mod tests {
                 Method::GET,
                 "/api/v1/ops/cockpit/runbook-templates/analytics/owner-readiness",
                 "ops.cockpit.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/runbook-templates/analytics/owner-readiness/repair-plan",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/runbook-templates/analytics/owner-readiness/repair-actions",
+                "ops.cockpit.write",
             ),
             (
                 Method::GET,
