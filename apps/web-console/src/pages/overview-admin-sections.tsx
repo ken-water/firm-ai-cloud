@@ -1279,13 +1279,15 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                         {" | "}total={runbookRiskAlerts.total ?? 0}
                       </p>
                       <div style={{ overflowX: "auto" }}>
-                        <table style={{ borderCollapse: "collapse", minWidth: "1220px", width: "100%" }}>
+                        <table style={{ borderCollapse: "collapse", minWidth: "1480px", width: "100%" }}>
                           <thead>
                             <tr>
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Template</th>
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Severity</th>
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Failure rate</th>
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Failure context</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner route</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Dispatch</th>
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Recommended action</th>
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Ticket link</th>
                               <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
@@ -1294,6 +1296,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                           <tbody>
                             {(runbookRiskAlerts.items ?? []).map((item: any) => {
                               const ticketLink = item.ticket_link;
+                              const ownerRoute = ticketLink?.owner_route;
+                              const notificationSummary = item.notification_summary;
                               const rowRunning = runningRunbookRiskTicketTemplateKey === item.template_key;
                               return (
                                 <tr key={`runbook-risk-alert-${item.template_key}`}>
@@ -1316,6 +1320,43 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                                     </div>
                                   </td>
                                   <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    {ownerRoute || ticketLink?.ticket_assignee ? (
+                                      <>
+                                        <div>{ownerRoute?.owner ?? ticketLink?.ticket_assignee ?? "-"}</div>
+                                        <div className="inline-note">source={ownerRoute?.source ?? "ticket_assignee"}</div>
+                                        <div className="inline-note">ticket_assignee={ticketLink?.ticket_assignee ?? "-"}</div>
+                                        <div className="inline-note">{ownerRoute?.reason ?? "Existing ticket assignee retained."}</div>
+                                      </>
+                                    ) : (
+                                      <span>-</span>
+                                    )}
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    {notificationSummary ? (
+                                      <>
+                                        <div>{notificationSummary.latest_status}</div>
+                                        <div className="inline-note">
+                                          delivered={notificationSummary.delivered} failed={notificationSummary.failed} skipped={notificationSummary.skipped}
+                                        </div>
+                                        <div className="inline-note">
+                                          latest_target={notificationSummary.latest_target || "-"}
+                                        </div>
+                                        <div className="inline-note">
+                                          channel={notificationSummary.latest_channel_type ?? "-"}
+                                        </div>
+                                        <div className="inline-note">
+                                          {notificationSummary.latest_delivered_at
+                                            ? new Date(notificationSummary.latest_delivered_at).toLocaleString()
+                                            : notificationSummary.latest_created_at
+                                              ? new Date(notificationSummary.latest_created_at).toLocaleString()
+                                              : "-"}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <span>-</span>
+                                    )}
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                                     {item.recommended_action}
                                   </td>
                                   <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
@@ -1325,6 +1366,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                                         <div className="inline-note">status={ticketLink.ticket_status}</div>
                                         <div className="inline-note">priority={ticketLink.ticket_priority}</div>
                                         <div className="inline-note">link_status={ticketLink.status}</div>
+                                        <div className="inline-note">assignee={ticketLink.ticket_assignee ?? "-"}</div>
                                         <div className="inline-note">
                                           {ticketLink.updated_at ? new Date(ticketLink.updated_at).toLocaleString() : "-"}
                                         </div>

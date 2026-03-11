@@ -1455,12 +1455,32 @@ type RunbookAnalyticsPolicyDraft = {
   note: string;
 };
 
+type RunbookRiskAlertOwnerRouteItem = {
+  owner: string;
+  source: string;
+  reason: string;
+};
+
+type RunbookRiskAlertNotificationSummaryItem = {
+  total: number;
+  delivered: number;
+  failed: number;
+  skipped: number;
+  latest_status: "queued" | "delivered" | "failed" | "skipped";
+  latest_channel_type: string | null;
+  latest_target: string;
+  latest_delivered_at: string | null;
+  latest_created_at: string;
+};
+
 type RunbookRiskAlertTicketLinkItem = {
   link_id: number;
   ticket_id: number;
   ticket_no: string;
   ticket_status: "open" | "in_progress" | "resolved" | "closed" | "cancelled";
   ticket_priority: "low" | "medium" | "high" | "critical";
+  ticket_assignee: string | null;
+  owner_route: RunbookRiskAlertOwnerRouteItem | null;
   status: "open" | "in_progress" | "resolved" | "closed" | "cancelled";
   source_key: string;
   updated_at: string;
@@ -1477,6 +1497,7 @@ type RunbookRiskAlertItem = {
   latest_failed_execution_id: number | null;
   latest_failed_at: string | null;
   ticket_link: RunbookRiskAlertTicketLinkItem | null;
+  notification_summary: RunbookRiskAlertNotificationSummaryItem | null;
   recommended_action: string;
 };
 
@@ -1497,6 +1518,7 @@ type CreateRunbookRiskAlertTicketResponse = {
   source_key: string;
   alert: RunbookRiskAlertItem;
   ticket_link: RunbookRiskAlertTicketLinkItem;
+  notification_summary: RunbookRiskAlertNotificationSummaryItem | null;
 };
 
 type RunbookExecutionPresetItem = {
@@ -3993,10 +4015,13 @@ export function App() {
       }
       const payload: CreateRunbookRiskAlertTicketResponse = await response.json();
       await loadRunbookRiskAlerts();
+      const routedOwner =
+        payload.ticket_link.owner_route?.owner ?? payload.ticket_link.ticket_assignee ?? "-";
+      const dispatchStatus = payload.notification_summary?.latest_status ?? "not_sent";
       setRunbookNotice(
         payload.created
-          ? `Runbook risk alert ticket created: ${payload.ticket_link.ticket_no} (template=${payload.alert.template_key}).`
-          : `Runbook risk alert ticket reused: ${payload.ticket_link.ticket_no} (template=${payload.alert.template_key}).`
+          ? `Runbook risk alert ticket created: ${payload.ticket_link.ticket_no} (template=${payload.alert.template_key}, owner=${routedOwner}, notify=${dispatchStatus}).`
+          : `Runbook risk alert ticket reused: ${payload.ticket_link.ticket_no} (template=${payload.alert.template_key}, owner=${routedOwner}, notify=${dispatchStatus}).`
       );
       return payload;
     } catch (err) {
