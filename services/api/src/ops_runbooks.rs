@@ -519,9 +519,18 @@ struct RunbookRiskAlertTicketLinkItem {
     ticket_no: String,
     ticket_status: String,
     ticket_priority: String,
+    ticket_assignee: Option<String>,
+    owner_route: Option<RunbookRiskAlertOwnerRouteItem>,
     status: String,
     source_key: String,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RunbookRiskAlertOwnerRouteItem {
+    owner: String,
+    source: String,
+    reason: String,
 }
 
 #[derive(Debug, FromRow)]
@@ -536,6 +545,8 @@ struct RunbookRiskAlertTicketLinkRow {
     ticket_no: String,
     ticket_status: String,
     ticket_priority: String,
+    ticket_assignee: Option<String>,
+    ticket_metadata: Value,
     updated_at: DateTime<Utc>,
 }
 
@@ -2004,7 +2015,7 @@ async fn load_runbook_risk_alert_ticket_links(
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT l.id, l.template_key, l.execution_mode, l.window_days, l.source_key, l.status,
                 l.ticket_id, t.ticket_no, t.status AS ticket_status, t.priority AS ticket_priority,
-                l.updated_at
+                t.assignee AS ticket_assignee, t.metadata AS ticket_metadata, l.updated_at
          FROM ops_runbook_risk_alert_ticket_links l
          JOIN tickets t ON t.id = l.ticket_id
          WHERE l.window_days = ",
@@ -2052,6 +2063,8 @@ fn parse_runbook_risk_alert_ticket_link_row(
         ticket_no,
         ticket_status,
         ticket_priority,
+        ticket_assignee,
+        ticket_metadata,
         updated_at,
     } = row;
 
@@ -2098,6 +2111,11 @@ fn parse_runbook_risk_alert_ticket_link_row(
     let ticket_status = normalize_ticket_lifecycle_status(ticket_status, "ticket status")?;
     let ticket_priority = normalize_ticket_priority_for_link(ticket_priority)?;
     let ticket_no = required_trimmed("ticket_no", ticket_no, 64)?;
+    let ticket_assignee = trim_optional(ticket_assignee, 128);
+    let owner_route = parse_runbook_risk_alert_owner_route_from_ticket_metadata(
+        &ticket_metadata,
+        ticket_assignee.as_deref(),
+    )?;
 
     Ok((
         normalized_template_key,
@@ -2107,6 +2125,8 @@ fn parse_runbook_risk_alert_ticket_link_row(
             ticket_no,
             ticket_status,
             ticket_priority,
+            ticket_assignee,
+            owner_route,
             status,
             source_key,
             updated_at,
@@ -2190,6 +2210,151 @@ async fn load_runbook_risk_alert_notification_summaries(
     }
 
     Ok(summaries)
+}
+
+fn parse_runbook_risk_alert_owner_route_from_ticket_metadata(
+    metadata: &Value,
+    ticket_assignee: Option<&str>,
+) -> AppResult<Option<RunbookRiskAlertOwnerRouteItem>> {
+    let fallback_assignee = ticket_assignee
+        .map(|value| required_trimmed("ticket_assignee", value.to_string(), 128))
+        .transpose()?;
+
+    let Some(route) = metadata
+        .as_object()
+        .and_then(|item| item.get("runbook_risk_owner_route"))
+        .and_then(Value::as_object)
+    else {
+        return Ok(fallback_assignee.map(|owner| RunbookRiskAlertOwnerRouteItem {
+            owner,
+            source: "ticket_assignee".to_string(),
+            reason: "Existing ticket assignee retained.".to_string(),
+        }));
+    };
+
+    let owner = match route.get("owner").and_then(Value::as_str) {
+        Some(value) => required_trimmed("runbook_risk_owner_route.owner", value.to_string(), 128)?,
+        None => fallback_assignee.clone().ok_or_else(|| {
+            AppError::Validation(
+                "runbook_risk_owner_route.owner is required when ticket assignee is empty"
+                    .to_string(),
+            )
+        })?,
+    };
+    let source = required_trimmed(
+        "runbook_risk_owner_route.source",
+        route.get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("ticket_assignee")
+            .to_string(),
+        64,
+    )?;
+    let reason = required_trimmed(
+        "runbook_risk_owner_route.reason",
+        route.get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("Owner route inferred from ticket state.")
+            .to_string(),
+        255,
+    )?;
+
+    Ok(Some(RunbookRiskAlertOwnerRouteItem {
+        owner,
+        source,
+        reason,
+    }))
+}
+
+async fn resolve_runbook_risk_alert_owner_route(
+    state: &AppState,
+    alert: &RunbookRiskAlertItem,
+    ticket_priority: &str,
+    existing_assignee: Option<&str>,
+) -> AppResult<RunbookRiskAlertOwnerRouteItem> {
+    if let Some(owner) = existing_assignee {
+        return Ok(RunbookRiskAlertOwnerRouteItem {
+            owner: required_trimmed("ticket_assignee", owner.to_string(), 128)?,
+            source: "ticket_assignee".to_string(),
+            reason: "Existing ticket assignee retained.".to_string(),
+        });
+    }
+
+    if ticket_priority == TICKET_PRIORITY_CRITICAL {
+        let policy = load_default_ticket_escalation_owner(&state.db).await?;
+        return Ok(RunbookRiskAlertOwnerRouteItem {
+            owner: policy,
+            source: "escalation_policy".to_string(),
+            reason: "Critical runbook-risk tickets route to the default escalation owner."
+                .to_string(),
+        });
+    }
+
+    let (owner, reason) = match alert.template_key.as_str() {
+        "service-restart-safe" => (
+            "service-owner",
+            "Service restart follow-up routes to the service owner acknowledged in preflight.",
+        ),
+        "dependency-check" => (
+            "dependency-owner",
+            "Dependency probe failures route to the dependency owner for follow-up.",
+        ),
+        "backup-verify" => (
+            "continuity-owner",
+            "Backup verification gaps route to the continuity owner for restore follow-up.",
+        ),
+        "maintenance-closeout" => (
+            "change-owner",
+            "Maintenance closeout gaps route to the change owner for signoff and handover.",
+        ),
+        _ => {
+            let policy = load_default_ticket_escalation_owner(&state.db).await?;
+            return Ok(RunbookRiskAlertOwnerRouteItem {
+                owner: policy,
+                source: "escalation_policy".to_string(),
+                reason: "No template-specific route exists, so the default escalation owner is used."
+                    .to_string(),
+            });
+        }
+    };
+
+    Ok(RunbookRiskAlertOwnerRouteItem {
+        owner: owner.to_string(),
+        source: "template_rule".to_string(),
+        reason: reason.to_string(),
+    })
+}
+
+async fn load_default_ticket_escalation_owner(db: &sqlx::PgPool) -> AppResult<String> {
+    let owner: String = sqlx::query_scalar(
+        "SELECT escalate_to_assignee
+         FROM ticket_escalation_policies
+         WHERE policy_key = 'default-ticket-sla'
+         ORDER BY id DESC
+         LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?
+    .unwrap_or_else(|| "ops-escalation".to_string());
+    required_trimmed("escalate_to_assignee", owner, 128)
+}
+
+fn merge_runbook_risk_owner_route_metadata(
+    metadata: Value,
+    owner_route: &RunbookRiskAlertOwnerRouteItem,
+) -> Value {
+    let mut object = match metadata {
+        Value::Object(item) => item,
+        _ => JsonMap::new(),
+    };
+    object.insert(
+        "runbook_risk_owner_route".to_string(),
+        json!({
+            "owner": owner_route.owner,
+            "source": owner_route.source,
+            "reason": owner_route.reason
+        }),
+    );
+    Value::Object(object)
 }
 
 async fn load_runbook_risk_alert_notification_delivery_count(
@@ -2846,7 +3011,7 @@ async fn create_runbook_risk_alert_ticket(
     let existing_open_link: Option<RunbookRiskAlertTicketLinkRow> = sqlx::query_as(
         "SELECT l.id, l.template_key, l.execution_mode, l.window_days, l.source_key, l.status,
                 l.ticket_id, t.ticket_no, t.status AS ticket_status, t.priority AS ticket_priority,
-                l.updated_at
+                t.assignee AS ticket_assignee, t.metadata AS ticket_metadata, l.updated_at
          FROM ops_runbook_risk_alert_ticket_links l
          JOIN tickets t ON t.id = l.ticket_id
          WHERE l.source_key = $1
@@ -2859,7 +3024,33 @@ async fn create_runbook_risk_alert_ticket(
     .fetch_optional(&mut *tx)
     .await?;
 
-    let (created, link_row) = if let Some(existing) = existing_open_link {
+    let (created, link_row) = if let Some(mut existing) = existing_open_link {
+        if existing.ticket_assignee.is_none() {
+            let owner_route = resolve_runbook_risk_alert_owner_route(
+                &state,
+                &alert,
+                existing.ticket_priority.as_str(),
+                None,
+            )
+            .await?;
+            existing.ticket_metadata =
+                merge_runbook_risk_owner_route_metadata(existing.ticket_metadata, &owner_route);
+
+            sqlx::query(
+                "UPDATE tickets
+                 SET assignee = $2,
+                     metadata = $3,
+                     updated_at = NOW()
+                 WHERE id = $1",
+            )
+            .bind(existing.ticket_id)
+            .bind(owner_route.owner.as_str())
+            .bind(&existing.ticket_metadata)
+            .execute(&mut *tx)
+            .await?;
+
+            existing.ticket_assignee = Some(owner_route.owner);
+        }
         (false, existing)
     } else {
         let ticket_id: i64 = sqlx::query_scalar("SELECT nextval('tickets_id_seq')")
@@ -2895,7 +3086,11 @@ async fn create_runbook_risk_alert_ticket(
             .chars()
             .take(MAX_RISK_TICKET_DESCRIPTION_LEN)
             .collect();
-        let metadata = json!({
+        let ticket_priority = ticket_priority_for_risk_severity(alert.severity.as_str());
+        let owner_route =
+            resolve_runbook_risk_alert_owner_route(&state, &alert, ticket_priority, None).await?;
+        let metadata = merge_runbook_risk_owner_route_metadata(
+            json!({
             "source": "runbook_risk_alert",
             "source_key": source_key,
             "template_key": alert.template_key,
@@ -2910,22 +3105,25 @@ async fn create_runbook_risk_alert_ticket(
             "latest_failed_execution_id": alert.latest_failed_execution_id,
             "latest_failed_at": alert.latest_failed_at,
             "recommended_action": alert.recommended_action
-        });
+            }),
+            &owner_route,
+        );
 
         sqlx::query(
             "INSERT INTO tickets (
-                id, ticket_no, title, description, status, priority, category, requester, metadata
+                id, ticket_no, title, description, status, priority, category, requester, assignee, metadata
              )
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(ticket_id)
         .bind(ticket_no)
         .bind(title)
         .bind(description)
         .bind(TICKET_STATUS_OPEN)
-        .bind(ticket_priority_for_risk_severity(alert.severity.as_str()))
+        .bind(ticket_priority)
         .bind(RISK_TICKET_CATEGORY)
         .bind(actor.as_str())
+        .bind(owner_route.owner.as_str())
         .bind(metadata)
         .execute(&mut *tx)
         .await?;
@@ -2960,7 +3158,7 @@ async fn create_runbook_risk_alert_ticket(
         let row: RunbookRiskAlertTicketLinkRow = sqlx::query_as(
             "SELECT l.id, l.template_key, l.execution_mode, l.window_days, l.source_key, l.status,
                     l.ticket_id, t.ticket_no, t.status AS ticket_status, t.priority AS ticket_priority,
-                    l.updated_at
+                    t.assignee AS ticket_assignee, t.metadata AS ticket_metadata, l.updated_at
              FROM ops_runbook_risk_alert_ticket_links l
              JOIN tickets t ON t.id = l.ticket_id
              WHERE l.id = $1",
@@ -4888,6 +5086,7 @@ mod tests {
         normalize_runbook_params, normalize_runbook_risk_alert_notification_status,
         parse_dependency_target, parse_preflight_snapshot_confirmed,
         parse_runbook_analytics_policy_row,
+        parse_runbook_risk_alert_owner_route_from_ticket_metadata,
         parse_runbook_risk_alert_notification_delivery_row,
         parse_runbook_risk_alert_ticket_link_row, resolve_template_by_key,
         risk_severity_rank,
@@ -5135,6 +5334,14 @@ mod tests {
             ticket_no: "TKT-20260310-001001".to_string(),
             ticket_status: "in_progress".to_string(),
             ticket_priority: "high".to_string(),
+            ticket_assignee: Some("dependency-owner".to_string()),
+            ticket_metadata: json!({
+                "runbook_risk_owner_route": {
+                    "owner": "dependency-owner",
+                    "source": "template_rule",
+                    "reason": "Dependency probe failures route to the dependency owner for follow-up."
+                }
+            }),
             updated_at: now,
         };
 
@@ -5144,6 +5351,11 @@ mod tests {
         assert_eq!(template_key, "dependency-check");
         assert_eq!(item.ticket_status, "in_progress");
         assert_eq!(item.ticket_priority, "high");
+        assert_eq!(item.ticket_assignee.as_deref(), Some("dependency-owner"));
+        assert_eq!(
+            item.owner_route.as_ref().map(|route| route.source.as_str()),
+            Some("template_rule")
+        );
         assert_eq!(item.status, "open");
 
         let invalid_source_key_row = RunbookRiskAlertTicketLinkRow {
@@ -5157,6 +5369,8 @@ mod tests {
             ticket_no: "TKT-20260310-001002".to_string(),
             ticket_status: "open".to_string(),
             ticket_priority: "medium".to_string(),
+            ticket_assignee: None,
+            ticket_metadata: json!({}),
             updated_at: now,
         };
         let err = parse_runbook_risk_alert_ticket_link_row(
@@ -5172,6 +5386,33 @@ mod tests {
     fn ranks_risk_severity_levels() {
         assert!(risk_severity_rank("critical") > risk_severity_rank("warning"));
         assert!(risk_severity_rank("warning") > risk_severity_rank("unknown"));
+    }
+
+    #[test]
+    fn parses_runbook_risk_owner_route_from_ticket_metadata() {
+        let route = parse_runbook_risk_alert_owner_route_from_ticket_metadata(
+            &json!({
+                "runbook_risk_owner_route": {
+                    "owner": "change-owner",
+                    "source": "template_rule",
+                    "reason": "Maintenance closeout gaps route to the change owner for signoff and handover."
+                }
+            }),
+            Some("change-owner"),
+        )
+        .expect("route")
+        .expect("some route");
+        assert_eq!(route.owner, "change-owner");
+        assert_eq!(route.source, "template_rule");
+
+        let fallback = parse_runbook_risk_alert_owner_route_from_ticket_metadata(
+            &json!({}),
+            Some("ops-escalation"),
+        )
+        .expect("fallback")
+        .expect("fallback route");
+        assert_eq!(fallback.owner, "ops-escalation");
+        assert_eq!(fallback.source, "ticket_assignee");
     }
 
     #[test]
