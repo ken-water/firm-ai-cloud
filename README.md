@@ -146,6 +146,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.11 release gate checklist](docs/43-v0.1.11-release-gate-checklist.md)
 - [v0.1.12 runbook risk dispatch and ownership routing plan](docs/44-v0.1.12-runbook-risk-dispatch-routing-plan.md)
 - [v0.1.12 release gate checklist](docs/45-v0.1.12-release-gate-checklist.md)
+- [v0.1.13 owner directory and notification readiness plan](docs/46-v0.1.13-owner-directory-readiness-plan.md)
+- [v0.1.13 release gate checklist](docs/47-v0.1.13-release-gate-checklist.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
