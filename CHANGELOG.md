@@ -18,6 +18,39 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.17] - 2026-03-16
+
+### Added
+
+- v0.1.17 planning and release-gate documentation:
+  - `docs/54-v0.1.17-first-value-activation-plan.md`
+  - `docs/55-v0.1.17-release-gate-checklist.md`
+- v0.1.17 issue baseline and closure track: GitHub issues `#205` to `#210`.
+- First-value activation APIs:
+  - `GET /api/v1/setup/activation`
+  - `GET /api/v1/setup/activation/starter-templates`
+  - `POST /api/v1/setup/activation/feedback`
+- Activation feedback persistence:
+  - migration: `202603160001_create_setup_activation_feedback.sql`
+- v0.1.17 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.17-activation-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- Setup wizard now exposes a first-value activation workspace with:
+  - overall activation status,
+  - recommended next step,
+  - recommended SMB starter profile,
+  - inline pilot feedback capture.
+- SMB starter templates are now productized as opinionated activation-time guidance instead of leaving new users on a blank configuration path.
+- Setup-related mutations now refresh activation status so the operator can see progress toward first value immediately after applying templates or profiles.
+
+### Fixed
+
+- New SMB operators no longer need to infer the initial rollout baseline from scattered setup and cockpit pages.
+- Pilot friction can now be captured in structured product-owned form instead of being lost in ad hoc support conversations.
+
 ## [0.1.16] - 2026-03-15
 
 ### Added
