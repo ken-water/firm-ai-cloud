@@ -26,11 +26,16 @@ const CHECKLIST_STATUS_PENDING: &str = "pending";
 const CHECKLIST_STATUS_COMPLETED: &str = "completed";
 const CHECKLIST_STATUS_SKIPPED: &str = "skipped";
 const MAX_CHECKLIST_NOTE_LEN: usize = 1024;
+const GO_LIVE_NOTIFICATION_EVENT: &str = "runbook_risk.ticket_linked";
+const GO_LIVE_DEFAULT_TICKET_POLICY_KEY: &str = "default-ticket-sla";
+const GO_LIVE_FACTORY_ESCALATION_OWNER: &str = "ops-escalation";
+const GO_LIVE_DEFAULT_EXECUTION_POLICY_KEY: &str = "global";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/cockpit/queue", get(get_daily_cockpit_queue))
         .route("/cockpit/next-actions", get(get_next_best_actions))
+        .route("/cockpit/go-live/readiness", get(get_go_live_readiness))
         .route("/cockpit/checklists", get(get_ops_checklist))
         .route(
             "/cockpit/checklists/{template_key}/complete",
@@ -73,6 +78,33 @@ struct NextBestActionResponse {
     shift_date: String,
     total: usize,
     items: Vec<NextBestActionItem>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct GoLiveReadinessDomainItem {
+    domain_key: String,
+    name: String,
+    status: String,
+    summary: String,
+    reason: String,
+    evidence: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct GoLiveReadinessSummary {
+    total: usize,
+    ready: usize,
+    warning: usize,
+    blocking: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct GoLiveReadinessResponse {
+    generated_at: DateTime<Utc>,
+    overall_status: String,
+    recommended_next_domain: Option<String>,
+    summary: GoLiveReadinessSummary,
+    domains: Vec<GoLiveReadinessDomainItem>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -221,6 +253,42 @@ struct EscalationWindowRow {
     near_low_minutes: i32,
     breach_low_minutes: i32,
     escalate_to_assignee: String,
+}
+
+#[derive(Debug, FromRow)]
+struct MonitoringGoLiveSummaryRow {
+    enabled_total: i64,
+    reachable_total: i64,
+    unreachable_total: i64,
+    unknown_probe_total: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct NotificationGoLiveSummaryRow {
+    enabled_channel_count: i64,
+    enabled_subscription_count: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct TicketFollowupGoLiveRow {
+    is_enabled: bool,
+    escalate_to_assignee: String,
+}
+
+#[derive(Debug, FromRow)]
+struct BackupGoLiveSummaryRow {
+    total_policies: i64,
+    stale_backup_policies: i64,
+    drill_gap_policies: i64,
+    closed_evidence_count: i64,
+    open_evidence_count: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct RunbookExecutionGoLiveRow {
+    mode: String,
+    live_template_count: i32,
+    preset_count: i64,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -447,6 +515,23 @@ async fn get_next_best_actions(
         shift_date: shift_date.to_string(),
         total: items.len(),
         items,
+    }))
+}
+
+async fn get_go_live_readiness(
+    State(state): State<AppState>,
+) -> AppResult<Json<GoLiveReadinessResponse>> {
+    let domains = collect_go_live_readiness_domains(&state).await?;
+    let summary = summarize_go_live_readiness(&domains);
+    let overall_status = derive_go_live_overall_status(&summary);
+    let recommended_next_domain = select_next_go_live_domain(&domains);
+
+    Ok(Json(GoLiveReadinessResponse {
+        generated_at: Utc::now(),
+        overall_status,
+        recommended_next_domain,
+        summary,
+        domains,
     }))
 }
 
@@ -1367,6 +1452,477 @@ fn escalation_threshold_for_priority(window: &EscalationWindowRow, priority: &st
     }
 }
 
+async fn collect_go_live_readiness_domains(
+    state: &AppState,
+) -> AppResult<Vec<GoLiveReadinessDomainItem>> {
+    Ok(vec![
+        build_authentication_go_live_domain(state).await?,
+        build_monitoring_go_live_domain(&state.db).await?,
+        build_operator_notifications_go_live_domain(&state.db).await?,
+        build_ticket_followup_go_live_domain(&state.db).await?,
+        build_backup_restore_go_live_domain(&state.db).await?,
+        build_runbook_execution_go_live_domain(&state.db).await?,
+    ])
+}
+
+async fn build_authentication_go_live_domain(
+    state: &AppState,
+) -> AppResult<GoLiveReadinessDomainItem> {
+    let oidc_ready = state.oidc.enabled
+        && state.oidc.redirect_uri.is_some()
+        && (state.oidc.dev_mode_enabled
+            || (state.oidc.authorization_endpoint.is_some()
+                && state.oidc.token_endpoint.is_some()
+                && state.oidc.userinfo_endpoint.is_some()
+                && state.oidc.client_id.is_some()
+                && state.oidc.client_secret.is_some()));
+    let local_fallback_mode = state.local_auth.fallback_mode.as_str();
+    let break_glass_count = state.local_auth.break_glass_users.len();
+    let local_ready = match local_fallback_mode {
+        "allow_all" => true,
+        "break_glass_only" => break_glass_count > 0,
+        "disabled" => false,
+        _ => false,
+    };
+
+    let (status, summary, reason) = if !state.rbac_enabled {
+        (
+            "blocking",
+            "RBAC guard is disabled.".to_string(),
+            "Protected routes run without permission checks, which is unsafe for production go-live."
+                .to_string(),
+        )
+    } else if state.oidc.enabled && !oidc_ready {
+        (
+            "blocking",
+            "OIDC is enabled but incomplete.".to_string(),
+            "Enterprise SSO is partially configured and may fail during operator login."
+                .to_string(),
+        )
+    } else if oidc_ready {
+        (
+            "ready",
+            "Authentication controls are production-capable.".to_string(),
+            "RBAC is enabled and OIDC configuration is complete for the current mode."
+                .to_string(),
+        )
+    } else if local_ready {
+        (
+            "warning",
+            "Platform relies on local/header fallback authentication.".to_string(),
+            format!(
+                "RBAC is enabled, but enterprise SSO is not complete; fallback mode is '{}'.",
+                local_fallback_mode
+            ),
+        )
+    } else {
+        (
+            "blocking",
+            "No safe operator login path is configured.".to_string(),
+            "OIDC is not ready and local fallback is disabled or missing break-glass users."
+                .to_string(),
+        )
+    };
+
+    Ok(GoLiveReadinessDomainItem {
+        domain_key: "authentication".to_string(),
+        name: "Authentication readiness".to_string(),
+        status: status.to_string(),
+        summary,
+        reason,
+        evidence: json!({
+            "rbac_enabled": state.rbac_enabled,
+            "oidc_enabled": state.oidc.enabled,
+            "oidc_ready": oidc_ready,
+            "oidc_dev_mode_enabled": state.oidc.dev_mode_enabled,
+            "local_fallback_mode": local_fallback_mode,
+            "break_glass_user_count": break_glass_count,
+        }),
+    })
+}
+
+async fn build_monitoring_go_live_domain(
+    db: &sqlx::PgPool,
+) -> AppResult<GoLiveReadinessDomainItem> {
+    let row: MonitoringGoLiveSummaryRow = sqlx::query_as(
+        "SELECT
+            COUNT(*) FILTER (WHERE is_enabled = TRUE) AS enabled_total,
+            COUNT(*) FILTER (WHERE is_enabled = TRUE AND last_probe_status = 'reachable') AS reachable_total,
+            COUNT(*) FILTER (WHERE is_enabled = TRUE AND last_probe_status = 'unreachable') AS unreachable_total,
+            COUNT(*) FILTER (WHERE is_enabled = TRUE AND (last_probe_status IS NULL OR last_probe_status NOT IN ('reachable', 'unreachable'))) AS unknown_probe_total
+         FROM monitoring_sources",
+    )
+    .fetch_one(db)
+    .await?;
+
+    let (status, summary, reason) = if row.enabled_total <= 0 {
+        (
+            "blocking",
+            "No enabled monitoring source is configured.".to_string(),
+            "Operators cannot rely on monitoring-driven workflows until at least one source is enabled."
+                .to_string(),
+        )
+    } else if row.reachable_total <= 0 {
+        (
+            "blocking",
+            "Monitoring sources are enabled but not proven reachable.".to_string(),
+            "No enabled monitoring source has a successful probe result.".to_string(),
+        )
+    } else if row.unreachable_total > 0 || row.unknown_probe_total > 0 {
+        (
+            "warning",
+            "Some monitoring coverage is degraded.".to_string(),
+            "At least one enabled source is unreachable or has not completed a probe yet."
+                .to_string(),
+        )
+    } else {
+        (
+            "ready",
+            "Monitoring source coverage is healthy.".to_string(),
+            "Enabled monitoring sources have successful probe results.".to_string(),
+        )
+    };
+
+    Ok(GoLiveReadinessDomainItem {
+        domain_key: "monitoring_sources".to_string(),
+        name: "Monitoring source readiness".to_string(),
+        status: status.to_string(),
+        summary,
+        reason,
+        evidence: json!({
+            "enabled_total": row.enabled_total,
+            "reachable_total": row.reachable_total,
+            "unreachable_total": row.unreachable_total,
+            "unknown_probe_total": row.unknown_probe_total,
+        }),
+    })
+}
+
+async fn build_operator_notifications_go_live_domain(
+    db: &sqlx::PgPool,
+) -> AppResult<GoLiveReadinessDomainItem> {
+    let template_enabled: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM discovery_notification_templates
+            WHERE event_type = $1
+              AND is_enabled = TRUE
+        )",
+    )
+    .bind(GO_LIVE_NOTIFICATION_EVENT)
+    .fetch_one(db)
+    .await?;
+
+    let row: NotificationGoLiveSummaryRow = sqlx::query_as(
+        "SELECT
+            (SELECT COUNT(*) FROM discovery_notification_channels WHERE is_enabled = TRUE) AS enabled_channel_count,
+            (
+                SELECT COUNT(*)
+                FROM discovery_notification_subscriptions
+                WHERE event_type = $1
+                  AND is_enabled = TRUE
+            ) AS enabled_subscription_count",
+    )
+    .bind(GO_LIVE_NOTIFICATION_EVENT)
+    .fetch_one(db)
+    .await?;
+
+    let (status, summary, reason) = if !template_enabled {
+        (
+            "blocking",
+            "Runbook-risk notification template is missing.".to_string(),
+            "Operator follow-up notifications cannot dispatch until the default template is enabled."
+                .to_string(),
+        )
+    } else if row.enabled_channel_count <= 0 {
+        (
+            "blocking",
+            "No enabled notification channel is configured.".to_string(),
+            "The product has nowhere to send operator follow-up notifications.".to_string(),
+        )
+    } else if row.enabled_subscription_count <= 0 {
+        (
+            "blocking",
+            "No enabled runbook-risk notification subscription exists.".to_string(),
+            "The runbook-risk follow-up event is not wired to an enabled notification channel."
+                .to_string(),
+        )
+    } else {
+        (
+            "ready",
+            "Operator notification defaults are ready.".to_string(),
+            "Template, channel, and subscription coverage exist for runbook-risk ticket follow-up."
+                .to_string(),
+        )
+    };
+
+    Ok(GoLiveReadinessDomainItem {
+        domain_key: "operator_notifications".to_string(),
+        name: "Operator notification readiness".to_string(),
+        status: status.to_string(),
+        summary,
+        reason,
+        evidence: json!({
+            "event_type": GO_LIVE_NOTIFICATION_EVENT,
+            "template_enabled": template_enabled,
+            "enabled_channel_count": row.enabled_channel_count,
+            "enabled_subscription_count": row.enabled_subscription_count,
+        }),
+    })
+}
+
+async fn build_ticket_followup_go_live_domain(
+    db: &sqlx::PgPool,
+) -> AppResult<GoLiveReadinessDomainItem> {
+    let row: Option<TicketFollowupGoLiveRow> = sqlx::query_as(
+        "SELECT is_enabled, escalate_to_assignee
+         FROM ticket_escalation_policies
+         WHERE policy_key = $1",
+    )
+    .bind(GO_LIVE_DEFAULT_TICKET_POLICY_KEY)
+    .fetch_optional(db)
+    .await?;
+
+    let (status, summary, reason, evidence) = match row {
+        None => (
+            "blocking",
+            "Default ticket follow-up policy is missing.".to_string(),
+            "Operators do not have a deterministic escalation owner for follow-up tickets."
+                .to_string(),
+            json!({
+                "policy_key": GO_LIVE_DEFAULT_TICKET_POLICY_KEY,
+                "policy_exists": false,
+            }),
+        ),
+        Some(row) if !row.is_enabled => (
+            "blocking",
+            "Default ticket follow-up policy is disabled.".to_string(),
+            "Ticket escalation rules exist but are not active.".to_string(),
+            json!({
+                "policy_key": GO_LIVE_DEFAULT_TICKET_POLICY_KEY,
+                "policy_exists": true,
+                "is_enabled": row.is_enabled,
+                "escalate_to_assignee": row.escalate_to_assignee,
+            }),
+        ),
+        Some(row) if row.escalate_to_assignee == GO_LIVE_FACTORY_ESCALATION_OWNER => (
+            "blocking",
+            "Default ticket follow-up owner still uses the factory placeholder.".to_string(),
+            "Go-live requires an explicit enterprise escalation owner instead of the factory default."
+                .to_string(),
+            json!({
+                "policy_key": GO_LIVE_DEFAULT_TICKET_POLICY_KEY,
+                "policy_exists": true,
+                "is_enabled": row.is_enabled,
+                "escalate_to_assignee": row.escalate_to_assignee,
+            }),
+        ),
+        Some(row) => (
+            "ready",
+            "Default ticket follow-up routing is ready.".to_string(),
+            "A concrete escalation owner is configured for default ticket follow-up."
+                .to_string(),
+            json!({
+                "policy_key": GO_LIVE_DEFAULT_TICKET_POLICY_KEY,
+                "policy_exists": true,
+                "is_enabled": row.is_enabled,
+                "escalate_to_assignee": row.escalate_to_assignee,
+            }),
+        ),
+    };
+
+    Ok(GoLiveReadinessDomainItem {
+        domain_key: "ticket_followup".to_string(),
+        name: "Ticket follow-up readiness".to_string(),
+        status: status.to_string(),
+        summary,
+        reason,
+        evidence,
+    })
+}
+
+async fn build_backup_restore_go_live_domain(
+    db: &sqlx::PgPool,
+) -> AppResult<GoLiveReadinessDomainItem> {
+    let row: BackupGoLiveSummaryRow = sqlx::query_as(
+        "SELECT
+            COUNT(*) AS total_policies,
+            COUNT(*) FILTER (WHERE last_backup_status IN ('never', 'failed')) AS stale_backup_policies,
+            COUNT(*) FILTER (WHERE drill_enabled = TRUE AND last_drill_status IN ('never', 'failed')) AS drill_gap_policies,
+            (SELECT COUNT(*) FROM ops_backup_restore_evidence WHERE closure_status = 'closed') AS closed_evidence_count,
+            (SELECT COUNT(*) FROM ops_backup_restore_evidence WHERE closure_status = 'open') AS open_evidence_count
+         FROM ops_backup_policies",
+    )
+    .fetch_one(db)
+    .await?;
+
+    let (status, summary, reason) = if row.total_policies <= 0 {
+        (
+            "blocking",
+            "No backup policy is configured.".to_string(),
+            "Operators do not have a baseline backup policy for go-live.".to_string(),
+        )
+    } else if row.stale_backup_policies > 0 {
+        (
+            "blocking",
+            "At least one backup policy has never succeeded or last failed.".to_string(),
+            "Go-live should not proceed until every configured backup policy has a successful recent run."
+                .to_string(),
+        )
+    } else if row.closed_evidence_count <= 0 {
+        (
+            "warning",
+            "Backup runs exist but restore evidence is still missing.".to_string(),
+            "Operators have no closed restore verification evidence proving recoverability."
+                .to_string(),
+        )
+    } else if row.drill_gap_policies > 0 || row.open_evidence_count > 0 {
+        (
+            "warning",
+            "Backup coverage exists, but drill or evidence follow-up is incomplete.".to_string(),
+            "At least one drill policy is stale or restore evidence remains open."
+                .to_string(),
+        )
+    } else {
+        (
+            "ready",
+            "Backup and restore evidence baseline is ready.".to_string(),
+            "Configured backup policies have successful runs and closed restore verification evidence."
+                .to_string(),
+        )
+    };
+
+    Ok(GoLiveReadinessDomainItem {
+        domain_key: "backup_restore".to_string(),
+        name: "Backup and restore readiness".to_string(),
+        status: status.to_string(),
+        summary,
+        reason,
+        evidence: json!({
+            "total_policies": row.total_policies,
+            "stale_backup_policies": row.stale_backup_policies,
+            "drill_gap_policies": row.drill_gap_policies,
+            "closed_evidence_count": row.closed_evidence_count,
+            "open_evidence_count": row.open_evidence_count,
+        }),
+    })
+}
+
+async fn build_runbook_execution_go_live_domain(
+    db: &sqlx::PgPool,
+) -> AppResult<GoLiveReadinessDomainItem> {
+    let row: Option<RunbookExecutionGoLiveRow> = sqlx::query_as(
+        "SELECT
+            p.mode,
+            jsonb_array_length(p.live_templates) AS live_template_count,
+            (SELECT COUNT(*) FROM ops_runbook_execution_presets) AS preset_count
+         FROM ops_runbook_execution_policies p
+         WHERE p.policy_key = $1",
+    )
+    .bind(GO_LIVE_DEFAULT_EXECUTION_POLICY_KEY)
+    .fetch_optional(db)
+    .await?;
+
+    let (status, summary, reason, evidence) = match row {
+        None => (
+            "blocking",
+            "Runbook execution policy is missing.".to_string(),
+            "Operators do not have a seeded execution policy baseline.".to_string(),
+            json!({
+                "policy_key": GO_LIVE_DEFAULT_EXECUTION_POLICY_KEY,
+                "policy_exists": false,
+            }),
+        ),
+        Some(row) if row.preset_count <= 0 => (
+            "warning",
+            "Runbook execution presets are not configured yet.".to_string(),
+            "Operators can view templates, but they do not have reusable presets for guided execution."
+                .to_string(),
+            json!({
+                "policy_key": GO_LIVE_DEFAULT_EXECUTION_POLICY_KEY,
+                "policy_exists": true,
+                "mode": row.mode,
+                "live_template_count": row.live_template_count,
+                "preset_count": row.preset_count,
+            }),
+        ),
+        Some(row) if row.mode != "hybrid_live" || row.live_template_count <= 0 => (
+            "warning",
+            "Runbook execution is limited to simulate-only or has no live-capable templates."
+                .to_string(),
+            "The platform can support guided runbooks, but production live execution is not fully enabled."
+                .to_string(),
+            json!({
+                "policy_key": GO_LIVE_DEFAULT_EXECUTION_POLICY_KEY,
+                "policy_exists": true,
+                "mode": row.mode,
+                "live_template_count": row.live_template_count,
+                "preset_count": row.preset_count,
+            }),
+        ),
+        Some(row) => (
+            "ready",
+            "Runbook execution baseline is ready.".to_string(),
+            "Operators have presets and a hybrid-live policy with live-capable templates."
+                .to_string(),
+            json!({
+                "policy_key": GO_LIVE_DEFAULT_EXECUTION_POLICY_KEY,
+                "policy_exists": true,
+                "mode": row.mode,
+                "live_template_count": row.live_template_count,
+                "preset_count": row.preset_count,
+            }),
+        ),
+    };
+
+    Ok(GoLiveReadinessDomainItem {
+        domain_key: "runbook_execution".to_string(),
+        name: "Runbook execution readiness".to_string(),
+        status: status.to_string(),
+        summary,
+        reason,
+        evidence,
+    })
+}
+
+fn summarize_go_live_readiness(domains: &[GoLiveReadinessDomainItem]) -> GoLiveReadinessSummary {
+    let mut summary = GoLiveReadinessSummary {
+        total: domains.len(),
+        ready: 0,
+        warning: 0,
+        blocking: 0,
+    };
+
+    for item in domains {
+        match item.status.as_str() {
+            "ready" => summary.ready += 1,
+            "warning" => summary.warning += 1,
+            "blocking" => summary.blocking += 1,
+            _ => {}
+        }
+    }
+
+    summary
+}
+
+fn derive_go_live_overall_status(summary: &GoLiveReadinessSummary) -> String {
+    if summary.blocking > 0 {
+        "blocking".to_string()
+    } else if summary.warning > 0 {
+        "warning".to_string()
+    } else {
+        "ready".to_string()
+    }
+}
+
+fn select_next_go_live_domain(domains: &[GoLiveReadinessDomainItem]) -> Option<String> {
+    domains
+        .iter()
+        .find(|item| item.status == "blocking")
+        .or_else(|| domains.iter().find(|item| item.status == "warning"))
+        .map(|item| item.domain_key.clone())
+}
+
 fn sort_next_best_actions(items: &mut [NextBestActionItem]) {
     items.sort_by(|left, right| {
         right
@@ -1819,12 +2375,15 @@ fn trim_optional(value: Option<String>, max_len: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use chrono::{Datelike, Duration, NaiveDate, Utc};
+    use serde_json::json;
 
     use super::{
-        DailyCockpitAction, DailyCockpitQueueItem, MAX_CHECKLIST_NOTE_LEN, NextBestActionItem,
-        OpsChecklistEntryRow, OpsChecklistTemplateRow, build_ops_checklist_response,
+        DailyCockpitAction, DailyCockpitQueueItem, GoLiveReadinessDomainItem,
+        MAX_CHECKLIST_NOTE_LEN, NextBestActionItem, OpsChecklistEntryRow,
+        OpsChecklistTemplateRow, build_ops_checklist_response, derive_go_live_overall_status,
         normalize_optional_note, parse_optional_date, score_alert_item, score_ticket_item,
-        sort_daily_queue_items, sort_next_best_actions,
+        select_next_go_live_domain, sort_daily_queue_items, sort_next_best_actions,
+        summarize_go_live_readiness,
     };
 
     fn test_item(key: &str, score: i32, observed_at_offset_minutes: i64) -> DailyCockpitQueueItem {
@@ -1949,6 +2508,81 @@ mod tests {
                 "incident:11".to_string(),
                 "handover:item-2".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn go_live_summary_counts_statuses_and_derives_overall() {
+        let summary = summarize_go_live_readiness(&[
+            GoLiveReadinessDomainItem {
+                domain_key: "authentication".to_string(),
+                name: "Authentication".to_string(),
+                status: "ready".to_string(),
+                summary: "ok".to_string(),
+                reason: "ok".to_string(),
+                evidence: json!({}),
+            },
+            GoLiveReadinessDomainItem {
+                domain_key: "monitoring_sources".to_string(),
+                name: "Monitoring".to_string(),
+                status: "warning".to_string(),
+                summary: "warn".to_string(),
+                reason: "warn".to_string(),
+                evidence: json!({}),
+            },
+            GoLiveReadinessDomainItem {
+                domain_key: "backup_restore".to_string(),
+                name: "Backup".to_string(),
+                status: "blocking".to_string(),
+                summary: "block".to_string(),
+                reason: "block".to_string(),
+                evidence: json!({}),
+            },
+        ]);
+
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.ready, 1);
+        assert_eq!(summary.warning, 1);
+        assert_eq!(summary.blocking, 1);
+        assert_eq!(derive_go_live_overall_status(&summary), "blocking");
+    }
+
+    #[test]
+    fn selects_first_blocking_or_warning_go_live_domain() {
+        let domains = vec![
+            GoLiveReadinessDomainItem {
+                domain_key: "authentication".to_string(),
+                name: "Authentication".to_string(),
+                status: "ready".to_string(),
+                summary: "ok".to_string(),
+                reason: "ok".to_string(),
+                evidence: json!({}),
+            },
+            GoLiveReadinessDomainItem {
+                domain_key: "monitoring_sources".to_string(),
+                name: "Monitoring".to_string(),
+                status: "warning".to_string(),
+                summary: "warn".to_string(),
+                reason: "warn".to_string(),
+                evidence: json!({}),
+            },
+            GoLiveReadinessDomainItem {
+                domain_key: "backup_restore".to_string(),
+                name: "Backup".to_string(),
+                status: "blocking".to_string(),
+                summary: "block".to_string(),
+                reason: "block".to_string(),
+                evidence: json!({}),
+            },
+        ];
+
+        assert_eq!(
+            select_next_go_live_domain(&domains),
+            Some("backup_restore".to_string())
+        );
+        assert_eq!(
+            select_next_go_live_domain(&domains[..2]),
+            Some("monitoring_sources".to_string())
         );
     }
 
