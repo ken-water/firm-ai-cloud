@@ -69,6 +69,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     runbookRiskOwnerRoutingRules,
     runbookRiskOwnerReadiness,
     runbookRiskOwnerRepairPlan,
+    integrationBootstrapCatalog,
+    integrationBootstrapDrafts,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
     selectedRunbookPresetId,
@@ -107,6 +109,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadRunbookRiskOwnerRoutingRules,
     loadRunbookRiskOwnerReadiness,
     loadRunbookRiskOwnerRepairPlan,
+    loadIntegrationBootstrapCatalog,
+    applyIntegrationBootstrap,
     applyRunbookRiskOwnerReadinessRepair,
     createRunbookRiskAlertTicket,
     loadBackupPolicyRuns,
@@ -157,8 +161,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingRunbookRiskOwnerRoutingRules,
     loadingRunbookRiskOwnerReadiness,
     loadingRunbookRiskOwnerRepairPlan,
+    loadingIntegrationBootstrapCatalog,
     runningRunbookRiskTicketTemplateKey,
     runningRunbookRiskOwnerRepairKey,
+    runningIntegrationBootstrapKey,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,
@@ -230,6 +236,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setRunbookPreflightDraft,
     setRunbookPresetDraft,
     setRunbookEvidenceDraft,
+    setIntegrationBootstrapDrafts,
     setRunbookRiskOwnerDirectory,
     setRunbookRiskOwnerRoutingRules,
     setMenuAxis,
@@ -1287,6 +1294,137 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                         </p>
                       )}
                     </>
+                  )}
+                </div>
+
+                <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                  <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Integration bootstrap workspace</h4>
+                  <div className="toolbar-row" style={{ marginBottom: "0.45rem" }}>
+                    <button onClick={() => void loadIntegrationBootstrapCatalog()}>
+                      {loadingIntegrationBootstrapCatalog ? t("cmdb.actions.loading") : "Refresh integration catalog"}
+                    </button>
+                    {integrationBootstrapCatalog?.recommended_next_key && (
+                      <span className="inline-note">
+                        recommended_next={integrationBootstrapCatalog.recommended_next_key}
+                      </span>
+                    )}
+                  </div>
+                  {loadingIntegrationBootstrapCatalog ? (
+                    <p>{t("cmdb.actions.loading")}</p>
+                  ) : !integrationBootstrapCatalog || (integrationBootstrapCatalog.items ?? []).length === 0 ? (
+                    <p>No integration bootstrap data available.</p>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ borderCollapse: "collapse", minWidth: "1420px", width: "100%" }}>
+                        <thead>
+                          <tr>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Integration</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Gap reason</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Suggested inputs</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Evidence</th>
+                            <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(integrationBootstrapCatalog.items ?? []).map((item: any) => {
+                            const draft = integrationBootstrapDrafts?.[item.integration_key] ?? {};
+                            const running = runningIntegrationBootstrapKey === item.integration_key;
+                            return (
+                              <tr key={`integration-bootstrap-${item.integration_key}`}>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                                  <strong>{item.name}</strong>
+                                  <div className="inline-note">{item.integration_key}</div>
+                                  <div className="inline-note">order={item.recommended_apply_order}</div>
+                                  <div className="inline-note">{item.summary}</div>
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                                  {item.status}
+                                  <div className="inline-note">auto_applicable={String(item.auto_applicable)}</div>
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                                  {item.gap_reason}
+                                  <div className="inline-note">
+                                    required_inputs={(item.required_inputs ?? []).join(",") || "none"}
+                                  </div>
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top", minWidth: "320px" }}>
+                                  {item.integration_key === "operator_notifications" ? (
+                                    <div style={{ display: "grid", gap: "0.35rem" }}>
+                                      <input
+                                        value={draft.channel_name ?? ""}
+                                        readOnly={!canWriteCmdb}
+                                        placeholder="channel name"
+                                        onChange={(event) => setIntegrationBootstrapDrafts((prev: any) => ({
+                                          ...prev,
+                                          [item.integration_key]: {
+                                            ...(prev[item.integration_key] ?? {}),
+                                            channel_name: event.target.value
+                                          }
+                                        }))}
+                                      />
+                                      <select
+                                        value={draft.channel_type ?? "email"}
+                                        disabled={!canWriteCmdb}
+                                        onChange={(event) => setIntegrationBootstrapDrafts((prev: any) => ({
+                                          ...prev,
+                                          [item.integration_key]: {
+                                            ...(prev[item.integration_key] ?? {}),
+                                            channel_type: event.target.value
+                                          }
+                                        }))}
+                                      >
+                                        <option value="email">email</option>
+                                        <option value="webhook">webhook</option>
+                                      </select>
+                                      <input
+                                        value={draft.target ?? ""}
+                                        readOnly={!canWriteCmdb}
+                                        placeholder="ops@example.com / https://..."
+                                        onChange={(event) => setIntegrationBootstrapDrafts((prev: any) => ({
+                                          ...prev,
+                                          [item.integration_key]: {
+                                            ...(prev[item.integration_key] ?? {}),
+                                            target: event.target.value
+                                          }
+                                        }))}
+                                      />
+                                    </div>
+                                  ) : (
+                                    <input
+                                      value={draft.escalation_owner ?? ""}
+                                      readOnly={!canWriteCmdb}
+                                      placeholder="escalation owner"
+                                      onChange={(event) => setIntegrationBootstrapDrafts((prev: any) => ({
+                                        ...prev,
+                                        [item.integration_key]: {
+                                          ...(prev[item.integration_key] ?? {}),
+                                          escalation_owner: event.target.value
+                                        }
+                                      }))}
+                                    />
+                                  )}
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: "0.8rem" }}>
+                                    {JSON.stringify(item.evidence ?? {}, null, 2)}
+                                  </pre>
+                                </td>
+                                <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                                  {canWriteCmdb ? (
+                                    <button onClick={() => void applyIntegrationBootstrap(item.integration_key)} disabled={running}>
+                                      {running ? t("cmdb.actions.loading") : "Apply bootstrap"}
+                                    </button>
+                                  ) : (
+                                    <span>read-only</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
 

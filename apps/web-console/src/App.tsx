@@ -1640,6 +1640,48 @@ type ApplyRunbookRiskOwnerReadinessRepairResponse = {
   readiness_after: RunbookRiskOwnerReadinessItem;
 };
 
+type OperatorIntegrationBootstrapCatalogItem = {
+  integration_key: "operator_notifications" | "ticket_followup_policy";
+  name: string;
+  category: string;
+  summary: string;
+  status: "ready" | "action_required";
+  recommended_apply_order: number;
+  auto_applicable: boolean;
+  gap_reason: string;
+  required_inputs: string[];
+  default_payload: {
+    channel_name?: string | null;
+    channel_type?: "email" | "webhook" | null;
+    target?: string | null;
+    escalation_owner?: string | null;
+  };
+  evidence: Record<string, unknown>;
+};
+
+type OperatorIntegrationBootstrapCatalogResponse = {
+  generated_at: string;
+  total: number;
+  recommended_next_key: string | null;
+  items: OperatorIntegrationBootstrapCatalogItem[];
+};
+
+type ApplyOperatorIntegrationBootstrapResponse = {
+  applied: boolean;
+  integration_key: string;
+  status_before: string;
+  status_after: string;
+  results: Array<{
+    resource_kind: string;
+    operation: string;
+    resource_id: number | null;
+    resource_name: string | null;
+    resource_target: string | null;
+    detail: string;
+  }>;
+  item_after: OperatorIntegrationBootstrapCatalogItem;
+};
+
 type RunbookExecutionPresetItem = {
   id: number;
   template_key: string;
@@ -2669,6 +2711,19 @@ function buildRunbookRiskOwnerRepairKey(templateKey: string, ownerKey: string | 
   return `${templateKey}::${ownerKey ?? "none"}::${readinessStatus}`;
 }
 
+function buildIntegrationBootstrapDrafts(payload: OperatorIntegrationBootstrapCatalogResponse | null) {
+  const drafts: Record<string, Record<string, string>> = {};
+  for (const item of payload?.items ?? []) {
+    drafts[item.integration_key] = {
+      channel_name: item.default_payload.channel_name ?? "",
+      channel_type: item.default_payload.channel_type ?? "email",
+      target: item.default_payload.target ?? "",
+      escalation_owner: item.default_payload.escalation_owner ?? ""
+    };
+  }
+  return drafts;
+}
+
 export function App() {
   const { t, i18n } = useTranslation();
   const currentLanguage = normalizeUiLanguage(i18n.resolvedLanguage ?? i18n.language);
@@ -2838,6 +2893,10 @@ export function App() {
   const [runbookRiskOwnerReadiness, setRunbookRiskOwnerReadiness] = useState<RunbookRiskOwnerReadinessResponse | null>(null);
   const [runbookRiskOwnerRepairPlan, setRunbookRiskOwnerRepairPlan] =
     useState<RunbookRiskOwnerReadinessRepairPlanResponse | null>(null);
+  const [integrationBootstrapCatalog, setIntegrationBootstrapCatalog] =
+    useState<OperatorIntegrationBootstrapCatalogResponse | null>(null);
+  const [integrationBootstrapDrafts, setIntegrationBootstrapDrafts] =
+    useState<Record<string, Record<string, string>>>({});
   const [selectedRunbookTemplateKey, setSelectedRunbookTemplateKey] = useState("");
   const [selectedRunbookPresetId, setSelectedRunbookPresetId] = useState("");
   const [runbookExecutionMode, setRunbookExecutionMode] = useState<"simulate" | "live">("simulate");
@@ -2906,8 +2965,10 @@ export function App() {
   const [loadingRunbookRiskOwnerRoutingRules, setLoadingRunbookRiskOwnerRoutingRules] = useState(false);
   const [loadingRunbookRiskOwnerReadiness, setLoadingRunbookRiskOwnerReadiness] = useState(false);
   const [loadingRunbookRiskOwnerRepairPlan, setLoadingRunbookRiskOwnerRepairPlan] = useState(false);
+  const [loadingIntegrationBootstrapCatalog, setLoadingIntegrationBootstrapCatalog] = useState(false);
   const [runningRunbookRiskTicketTemplateKey, setRunningRunbookRiskTicketTemplateKey] = useState<string | null>(null);
   const [runningRunbookRiskOwnerRepairKey, setRunningRunbookRiskOwnerRepairKey] = useState<string | null>(null);
+  const [runningIntegrationBootstrapKey, setRunningIntegrationBootstrapKey] = useState<string | null>(null);
   const [executingRunbookTemplate, setExecutingRunbookTemplate] = useState(false);
   const [savingRunbookPreset, setSavingRunbookPreset] = useState(false);
   const [savingRunbookExecutionPolicy, setSavingRunbookExecutionPolicy] = useState(false);
@@ -4193,6 +4254,84 @@ export function App() {
     }
   }, []);
 
+  const loadIntegrationBootstrapCatalog = useCallback(async () => {
+    setLoadingIntegrationBootstrapCatalog(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/integrations/bootstrap`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: OperatorIntegrationBootstrapCatalogResponse = await response.json();
+      setIntegrationBootstrapCatalog(payload);
+      setIntegrationBootstrapDrafts((prev) => ({
+        ...buildIntegrationBootstrapDrafts(payload),
+        ...prev
+      }));
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setIntegrationBootstrapCatalog(null);
+      return null;
+    } finally {
+      setLoadingIntegrationBootstrapCatalog(false);
+    }
+  }, []);
+
+  const applyIntegrationBootstrap = useCallback(async (integrationKey: string) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    const draft = integrationBootstrapDrafts[integrationKey] ?? {};
+    setRunningIntegrationBootstrapKey(integrationKey);
+    setRunbookNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/integrations/bootstrap/apply`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          integration_key: integrationKey,
+          channel_name: trimToNull(draft.channel_name ?? ""),
+          channel_type: trimToNull(draft.channel_type ?? ""),
+          target: trimToNull(draft.target ?? ""),
+          escalation_owner: trimToNull(draft.escalation_owner ?? "")
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: ApplyOperatorIntegrationBootstrapResponse = await response.json();
+      const resultSummary = payload.results.map((item) => `${item.resource_kind}:${item.operation}`).join(", ");
+      setRunbookNotice(
+        payload.results.length > 0
+          ? `Integration bootstrap applied for ${payload.integration_key}: ${resultSummary}.`
+          : `Integration bootstrap is already ready for ${payload.integration_key}.`
+      );
+      await Promise.all([
+        loadIntegrationBootstrapCatalog(),
+        loadRunbookRiskOwnerReadiness(),
+        loadRunbookRiskOwnerRepairPlan()
+      ]);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningIntegrationBootstrapKey(null);
+    }
+  }, [
+    canWriteCmdb,
+    integrationBootstrapDrafts,
+    loadIntegrationBootstrapCatalog,
+    loadRunbookRiskOwnerReadiness,
+    loadRunbookRiskOwnerRepairPlan,
+    t
+  ]);
+
   const applyRunbookRiskOwnerReadinessRepair = useCallback(async (
     templateKey: string,
     ownerKey: string | null
@@ -4244,6 +4383,7 @@ export function App() {
         loadRunbookRiskOwnerRoutingRules(),
         loadRunbookRiskOwnerReadiness(),
         loadRunbookRiskOwnerRepairPlan(),
+        loadIntegrationBootstrapCatalog(),
         loadRunbookRiskAlerts()
       ]);
       return payload;
@@ -4255,6 +4395,7 @@ export function App() {
     }
   }, [
     canWriteCmdb,
+    loadIntegrationBootstrapCatalog,
     loadRunbookRiskAlerts,
     loadRunbookRiskOwnerDirectory,
     loadRunbookRiskOwnerReadiness,
@@ -4422,6 +4563,7 @@ export function App() {
         loadRunbookRiskOwnerRoutingRules(),
         loadRunbookRiskOwnerReadiness(),
         loadRunbookRiskOwnerRepairPlan(),
+        loadIntegrationBootstrapCatalog(),
         loadRunbookRiskAlerts()
       ]);
       return payload.items;
@@ -4433,6 +4575,7 @@ export function App() {
     }
   }, [
     canWriteCmdb,
+    loadIntegrationBootstrapCatalog,
     loadRunbookRiskAlerts,
     loadRunbookRiskOwnerReadiness,
     loadRunbookRiskOwnerRepairPlan,
@@ -4478,7 +4621,12 @@ export function App() {
       const payload: RunbookRiskOwnerRoutingRulesResponse = await response.json();
       setRunbookRiskOwnerRoutingRules(payload.items);
       setRunbookNotice(`Runbook risk owner routing rules updated: ${payload.total} rules.`);
-      await Promise.all([loadRunbookRiskOwnerReadiness(), loadRunbookRiskOwnerRepairPlan(), loadRunbookRiskAlerts()]);
+      await Promise.all([
+        loadRunbookRiskOwnerReadiness(),
+        loadRunbookRiskOwnerRepairPlan(),
+        loadIntegrationBootstrapCatalog(),
+        loadRunbookRiskAlerts()
+      ]);
       return payload.items;
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
@@ -4488,6 +4636,7 @@ export function App() {
     }
   }, [
     canWriteCmdb,
+    loadIntegrationBootstrapCatalog,
     loadRunbookRiskAlerts,
     loadRunbookRiskOwnerReadiness,
     loadRunbookRiskOwnerRepairPlan,
@@ -5171,6 +5320,10 @@ export function App() {
   useEffect(() => {
     void loadRunbookRiskOwnerRepairPlan();
   }, [loadRunbookRiskOwnerRepairPlan]);
+
+  useEffect(() => {
+    void loadIntegrationBootstrapCatalog();
+  }, [loadIntegrationBootstrapCatalog]);
 
   const loadBackupPolicies = useCallback(async () => {
     setLoadingBackupPolicies(true);
@@ -6243,6 +6396,7 @@ export function App() {
       loadRunbookRiskOwnerRoutingRules(),
       loadRunbookRiskOwnerReadiness(),
       loadRunbookRiskOwnerRepairPlan(),
+      loadIntegrationBootstrapCatalog(),
       loadBackupPolicies(),
       loadBackupPolicyRuns(),
       loadBackupRestoreEvidence(),
@@ -11189,6 +11343,8 @@ export function App() {
     runbookRiskOwnerRoutingRules,
     runbookRiskOwnerReadiness,
     runbookRiskOwnerRepairPlan,
+    integrationBootstrapCatalog,
+    integrationBootstrapDrafts,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
     selectedRunbookPresetId,
@@ -11225,6 +11381,8 @@ export function App() {
     loadRunbookRiskOwnerRoutingRules,
     loadRunbookRiskOwnerReadiness,
     loadRunbookRiskOwnerRepairPlan,
+    loadIntegrationBootstrapCatalog,
+    applyIntegrationBootstrap,
     applyRunbookRiskOwnerReadinessRepair,
     createRunbookRiskAlertTicket,
     loadBackupPolicyRuns,
@@ -11278,8 +11436,10 @@ export function App() {
     loadingRunbookRiskOwnerRoutingRules,
     loadingRunbookRiskOwnerReadiness,
     loadingRunbookRiskOwnerRepairPlan,
+    loadingIntegrationBootstrapCatalog,
     runningRunbookRiskTicketTemplateKey,
     runningRunbookRiskOwnerRepairKey,
+    runningIntegrationBootstrapKey,
     executingRunbookTemplate,
     savingRunbookPreset,
     savingRunbookExecutionPolicy,
@@ -11353,6 +11513,7 @@ export function App() {
     setRunbookPreflightDraft,
     setRunbookPresetDraft,
     setRunbookEvidenceDraft,
+    setIntegrationBootstrapDrafts,
     setRunbookRiskOwnerDirectory,
     setRunbookRiskOwnerRoutingRules,
     setMenuAxis,
