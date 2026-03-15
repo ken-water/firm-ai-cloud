@@ -18,6 +18,37 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.16] - 2026-03-15
+
+### Added
+
+- v0.1.16 planning and release-gate documentation:
+  - `docs/52-v0.1.16-go-live-readiness-plan.md`
+  - `docs/53-v0.1.16-release-gate-checklist.md`
+- v0.1.16 issue baseline and closure track: GitHub issues `#199` to `#204`.
+- Go-live readiness snapshot and remediation contract:
+  - `GET /api/v1/ops/cockpit/go-live/readiness`
+  - per-domain `recommended_action` metadata with deterministic action payloads
+- v0.1.16 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.16-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- Cockpit admin workflow now exposes a dedicated go-live readiness workspace with:
+  - overall readiness status,
+  - recommended next domain,
+  - per-domain evidence,
+  - inline guided actions for auto-applicable remediation paths.
+- Operator notification and ticket follow-up readiness domains now advertise reusable remediation actions that route through the existing integration bootstrap apply API.
+- Go-live readiness refresh is now wired into related owner-directory, routing, bootstrap, and repair mutations so the workspace stays current after each change.
+- v0.2.0 graduation criteria are now documented in `docs/20-v0.1x-operator-simplicity-plan.md` to define when the product can move from incremental assembly to milestone hardening.
+
+### Fixed
+
+- Operators no longer need to infer the next go-live step by correlating multiple admin pages by hand.
+- Read-only operators can inspect go-live readiness while write attempts against guided remediation actions remain blocked with RBAC enforcement.
+
 ## [0.1.15] - 2026-03-15
 
 ### Added
