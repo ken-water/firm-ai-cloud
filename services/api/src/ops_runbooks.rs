@@ -51,7 +51,12 @@ const MAX_OWNER_DISPLAY_NAME_LEN: usize = 128;
 const MAX_OWNER_REF_LEN: usize = 128;
 const MAX_NOTIFICATION_TARGET_LEN: usize = 512;
 const MAX_ROUTING_RULES: usize = 200;
+const MAX_INTEGRATION_CHANNEL_NAME_LEN: usize = 128;
+const MAX_INTEGRATION_ESCALATION_OWNER_LEN: usize = 128;
 const DEFAULT_ANALYTICS_POLICY_KEY: &str = "global";
+const DEFAULT_TICKET_ESCALATION_POLICY_KEY: &str = "default-ticket-sla";
+const DEFAULT_TICKET_ESCALATION_POLICY_NAME: &str = "Default Ticket SLA Policy";
+const DEFAULT_TICKET_ESCALATION_OWNER_FACTORY: &str = "ops-escalation";
 const DEFAULT_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT: i32 = 20;
 const MIN_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT: i32 = 1;
 const MAX_ANALYTICS_FAILURE_RATE_THRESHOLD_PERCENT: i32 = 100;
@@ -144,6 +149,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/cockpit/runbook-templates/analytics/alerts/tickets",
             post(create_runbook_risk_alert_ticket),
+        )
+        .route(
+            "/cockpit/integrations/bootstrap",
+            get(list_operator_integration_bootstrap_catalog),
+        )
+        .route(
+            "/cockpit/integrations/bootstrap/apply",
+            post(apply_operator_integration_bootstrap),
         )
         .route(
             "/cockpit/runbook-templates/analytics/failures",
@@ -756,6 +769,59 @@ struct ApplyRunbookRiskOwnerReadinessRepairResponse {
     readiness_after: RunbookRiskOwnerReadinessItem,
 }
 
+#[derive(Debug, Serialize, Clone)]
+struct OperatorIntegrationBootstrapCatalogItem {
+    integration_key: String,
+    name: String,
+    category: String,
+    summary: String,
+    status: String,
+    recommended_apply_order: i32,
+    auto_applicable: bool,
+    gap_reason: String,
+    required_inputs: Vec<String>,
+    default_payload: Value,
+    evidence: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct OperatorIntegrationBootstrapCatalogResponse {
+    generated_at: DateTime<Utc>,
+    total: usize,
+    recommended_next_key: Option<String>,
+    items: Vec<OperatorIntegrationBootstrapCatalogItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplyOperatorIntegrationBootstrapRequest {
+    integration_key: String,
+    channel_name: Option<String>,
+    channel_type: Option<String>,
+    target: Option<String>,
+    escalation_owner: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct OperatorIntegrationBootstrapApplyResult {
+    resource_kind: String,
+    operation: String,
+    resource_id: Option<i64>,
+    resource_name: Option<String>,
+    resource_target: Option<String>,
+    detail: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ApplyOperatorIntegrationBootstrapResponse {
+    applied: bool,
+    integration_key: String,
+    status_before: String,
+    status_after: String,
+    results: Vec<OperatorIntegrationBootstrapApplyResult>,
+    item_after: OperatorIntegrationBootstrapCatalogItem,
+}
+
 #[derive(Debug, Clone, FromRow)]
 struct NotificationReadinessChannelRow {
     id: i64,
@@ -793,6 +859,24 @@ struct NotificationSubscriptionStateRow {
     channel_id: i64,
     event_type: String,
     is_enabled: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, FromRow)]
+struct TicketEscalationPolicyStateRow {
+    id: i64,
+    policy_key: String,
+    name: String,
+    is_enabled: bool,
+    near_critical_minutes: i32,
+    breach_critical_minutes: i32,
+    near_high_minutes: i32,
+    breach_high_minutes: i32,
+    near_medium_minutes: i32,
+    breach_medium_minutes: i32,
+    near_low_minutes: i32,
+    breach_low_minutes: i32,
+    escalate_to_assignee: String,
 }
 
 #[derive(Debug, FromRow)]
@@ -2216,6 +2300,151 @@ async fn apply_runbook_risk_owner_readiness_repair(
     }))
 }
 
+async fn list_operator_integration_bootstrap_catalog(
+    State(state): State<AppState>,
+) -> AppResult<Json<OperatorIntegrationBootstrapCatalogResponse>> {
+    let items = collect_operator_integration_bootstrap_items(&state.db).await?;
+    let recommended_next_key = items
+        .iter()
+        .filter(|item| item.status == "action_required")
+        .min_by_key(|item| item.recommended_apply_order)
+        .map(|item| item.integration_key.clone());
+
+    Ok(Json(OperatorIntegrationBootstrapCatalogResponse {
+        generated_at: Utc::now(),
+        total: items.len(),
+        recommended_next_key,
+        items,
+    }))
+}
+
+async fn apply_operator_integration_bootstrap(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ApplyOperatorIntegrationBootstrapRequest>,
+) -> AppResult<Json<ApplyOperatorIntegrationBootstrapResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let audit_note = trim_optional(payload.note.clone(), MAX_NOTE_LEN);
+    let integration_key = normalize_operator_integration_key(payload.integration_key)?;
+    let status_before = load_operator_integration_status(&state.db, integration_key.as_str()).await?;
+
+    let mut results = Vec::new();
+    match integration_key.as_str() {
+        "operator_notifications" => {
+            let channel_name = required_trimmed(
+                "channel_name",
+                payload.channel_name.unwrap_or_else(default_operator_notification_channel_name),
+                MAX_INTEGRATION_CHANNEL_NAME_LEN,
+            )?;
+            let target = required_trimmed(
+                "target",
+                payload.target.unwrap_or_default(),
+                MAX_NOTIFICATION_TARGET_LEN,
+            )?;
+            let channel_type = normalize_operator_integration_channel_type(
+                payload.channel_type.unwrap_or_else(|| infer_notification_channel_type_from_target(&target).unwrap_or_else(|_| "email".to_string())),
+            )?;
+
+            let mut tx = state.db.begin().await?;
+            let template_result = ensure_runbook_risk_notification_template(
+                &mut tx,
+                NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED,
+            )
+            .await?;
+            let channel_result = ensure_operator_notification_channel(
+                &mut tx,
+                channel_name.as_str(),
+                channel_type.as_str(),
+                target.as_str(),
+            )
+            .await?;
+            let channel_id = channel_result.resource_id.ok_or_else(|| {
+                AppError::Validation("operator notification channel result missing resource_id".to_string())
+            })?;
+            let subscription_result = ensure_operator_notification_subscription(
+                &mut tx,
+                channel_id,
+                NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED,
+            )
+            .await?;
+            tx.commit().await?;
+
+            results.push(map_integration_bootstrap_result(template_result));
+            results.push(map_integration_bootstrap_result(channel_result));
+            results.push(map_integration_bootstrap_result(subscription_result));
+        }
+        "ticket_followup_policy" => {
+            let escalation_owner = required_trimmed(
+                "escalation_owner",
+                payload.escalation_owner.unwrap_or_default(),
+                MAX_INTEGRATION_ESCALATION_OWNER_LEN,
+            )?;
+            let mut tx = state.db.begin().await?;
+            let policy_result = ensure_default_ticket_followup_policy(
+                &mut tx,
+                escalation_owner.as_str(),
+            )
+            .await?;
+            tx.commit().await?;
+            results.push(policy_result);
+
+            write_audit_log_best_effort(
+                &state.db,
+                AuditLogWriteInput {
+                    actor: actor.clone(),
+                    action: "ops.integration.ticket_followup_policy.apply".to_string(),
+                    target_type: "ticket_escalation_policy".to_string(),
+                    target_id: results[0].resource_id.map(|id| id.to_string()),
+                    result: "success".to_string(),
+                    message: audit_note.clone(),
+                    metadata: json!({
+                        "integration_key": integration_key,
+                        "escalation_owner": escalation_owner
+                    }),
+                },
+            )
+            .await;
+        }
+        other => {
+            return Err(AppError::Validation(format!(
+                "unsupported integration_key '{}'",
+                other
+            )))
+        }
+    }
+
+    if integration_key == "operator_notifications" {
+        write_audit_log_best_effort(
+            &state.db,
+            AuditLogWriteInput {
+                actor,
+                action: "ops.integration.operator_notifications.apply".to_string(),
+                target_type: "operator_integration_bootstrap".to_string(),
+                target_id: Some(integration_key.clone()),
+                result: "success".to_string(),
+                message: audit_note,
+                metadata: json!({
+                    "integration_key": integration_key,
+                    "results": results
+                }),
+            },
+        )
+        .await;
+    }
+
+    let item_after = load_operator_integration_catalog_item(&state.db, integration_key.as_str()).await?;
+    let status_after = item_after.status.clone();
+
+    Ok(Json(ApplyOperatorIntegrationBootstrapResponse {
+        applied: !results.is_empty() && (status_before != status_after || results.iter().any(|item| item.operation != "noop")),
+        integration_key,
+        status_before,
+        status_after,
+        results: deduplicate_operator_integration_results(results),
+        item_after,
+    }))
+}
+
 async fn update_runbook_analytics_policy(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3354,6 +3583,211 @@ fn deduplicate_runbook_risk_owner_repair_results(
     deduped
 }
 
+async fn collect_operator_integration_bootstrap_items(
+    db: &sqlx::PgPool,
+) -> AppResult<Vec<OperatorIntegrationBootstrapCatalogItem>> {
+    let mut items = vec![
+        build_operator_notifications_catalog_item(db).await?,
+        build_ticket_followup_policy_catalog_item(db).await?,
+    ];
+    items.sort_by_key(|item| item.recommended_apply_order);
+    Ok(items)
+}
+
+async fn load_operator_integration_catalog_item(
+    db: &sqlx::PgPool,
+    integration_key: &str,
+) -> AppResult<OperatorIntegrationBootstrapCatalogItem> {
+    match integration_key {
+        "operator_notifications" => build_operator_notifications_catalog_item(db).await,
+        "ticket_followup_policy" => build_ticket_followup_policy_catalog_item(db).await,
+        other => Err(AppError::Validation(format!(
+            "unsupported integration_key '{}'",
+            other
+        ))),
+    }
+}
+
+async fn load_operator_integration_status(
+    db: &sqlx::PgPool,
+    integration_key: &str,
+) -> AppResult<String> {
+    Ok(load_operator_integration_catalog_item(db, integration_key)
+        .await?
+        .status)
+}
+
+async fn build_operator_notifications_catalog_item(
+    db: &sqlx::PgPool,
+) -> AppResult<OperatorIntegrationBootstrapCatalogItem> {
+    let channels = load_notification_readiness_channels(db).await?;
+    let subscriptions = load_notification_readiness_subscriptions(db).await?;
+    let template_enabled =
+        is_notification_template_enabled(db, NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED).await?;
+    let owner_directory = load_runbook_risk_owner_directory_map(db).await?;
+    let suggested_target = owner_directory
+        .values()
+        .find(|item| item.is_enabled && item.notification_target.is_some())
+        .and_then(|item| item.notification_target.clone());
+    let channel_type = suggested_target
+        .as_deref()
+        .map(infer_notification_channel_type_from_target)
+        .transpose()?
+        .unwrap_or_else(|| "email".to_string());
+
+    let enabled_channel_count = channels.iter().filter(|item| item.is_enabled).count();
+    let enabled_subscription_count = subscriptions.iter().filter(|item| item.is_enabled).count();
+    let status = if template_enabled && enabled_channel_count > 0 && enabled_subscription_count > 0 {
+        "ready"
+    } else {
+        "action_required"
+    }
+    .to_string();
+
+    let gap_reason = if status == "ready" {
+        "Notification delivery defaults are ready for runbook-risk follow-up.".to_string()
+    } else if !template_enabled {
+        "Runbook-risk notification template is missing or disabled.".to_string()
+    } else if enabled_channel_count == 0 {
+        "No enabled notification channel is configured for operator follow-up.".to_string()
+    } else {
+        "No enabled notification subscription is configured for runbook-risk follow-up."
+            .to_string()
+    };
+
+    let mut required_inputs = Vec::new();
+    if status != "ready" && suggested_target.is_none() {
+        required_inputs.push("target".to_string());
+    }
+
+    Ok(OperatorIntegrationBootstrapCatalogItem {
+        integration_key: "operator_notifications".to_string(),
+        name: "Operator notifications".to_string(),
+        category: "notifications".to_string(),
+        summary:
+            "Bootstrap the default notification path used for runbook-risk ticket follow-up."
+                .to_string(),
+        status,
+        recommended_apply_order: 10,
+        auto_applicable: true,
+        gap_reason,
+        required_inputs,
+        default_payload: json!({
+            "channel_name": default_operator_notification_channel_name(),
+            "channel_type": channel_type,
+            "target": suggested_target
+        }),
+        evidence: json!({
+            "notification_template_enabled": template_enabled,
+            "enabled_channel_count": enabled_channel_count,
+            "enabled_subscription_count": enabled_subscription_count,
+            "event_type": NOTIFICATION_EVENT_RUNBOOK_RISK_TICKET_LINKED
+        }),
+    })
+}
+
+async fn build_ticket_followup_policy_catalog_item(
+    db: &sqlx::PgPool,
+) -> AppResult<OperatorIntegrationBootstrapCatalogItem> {
+    let policy = load_default_ticket_followup_policy(db).await?;
+    let owner_directory = load_runbook_risk_owner_directory_map(db).await?;
+    let suggested_owner = owner_directory
+        .values()
+        .find(|item| item.is_enabled)
+        .map(|item| item.owner_ref.clone());
+
+    let using_factory_owner = policy.escalate_to_assignee == DEFAULT_TICKET_ESCALATION_OWNER_FACTORY;
+    let status = if policy.is_enabled && !using_factory_owner {
+        "ready"
+    } else {
+        "action_required"
+    }
+    .to_string();
+    let gap_reason = if status == "ready" {
+        "Default ticket follow-up policy is enabled with an explicit escalation owner."
+            .to_string()
+    } else if !policy.is_enabled {
+        "Default ticket follow-up policy is disabled.".to_string()
+    } else {
+        "Default ticket follow-up policy still uses the factory escalation owner."
+            .to_string()
+    };
+
+    Ok(OperatorIntegrationBootstrapCatalogItem {
+        integration_key: "ticket_followup_policy".to_string(),
+        name: "Ticket follow-up policy".to_string(),
+        category: "ticketing".to_string(),
+        summary: "Set the default escalation owner used when tickets need follow-up."
+            .to_string(),
+        status: status.clone(),
+        recommended_apply_order: 20,
+        auto_applicable: true,
+        gap_reason,
+        required_inputs: if status == "ready" {
+            Vec::new()
+        } else {
+            vec!["escalation_owner".to_string()]
+        },
+        default_payload: json!({
+            "escalation_owner": if using_factory_owner {
+                suggested_owner
+            } else {
+                Some(policy.escalate_to_assignee.clone())
+            }
+        }),
+        evidence: json!({
+            "policy_key": policy.policy_key,
+            "policy_name": policy.name,
+            "is_enabled": policy.is_enabled,
+            "escalate_to_assignee": policy.escalate_to_assignee,
+            "breach_high_minutes": policy.breach_high_minutes,
+            "breach_critical_minutes": policy.breach_critical_minutes
+        }),
+    })
+}
+
+fn map_integration_bootstrap_result(
+    item: RunbookRiskOwnerReadinessRepairResult,
+) -> OperatorIntegrationBootstrapApplyResult {
+    let resource_kind = item.resource_kind.clone();
+    OperatorIntegrationBootstrapApplyResult {
+        resource_kind,
+        operation: item.operation.clone(),
+        resource_id: item.resource_id,
+        resource_name: item.resource_name,
+        resource_target: item.resource_target,
+        detail: format!(
+            "{} {}",
+            item.resource_kind,
+            match item.operation.as_str() {
+                "created" => "created",
+                "enabled" => "enabled",
+                "reused" => "reused",
+                _ => "updated",
+            }
+        ),
+    }
+}
+
+fn deduplicate_operator_integration_results(
+    results: Vec<OperatorIntegrationBootstrapApplyResult>,
+) -> Vec<OperatorIntegrationBootstrapApplyResult> {
+    let mut deduped = Vec::new();
+    let mut seen = BTreeSet::new();
+    for item in results {
+        let key = format!(
+            "{}:{}:{}",
+            item.resource_kind,
+            item.resource_id.unwrap_or_default(),
+            item.operation
+        );
+        if seen.insert(key) {
+            deduped.push(item);
+        }
+    }
+    deduped
+}
+
 async fn ensure_runbook_risk_notification_template(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     event_type: &str,
@@ -3424,6 +3858,239 @@ async fn ensure_runbook_risk_notification_template(
         resource_name: Some(created.event_type),
         resource_target: None,
         event_type: Some(event_type.to_string()),
+    })
+}
+
+async fn ensure_operator_notification_channel(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    channel_name: &str,
+    channel_type: &str,
+    target: &str,
+) -> AppResult<RunbookRiskOwnerReadinessRepairResult> {
+    let existing: Option<NotificationChannelStateRow> = sqlx::query_as(
+        "SELECT id, name, target, is_enabled
+         FROM discovery_notification_channels
+         WHERE name = $1
+           AND channel_type = $2
+           AND target = $3
+         ORDER BY is_enabled DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(channel_name)
+    .bind(channel_type)
+    .bind(target)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    if let Some(row) = existing {
+        if row.is_enabled {
+            return Ok(RunbookRiskOwnerReadinessRepairResult {
+                resource_kind: "notification_channel".to_string(),
+                operation: "reused".to_string(),
+                resource_id: Some(row.id),
+                resource_name: Some(row.name),
+                resource_target: Some(row.target),
+                event_type: None,
+            });
+        }
+
+        let updated: NotificationChannelStateRow = sqlx::query_as(
+            "UPDATE discovery_notification_channels
+             SET is_enabled = TRUE,
+                 updated_at = NOW()
+             WHERE id = $1
+             RETURNING id, name, target, is_enabled",
+        )
+        .bind(row.id)
+        .fetch_one(&mut **tx)
+        .await?;
+
+        return Ok(RunbookRiskOwnerReadinessRepairResult {
+            resource_kind: "notification_channel".to_string(),
+            operation: "enabled".to_string(),
+            resource_id: Some(updated.id),
+            resource_name: Some(updated.name),
+            resource_target: Some(updated.target),
+            event_type: None,
+        });
+    }
+
+    let created: NotificationChannelStateRow = sqlx::query_as(
+        "INSERT INTO discovery_notification_channels (name, channel_type, target, config, is_enabled)
+         VALUES ($1, $2, $3, '{}'::jsonb, TRUE)
+         RETURNING id, name, target, is_enabled",
+    )
+    .bind(channel_name)
+    .bind(channel_type)
+    .bind(target)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    Ok(RunbookRiskOwnerReadinessRepairResult {
+        resource_kind: "notification_channel".to_string(),
+        operation: "created".to_string(),
+        resource_id: Some(created.id),
+        resource_name: Some(created.name),
+        resource_target: Some(created.target),
+        event_type: None,
+    })
+}
+
+async fn ensure_operator_notification_subscription(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    channel_id: i64,
+    event_type: &str,
+) -> AppResult<RunbookRiskOwnerReadinessRepairResult> {
+    ensure_runbook_risk_notification_subscription(tx, channel_id, event_type).await
+}
+
+async fn load_default_ticket_followup_policy(
+    db: &sqlx::PgPool,
+) -> AppResult<TicketEscalationPolicyStateRow> {
+    if let Some(existing) = sqlx::query_as(
+        "SELECT id, policy_key, name, is_enabled,
+                near_critical_minutes, breach_critical_minutes,
+                near_high_minutes, breach_high_minutes,
+                near_medium_minutes, breach_medium_minutes,
+                near_low_minutes, breach_low_minutes,
+                escalate_to_assignee
+         FROM ticket_escalation_policies
+         WHERE policy_key = $1",
+    )
+    .bind(DEFAULT_TICKET_ESCALATION_POLICY_KEY)
+    .fetch_optional(db)
+    .await?
+    {
+        return Ok(existing);
+    }
+
+    let inserted: TicketEscalationPolicyStateRow = sqlx::query_as(
+        "INSERT INTO ticket_escalation_policies (
+            policy_key, name, is_enabled,
+            near_critical_minutes, breach_critical_minutes,
+            near_high_minutes, breach_high_minutes,
+            near_medium_minutes, breach_medium_minutes,
+            near_low_minutes, breach_low_minutes,
+            escalate_to_assignee, updated_by
+         )
+         VALUES ($1, $2, TRUE, 30, 60, 60, 120, 120, 240, 240, 480, $3, 'system')
+         RETURNING id, policy_key, name, is_enabled,
+                   near_critical_minutes, breach_critical_minutes,
+                   near_high_minutes, breach_high_minutes,
+                   near_medium_minutes, breach_medium_minutes,
+                   near_low_minutes, breach_low_minutes,
+                   escalate_to_assignee",
+    )
+    .bind(DEFAULT_TICKET_ESCALATION_POLICY_KEY)
+    .bind(DEFAULT_TICKET_ESCALATION_POLICY_NAME)
+    .bind(DEFAULT_TICKET_ESCALATION_OWNER_FACTORY)
+    .fetch_one(db)
+    .await?;
+
+    Ok(inserted)
+}
+
+async fn ensure_default_ticket_followup_policy(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    escalation_owner: &str,
+) -> AppResult<OperatorIntegrationBootstrapApplyResult> {
+    let existing: Option<TicketEscalationPolicyStateRow> = sqlx::query_as(
+        "SELECT id, policy_key, name, is_enabled,
+                near_critical_minutes, breach_critical_minutes,
+                near_high_minutes, breach_high_minutes,
+                near_medium_minutes, breach_medium_minutes,
+                near_low_minutes, breach_low_minutes,
+                escalate_to_assignee
+         FROM ticket_escalation_policies
+         WHERE policy_key = $1",
+    )
+    .bind(DEFAULT_TICKET_ESCALATION_POLICY_KEY)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let operation = if let Some(row) = existing {
+        if row.is_enabled && row.escalate_to_assignee == escalation_owner {
+            return Ok(OperatorIntegrationBootstrapApplyResult {
+                resource_kind: "ticket_escalation_policy".to_string(),
+                operation: "noop".to_string(),
+                resource_id: Some(row.id),
+                resource_name: Some(row.name),
+                resource_target: Some(row.escalate_to_assignee),
+                detail: "ticket follow-up policy already matches requested escalation owner".to_string(),
+            });
+        }
+
+        let updated: TicketEscalationPolicyStateRow = sqlx::query_as(
+            "UPDATE ticket_escalation_policies
+             SET name = $2,
+                 is_enabled = TRUE,
+                 escalate_to_assignee = $3,
+                 updated_by = 'system',
+                 updated_at = NOW()
+             WHERE policy_key = $1
+             RETURNING id, policy_key, name, is_enabled,
+                       near_critical_minutes, breach_critical_minutes,
+                       near_high_minutes, breach_high_minutes,
+                       near_medium_minutes, breach_medium_minutes,
+                       near_low_minutes, breach_low_minutes,
+                       escalate_to_assignee",
+        )
+        .bind(DEFAULT_TICKET_ESCALATION_POLICY_KEY)
+        .bind(DEFAULT_TICKET_ESCALATION_POLICY_NAME)
+        .bind(escalation_owner)
+        .fetch_one(&mut **tx)
+        .await?;
+        let updated_target = updated.escalate_to_assignee.clone();
+
+        return Ok(OperatorIntegrationBootstrapApplyResult {
+            resource_kind: "ticket_escalation_policy".to_string(),
+            operation: if row.is_enabled { "updated" } else { "enabled" }.to_string(),
+            resource_id: Some(updated.id),
+            resource_name: Some(updated.name),
+            resource_target: Some(updated_target.clone()),
+            detail: format!(
+                "ticket follow-up policy routes escalations to '{}'",
+                updated_target
+            ),
+        });
+    } else {
+        "created"
+    };
+
+    let inserted: TicketEscalationPolicyStateRow = sqlx::query_as(
+        "INSERT INTO ticket_escalation_policies (
+            policy_key, name, is_enabled,
+            near_critical_minutes, breach_critical_minutes,
+            near_high_minutes, breach_high_minutes,
+            near_medium_minutes, breach_medium_minutes,
+            near_low_minutes, breach_low_minutes,
+            escalate_to_assignee, updated_by
+         )
+         VALUES ($1, $2, TRUE, 30, 60, 60, 120, 120, 240, 240, 480, $3, 'system')
+         RETURNING id, policy_key, name, is_enabled,
+                   near_critical_minutes, breach_critical_minutes,
+                   near_high_minutes, breach_high_minutes,
+                   near_medium_minutes, breach_medium_minutes,
+                   near_low_minutes, breach_low_minutes,
+                   escalate_to_assignee",
+    )
+    .bind(DEFAULT_TICKET_ESCALATION_POLICY_KEY)
+    .bind(DEFAULT_TICKET_ESCALATION_POLICY_NAME)
+    .bind(escalation_owner)
+    .fetch_one(&mut **tx)
+    .await?;
+    let inserted_target = inserted.escalate_to_assignee.clone();
+
+    Ok(OperatorIntegrationBootstrapApplyResult {
+        resource_kind: "ticket_escalation_policy".to_string(),
+        operation: operation.to_string(),
+        resource_id: Some(inserted.id),
+        resource_name: Some(inserted.name),
+        resource_target: Some(inserted_target.clone()),
+        detail: format!(
+            "ticket follow-up policy routes escalations to '{}'",
+            inserted_target
+        ),
     })
 }
 
@@ -6614,6 +7281,31 @@ fn normalize_owner_key(value: String) -> AppResult<String> {
     Ok(normalized)
 }
 
+fn normalize_operator_integration_key(value: String) -> AppResult<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "operator_notifications" | "ticket_followup_policy" => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "integration_key must be one of: operator_notifications, ticket_followup_policy"
+                .to_string(),
+        )),
+    }
+}
+
+fn normalize_operator_integration_channel_type(value: String) -> AppResult<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "email" | "webhook" => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "channel_type must be one of: email, webhook".to_string(),
+        )),
+    }
+}
+
+fn default_operator_notification_channel_name() -> String {
+    "operator-bootstrap-primary".to_string()
+}
+
 fn infer_notification_channel_type_from_target(target: &str) -> AppResult<String> {
     let trimmed = target.trim();
     if trimmed.is_empty() {
@@ -6741,8 +7433,10 @@ mod tests {
         build_runbook_risk_owner_readiness_repair_action,
         build_runbook_risk_alert_source_key, enforce_template_supports_execution_mode,
         deduplicate_runbook_risk_owner_repair_results,
+        deduplicate_operator_integration_results,
         evaluate_step_failure, first_failed_timeline_step, normalize_analytics_days,
         infer_notification_channel_type_from_target,
+        normalize_operator_integration_channel_type, normalize_operator_integration_key,
         normalize_execution_mode, normalize_live_template_keys, normalize_owner_key,
         normalize_preflight_confirmations, normalize_preset_name,
         normalize_risk_severity, normalize_runbook_params,
@@ -6753,7 +7447,7 @@ mod tests {
         parse_runbook_risk_alert_owner_route_from_ticket_metadata,
         parse_runbook_risk_alert_notification_delivery_row,
         parse_runbook_risk_alert_ticket_link_row, resolve_template_by_key,
-        RunbookRiskOwnerReadinessItem, RunbookRiskOwnerReadinessRepairResult,
+        OperatorIntegrationBootstrapApplyResult, RunbookRiskOwnerReadinessItem, RunbookRiskOwnerReadinessRepairResult,
         RunbookRiskOwnerDirectoryRow,
         risk_severity_rank,
         select_runbook_risk_owner_routing_rule,
@@ -7321,6 +8015,22 @@ mod tests {
     }
 
     #[test]
+    fn validates_operator_integration_key_and_channel_type() {
+        assert_eq!(
+            normalize_operator_integration_key(" operator_notifications ".to_string())
+                .expect("integration key"),
+            "operator_notifications"
+        );
+        assert_eq!(
+            normalize_operator_integration_channel_type("WEBHOOK".to_string())
+                .expect("channel type"),
+            "webhook"
+        );
+        assert!(normalize_operator_integration_key("invalid".to_string()).is_err());
+        assert!(normalize_operator_integration_channel_type("sms".to_string()).is_err());
+    }
+
+    #[test]
     fn deduplicates_repair_results_by_resource_and_operation() {
         let results = vec![
             RunbookRiskOwnerReadinessRepairResult {
@@ -7353,6 +8063,41 @@ mod tests {
         assert_eq!(deduped.len(), 2);
         assert_eq!(deduped[0].resource_kind, "notification_template");
         assert_eq!(deduped[1].resource_kind, "notification_subscription");
+    }
+
+    #[test]
+    fn deduplicates_operator_integration_results_by_resource_and_operation() {
+        let results = vec![
+            OperatorIntegrationBootstrapApplyResult {
+                resource_kind: "notification_channel".to_string(),
+                operation: "reused".to_string(),
+                resource_id: Some(7),
+                resource_name: Some("operator-bootstrap-primary".to_string()),
+                resource_target: Some("ops@example.com".to_string()),
+                detail: "channel reused".to_string(),
+            },
+            OperatorIntegrationBootstrapApplyResult {
+                resource_kind: "notification_channel".to_string(),
+                operation: "reused".to_string(),
+                resource_id: Some(7),
+                resource_name: Some("operator-bootstrap-primary".to_string()),
+                resource_target: Some("ops@example.com".to_string()),
+                detail: "channel reused".to_string(),
+            },
+            OperatorIntegrationBootstrapApplyResult {
+                resource_kind: "ticket_escalation_policy".to_string(),
+                operation: "updated".to_string(),
+                resource_id: Some(3),
+                resource_name: Some("Default Ticket SLA Policy".to_string()),
+                resource_target: Some("ops-owner".to_string()),
+                detail: "policy updated".to_string(),
+            },
+        ];
+
+        let deduped = deduplicate_operator_integration_results(results);
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].resource_kind, "notification_channel");
+        assert_eq!(deduped[1].resource_kind, "ticket_escalation_policy");
     }
 
     #[test]
