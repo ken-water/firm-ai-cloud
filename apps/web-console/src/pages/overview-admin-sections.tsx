@@ -71,6 +71,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     runbookRiskOwnerRepairPlan,
     integrationBootstrapCatalog,
     integrationBootstrapDrafts,
+    goLiveReadiness,
     runbookExecutionMode,
     selectedRunbookTemplateKey,
     selectedRunbookPresetId,
@@ -109,7 +110,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadRunbookRiskOwnerRoutingRules,
     loadRunbookRiskOwnerReadiness,
     loadRunbookRiskOwnerRepairPlan,
+    loadGoLiveReadiness,
     loadIntegrationBootstrapCatalog,
+    applyGoLiveAction,
     applyIntegrationBootstrap,
     applyRunbookRiskOwnerReadinessRepair,
     createRunbookRiskAlertTicket,
@@ -162,8 +165,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingRunbookRiskOwnerReadiness,
     loadingRunbookRiskOwnerRepairPlan,
     loadingIntegrationBootstrapCatalog,
+    loadingGoLiveReadiness,
     runningRunbookRiskTicketTemplateKey,
     runningRunbookRiskOwnerRepairKey,
+    runningGoLiveActionKey,
     runningIntegrationBootstrapKey,
     executingRunbookTemplate,
     savingRunbookPreset,
@@ -1293,6 +1298,113 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                           No failed step hotspot in current filter window.
                         </p>
                       )}
+                    </>
+                  )}
+                </div>
+
+                <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                  <h4 style={{ marginTop: 0, marginBottom: "0.35rem" }}>Go-live readiness workspace</h4>
+                  <div className="toolbar-row" style={{ marginBottom: "0.45rem" }}>
+                    <button onClick={() => void loadGoLiveReadiness()}>
+                      {loadingGoLiveReadiness ? t("cmdb.actions.loading") : "Refresh go-live readiness"}
+                    </button>
+                    {goLiveReadiness?.overall_status && (
+                      <span className="inline-note">overall_status={goLiveReadiness.overall_status}</span>
+                    )}
+                    {goLiveReadiness?.recommended_next_domain && (
+                      <span className="inline-note">
+                        recommended_next={goLiveReadiness.recommended_next_domain}
+                      </span>
+                    )}
+                  </div>
+                  {loadingGoLiveReadiness ? (
+                    <p>{t("cmdb.actions.loading")}</p>
+                  ) : !goLiveReadiness || (goLiveReadiness.domains ?? []).length === 0 ? (
+                    <p>No go-live readiness data available.</p>
+                  ) : (
+                    <>
+                      <div className="toolbar-row" style={{ marginBottom: "0.45rem", gap: "0.75rem", flexWrap: "wrap" }}>
+                        <span className="inline-note">domains={goLiveReadiness.summary?.total ?? 0}</span>
+                        <span className="inline-note">ready={goLiveReadiness.summary?.ready ?? 0}</span>
+                        <span className="inline-note">warning={goLiveReadiness.summary?.warning ?? 0}</span>
+                        <span className="inline-note">blocking={goLiveReadiness.summary?.blocking ?? 0}</span>
+                      </div>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ borderCollapse: "collapse", minWidth: "1540px", width: "100%" }}>
+                          <thead>
+                            <tr>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Domain</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Summary</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Reason</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Recommended action</th>
+                              <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Evidence</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(goLiveReadiness.domains ?? []).map((item: any) => {
+                              const action = item.recommended_action;
+                              const runningAction = runningGoLiveActionKey === action?.action_key;
+                              const isNext = goLiveReadiness.recommended_next_domain === item.domain_key;
+                              return (
+                                <tr key={`go-live-domain-${item.domain_key}`}>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                                    <strong>{item.name}</strong>
+                                    <div className="inline-note">{item.domain_key}</div>
+                                    {isNext && <div className="inline-note">next recommended domain</div>}
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                                    {item.status}
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                                    {item.summary}
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                                    {item.reason}
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top", minWidth: "300px" }}>
+                                    {action ? (
+                                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                                        <strong>{action.label}</strong>
+                                        <span>{action.description}</span>
+                                        <span className="inline-note">
+                                          type={action.action_type} auto={String(action.auto_applicable)} write={String(action.requires_write)}
+                                        </span>
+                                        {action.blocked_reason && (
+                                          <span className="inline-note">blocked={action.blocked_reason}</span>
+                                        )}
+                                        {action.action_type === "api" && action.auto_applicable ? (
+                                          canWriteCmdb ? (
+                                            <button
+                                              onClick={() => void applyGoLiveAction(item.domain_key, action)}
+                                              disabled={runningAction}
+                                            >
+                                              {runningAction ? t("cmdb.actions.loading") : action.label}
+                                            </button>
+                                          ) : (
+                                            <span>read-only</span>
+                                          )
+                                        ) : action.href ? (
+                                          <a href={action.href}>{action.label}</a>
+                                        ) : (
+                                          <span>manual</span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      "-"
+                                    )}
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: "0.8rem" }}>
+                                      {JSON.stringify(item.evidence ?? {}, null, 2)}
+                                    </pre>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </>
                   )}
                 </div>
