@@ -39,6 +39,7 @@ const MAX_TEMPLATE_TEXT_LEN: usize = 512;
 const MAX_TEMPLATE_USERS: usize = 32;
 const DEFAULT_PROFILE_HISTORY_LIMIT: u32 = 20;
 const MAX_PROFILE_HISTORY_LIMIT: u32 = 100;
+const MAX_ACTIVATION_FEEDBACK_COMMENT_LEN: usize = 500;
 const ACTIVATION_SETUP_HREF: &str = "#/setup";
 
 pub fn routes() -> Router<AppState> {
@@ -46,6 +47,8 @@ pub fn routes() -> Router<AppState> {
         .route("/preflight", get(get_setup_preflight))
         .route("/checklist", get(get_setup_checklist))
         .route("/activation", get(get_setup_activation))
+        .route("/activation/starter-templates", get(list_setup_activation_starter_templates))
+        .route("/activation/feedback", post(capture_setup_activation_feedback))
         .route("/templates", get(list_setup_templates))
         .route("/templates/{key}/preview", post(preview_setup_template))
         .route("/templates/{key}/apply", post(apply_setup_template))
@@ -116,6 +119,45 @@ struct SetupActivationResponse {
     recommended_profile_key: Option<String>,
     summary: SetupActivationSummary,
     items: Vec<SetupActivationItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupActivationStarterTemplateItem {
+    template_key: String,
+    name: String,
+    summary: String,
+    target_scale: String,
+    first_value_goal: String,
+    recommended_when: String,
+    profile_key: String,
+    defaults: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupActivationStarterTemplateCatalogResponse {
+    recommended_template_key: String,
+    items: Vec<SetupActivationStarterTemplateItem>,
+    total: usize,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SetupActivationFeedbackRequest {
+    step_key: String,
+    template_key: Option<String>,
+    feedback_kind: String,
+    comment: Option<String>,
+    context: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupActivationFeedbackResponse {
+    id: i64,
+    actor: String,
+    step_key: String,
+    template_key: Option<String>,
+    feedback_kind: String,
+    comment: Option<String>,
+    created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize)]
@@ -538,6 +580,87 @@ async fn get_setup_activation(
     }))
 }
 
+async fn list_setup_activation_starter_templates(
+    State(state): State<AppState>,
+) -> AppResult<Json<SetupActivationStarterTemplateCatalogResponse>> {
+    let asset_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assets")
+        .fetch_one(&state.db)
+        .await?;
+    let recommended_template_key = recommend_setup_profile_key(asset_count).to_string();
+    let items = setup_profile_definitions()
+        .into_iter()
+        .map(|definition| setup_activation_starter_template_item(&definition))
+        .collect::<Vec<_>>();
+
+    Ok(Json(SetupActivationStarterTemplateCatalogResponse {
+        recommended_template_key,
+        total: items.len(),
+        items,
+    }))
+}
+
+async fn capture_setup_activation_feedback(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SetupActivationFeedbackRequest>,
+) -> AppResult<Json<SetupActivationFeedbackResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let step_key = normalize_activation_step_key(&payload.step_key)?;
+    let template_key = normalize_optional_template_key(payload.template_key)?;
+    let feedback_kind = normalize_activation_feedback_kind(&payload.feedback_kind)?;
+    let comment = trim_optional(payload.comment, MAX_ACTIVATION_FEEDBACK_COMMENT_LEN);
+    let context = payload.context.unwrap_or_else(|| json!({}));
+    if !context.is_object() {
+        return Err(AppError::Validation(
+            "activation feedback context must be a JSON object".to_string(),
+        ));
+    }
+
+    let record: (i64, DateTime<Utc>) = sqlx::query_as(
+        "INSERT INTO setup_activation_feedback_events
+            (step_key, template_key, feedback_kind, comment, context, actor)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, created_at",
+    )
+    .bind(step_key.as_str())
+    .bind(template_key.as_deref())
+    .bind(feedback_kind.as_str())
+    .bind(comment.as_deref())
+    .bind(context.clone())
+    .bind(actor.as_str())
+    .fetch_one(&state.db)
+    .await?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "setup.activation.feedback.capture".to_string(),
+            target_type: "setup_activation_feedback".to_string(),
+            target_id: Some(record.0.to_string()),
+            result: "success".to_string(),
+            message: comment.clone(),
+            metadata: json!({
+                "step_key": step_key,
+                "template_key": template_key,
+                "feedback_kind": feedback_kind,
+                "context": context,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(SetupActivationFeedbackResponse {
+        id: record.0,
+        actor,
+        step_key,
+        template_key,
+        feedback_kind,
+        comment,
+        created_at: record.1,
+    }))
+}
+
 async fn list_setup_templates(
     State(state): State<AppState>,
 ) -> AppResult<Json<SetupTemplateCatalogResponse>> {
@@ -889,6 +1012,44 @@ fn setup_profile_catalog_item(
                 "drill_time_utc": definition.drill_time_utc,
             },
         }),
+    }
+}
+
+fn setup_activation_starter_template_item(
+    definition: &SetupOperatorProfileDefinition,
+) -> SetupActivationStarterTemplateItem {
+    let (summary, first_value_goal, recommended_when) = match definition.key {
+        SETUP_PROFILE_SMALL_OFFICE => (
+            "Single-site starter for small office environments with conservative continuity defaults.",
+            "Get one office or HQ environment to monitored, ticketed, and backed-up state quickly.",
+            "Use this when you are onboarding one office, lab, or headquarters environment first.",
+        ),
+        SETUP_PROFILE_MULTI_SITE_RETAIL => (
+            "Branch-oriented starter for distributed SMB retail or multi-site operations.",
+            "Get repeated branch patterns under one opinionated alerting and continuity baseline.",
+            "Use this when the same rollout pattern must be repeated across stores or branch sites.",
+        ),
+        SETUP_PROFILE_REGIONAL_ENTERPRISE => (
+            "Higher-scale starter for regional SMB environments with tighter escalation and retention defaults.",
+            "Reach first operational value without redesigning identity, alerting, escalation, and backup policies by hand.",
+            "Use this when you already operate at regional or larger SMB scale and need a stronger default baseline.",
+        ),
+        _ => (
+            "Reusable SMB starter template.",
+            "Reach first visible operational value faster.",
+            "Use this when you want an opinionated SMB baseline instead of starting from zero.",
+        ),
+    };
+
+    SetupActivationStarterTemplateItem {
+        template_key: definition.key.to_string(),
+        name: definition.name.to_string(),
+        summary: summary.to_string(),
+        target_scale: definition.target_scale.to_string(),
+        first_value_goal: first_value_goal.to_string(),
+        recommended_when: recommended_when.to_string(),
+        profile_key: definition.key.to_string(),
+        defaults: setup_profile_catalog_item(definition).defaults,
     }
 }
 
@@ -2019,6 +2180,49 @@ fn select_next_activation_item_key(items: &[SetupActivationItem]) -> Option<Stri
         .find(|item| item.status == "blocking")
         .or_else(|| items.iter().find(|item| item.status == "warning"))
         .map(|item| item.item_key.clone())
+}
+
+fn normalize_activation_step_key(raw: &str) -> AppResult<String> {
+    let normalized = raw.trim().to_ascii_lowercase().replace(' ', "_");
+    if normalized.is_empty() || normalized.len() > 80 {
+        return Err(AppError::Validation(
+            "activation feedback step_key must be 1-80 characters".to_string(),
+        ));
+    }
+    if !normalized
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
+    {
+        return Err(AppError::Validation(
+            "activation feedback step_key contains unsupported characters".to_string(),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn normalize_optional_template_key(raw: Option<String>) -> AppResult<Option<String>> {
+    match raw {
+        None => Ok(None),
+        Some(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            if normalized.is_empty() {
+                return Ok(None);
+            }
+            resolve_setup_profile_definition(&normalized)?;
+            Ok(Some(normalized))
+        }
+    }
+}
+
+fn normalize_activation_feedback_kind(raw: &str) -> AppResult<String> {
+    let normalized = raw.trim().to_ascii_lowercase().replace(' ', "_");
+    match normalized.as_str() {
+        "blocked" | "confused" | "not_applicable" => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "activation feedback kind must be one of: blocked, confused, not_applicable"
+                .to_string(),
+        )),
+    }
 }
 
 impl From<&SetupTemplateRow> for SetupTemplateCatalogItem {
