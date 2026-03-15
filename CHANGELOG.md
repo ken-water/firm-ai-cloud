@@ -18,6 +18,38 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.15] - 2026-03-15
+
+### Added
+
+- v0.1.15 planning and release-gate documentation:
+  - `docs/50-v0.1.15-integration-bootstrap-plan.md`
+  - `docs/51-v0.1.15-release-gate-checklist.md`
+- v0.1.15 issue baseline and closure track: GitHub issues `#193` to `#198`.
+- Operator integration bootstrap APIs:
+  - `GET /api/v1/ops/cockpit/integrations/bootstrap`
+  - `POST /api/v1/ops/cockpit/integrations/bootstrap/apply`
+- v0.1.15 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.15-operator-journey.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- Integration bootstrap now exposes deterministic operator-facing catalog metadata including recommended next action, required inputs, defaults, and evidence.
+- Bootstrap apply now productizes two operator flows with idempotent semantics:
+  - operator notifications bootstrap,
+  - default ticket follow-up policy bootstrap.
+- Cockpit runbook admin panel now adds:
+  - integration bootstrap workspace visibility,
+  - inline input drafting,
+  - one-click apply with immediate readiness refresh.
+- RBAC coverage now includes integration bootstrap catalog and apply endpoints.
+
+### Fixed
+
+- Operators no longer need to stitch together notification and ticket follow-up bootstrap by hand from separate setup surfaces.
+- Re-running integration bootstrap after convergence is now a deterministic reused/no-op path.
+
 ## [0.1.14] - 2026-03-11
 
 ### Added
