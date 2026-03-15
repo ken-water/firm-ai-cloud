@@ -2027,6 +2027,68 @@ type SetupChecklistResponse = {
   checks: SetupCheckItem[];
 };
 
+type SetupActivationRecommendedAction = {
+  action_key: string;
+  label: string;
+  description: string;
+  action_type: "link";
+  href?: string | null;
+  requires_write: boolean;
+  auto_applicable: boolean;
+  profile_key?: string | null;
+};
+
+type SetupActivationItem = {
+  item_key: string;
+  title: string;
+  status: "ready" | "warning" | "blocking";
+  summary: string;
+  reason: string;
+  recommended_action?: SetupActivationRecommendedAction | null;
+  evidence: Record<string, unknown>;
+};
+
+type SetupActivationResponse = {
+  generated_at: string;
+  overall_status: "ready" | "warning" | "blocking";
+  recommended_next_step_key: string | null;
+  recommended_profile_key: string | null;
+  summary: {
+    total: number;
+    ready: number;
+    warning: number;
+    blocking: number;
+  };
+  items: SetupActivationItem[];
+};
+
+type SetupActivationStarterTemplateItem = {
+  template_key: string;
+  name: string;
+  summary: string;
+  target_scale: string;
+  first_value_goal: string;
+  recommended_when: string;
+  profile_key: string;
+  defaults: Record<string, unknown>;
+};
+
+type SetupActivationStarterTemplateCatalogResponse = {
+  recommended_template_key: string;
+  items: SetupActivationStarterTemplateItem[];
+  total: number;
+};
+
+type SetupActivationFeedbackResponse = {
+  id: number;
+  actor: string;
+  step_key: string;
+  template_key: string | null;
+  feedback_kind: "blocked" | "confused" | "not_applicable";
+  comment: string | null;
+  created_at: string;
+};
+
 type SetupTemplateSchemaField = {
   key: string;
   label: string;
@@ -3107,8 +3169,14 @@ export function App() {
   const [loadingMonitoringOverview, setLoadingMonitoringOverview] = useState(false);
   const [setupPreflight, setSetupPreflight] = useState<SetupChecklistResponse | null>(null);
   const [setupChecklist, setSetupChecklist] = useState<SetupChecklistResponse | null>(null);
+  const [setupActivation, setSetupActivation] = useState<SetupActivationResponse | null>(null);
+  const [setupActivationStarterTemplates, setSetupActivationStarterTemplates] =
+    useState<SetupActivationStarterTemplateCatalogResponse | null>(null);
   const [loadingSetupPreflight, setLoadingSetupPreflight] = useState(false);
   const [loadingSetupChecklist, setLoadingSetupChecklist] = useState(false);
+  const [loadingSetupActivation, setLoadingSetupActivation] = useState(false);
+  const [loadingSetupActivationStarterTemplates, setLoadingSetupActivationStarterTemplates] =
+    useState(false);
   const [setupTemplates, setSetupTemplates] = useState<SetupTemplateCatalogItem[]>([]);
   const [loadingSetupTemplates, setLoadingSetupTemplates] = useState(false);
   const [selectedSetupTemplateKey, setSelectedSetupTemplateKey] = useState("");
@@ -3131,6 +3199,8 @@ export function App() {
   const [loadingSetupProfileHistory, setLoadingSetupProfileHistory] = useState(false);
   const [runningSetupProfileRevertId, setRunningSetupProfileRevertId] = useState<number | null>(null);
   const [setupProfileNotice, setSetupProfileNotice] = useState<string | null>(null);
+  const [setupActivationNotice, setSetupActivationNotice] = useState<string | null>(null);
+  const [runningSetupActivationFeedbackKey, setRunningSetupActivationFeedbackKey] = useState<string | null>(null);
   const [setupStep, setSetupStep] = useState(0);
   const [setupCompleted, setSetupCompleted] = useState(false);
   const [setupNotice, setSetupNotice] = useState<string | null>(null);
@@ -7225,11 +7295,54 @@ export function App() {
     }
   }, []);
 
+  const loadSetupActivation = useCallback(async () => {
+    setLoadingSetupActivation(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/setup/activation`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: SetupActivationResponse = await response.json();
+      setSetupActivation(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setSetupActivation(null);
+      return null;
+    } finally {
+      setLoadingSetupActivation(false);
+    }
+  }, []);
+
+  const loadSetupActivationStarterTemplates = useCallback(async () => {
+    setLoadingSetupActivationStarterTemplates(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/setup/activation/starter-templates`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: SetupActivationStarterTemplateCatalogResponse = await response.json();
+      setSetupActivationStarterTemplates(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setSetupActivationStarterTemplates(null);
+      return null;
+    } finally {
+      setLoadingSetupActivationStarterTemplates(false);
+    }
+  }, []);
+
   const refreshSetupWizard = useCallback(async () => {
     setSetupNotice(null);
     setSetupTemplateNotice(null);
     setSetupProfileNotice(null);
+    setSetupActivationNotice(null);
     await Promise.all([
+      loadSetupActivation(),
+      loadSetupActivationStarterTemplates(),
       loadSetupPreflight(),
       loadSetupChecklist(),
       loadSetupTemplates(),
@@ -7237,6 +7350,8 @@ export function App() {
       loadSetupProfileHistory()
     ]);
   }, [
+    loadSetupActivation,
+    loadSetupActivationStarterTemplates,
     loadSetupChecklist,
     loadSetupPreflight,
     loadSetupProfileHistory,
@@ -7256,6 +7371,52 @@ export function App() {
     setSetupCompleted(true);
     setSetupNotice(t("setupWizard.messages.completed"));
   }, [setupChecklist?.checks, setupPreflight?.checks, t]);
+
+  const submitSetupActivationFeedback = useCallback(async (
+    stepKey: string,
+    feedbackKind: "blocked" | "confused" | "not_applicable",
+    comment: string,
+    templateKey?: string | null
+  ) => {
+    const normalizedStepKey = stepKey.trim();
+    if (!normalizedStepKey) {
+      return null;
+    }
+
+    setRunningSetupActivationFeedbackKey(normalizedStepKey);
+    setSetupActivationNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/setup/activation/feedback`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          step_key: normalizedStepKey,
+          template_key: trimToNull(templateKey ?? ""),
+          feedback_kind: feedbackKind,
+          comment: trimToNull(comment),
+          context: {
+            source: "setup_activation_workspace"
+          }
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: SetupActivationFeedbackResponse = await response.json();
+      setSetupActivationNotice(
+        `Activation feedback captured for ${payload.step_key}: ${payload.feedback_kind}.`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningSetupActivationFeedbackKey(null);
+    }
+  }, []);
 
   const setSetupTemplateParam = useCallback((key: string, value: string) => {
     setSetupTemplateParamsDraft((prev) => ({
@@ -7369,7 +7530,7 @@ export function App() {
       const payload: SetupTemplateApplyResponse = await response.json();
       setSetupTemplateApplyResult(payload);
       setSetupTemplateNotice(t("setupWizard.templates.messages.applySuccess", { key: payload.template_key }));
-      await Promise.all([loadSetupChecklist(), loadSetupPreflight()]);
+      await Promise.all([loadSetupActivation(), loadSetupChecklist(), loadSetupPreflight()]);
       return payload;
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
@@ -7379,6 +7540,7 @@ export function App() {
     }
   }, [
     canWriteCmdb,
+    loadSetupActivation,
     loadSetupChecklist,
     loadSetupPreflight,
     previewSetupTemplate,
@@ -7476,6 +7638,7 @@ export function App() {
       setSetupProfileApplyResult(payload);
       setSetupProfileNotice(`Profile '${payload.profile_key}' applied (run #${payload.run_id}).`);
       await Promise.all([
+        loadSetupActivation(),
         loadSetupChecklist(),
         loadSetupPreflight(),
         loadSetupProfileHistory()
@@ -7489,6 +7652,7 @@ export function App() {
     }
   }, [
     canWriteCmdb,
+    loadSetupActivation,
     loadSetupChecklist,
     loadSetupPreflight,
     loadSetupProfileHistory,
@@ -7532,6 +7696,7 @@ export function App() {
         `Profile run #${payload.run_id} reverted by ${payload.reverted_by} at ${new Date(payload.reverted_at).toLocaleString()}.`
       );
       await Promise.all([
+        loadSetupActivation(),
         loadSetupChecklist(),
         loadSetupPreflight(),
         loadSetupProfileHistory()
@@ -7545,6 +7710,7 @@ export function App() {
     }
   }, [
     canWriteCmdb,
+    loadSetupActivation,
     loadSetupChecklist,
     loadSetupPreflight,
     loadSetupProfileHistory,
@@ -11301,6 +11467,8 @@ export function App() {
     loadingAlertDetail,
     loadingAlerts,
     loadingAlertPolicies,
+    loadingSetupActivation,
+    loadingSetupActivationStarterTemplates,
     loadingSetupChecklist,
     loadingSetupPreflight,
     loadingSetupProfileHistory,
@@ -11313,8 +11481,11 @@ export function App() {
     refreshAlerts: loadAlerts,
     refreshAlertPolicies: loadAlertPolicies,
     refreshSetupWizard,
+    loadSetupActivation,
+    submitSetupActivationFeedback,
     runningSetupTemplateApply,
     runningSetupTemplatePreview,
+    runningSetupActivationFeedbackKey,
     runningSetupProfileApply,
     runningSetupProfilePreview,
     runningSetupProfileRevertId,
@@ -11336,6 +11507,9 @@ export function App() {
     setSetupTemplateParam,
     setupChecklist,
     setupCompleted,
+    setupActivation,
+    setupActivationNotice,
+    setupActivationStarterTemplates,
     setupNotice,
     setupProfileApplyResult,
     setupProfileHistory,

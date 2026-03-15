@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { SectionCard } from "../components/layout";
 
 type SetupCheckItem = {
@@ -22,6 +22,58 @@ type SetupChecklistResponse = {
     ready: boolean;
   };
   checks: SetupCheckItem[];
+};
+
+type SetupActivationRecommendedAction = {
+  action_key: string;
+  label: string;
+  description: string;
+  action_type: "link";
+  href?: string | null;
+  requires_write: boolean;
+  auto_applicable: boolean;
+  profile_key?: string | null;
+};
+
+type SetupActivationItem = {
+  item_key: string;
+  title: string;
+  status: "ready" | "warning" | "blocking";
+  summary: string;
+  reason: string;
+  recommended_action?: SetupActivationRecommendedAction | null;
+  evidence: Record<string, unknown>;
+};
+
+type SetupActivationResponse = {
+  generated_at: string;
+  overall_status: "ready" | "warning" | "blocking";
+  recommended_next_step_key: string | null;
+  recommended_profile_key: string | null;
+  summary: {
+    total: number;
+    ready: number;
+    warning: number;
+    blocking: number;
+  };
+  items: SetupActivationItem[];
+};
+
+type SetupActivationStarterTemplateItem = {
+  template_key: string;
+  name: string;
+  summary: string;
+  target_scale: string;
+  first_value_goal: string;
+  recommended_when: string;
+  profile_key: string;
+  defaults: Record<string, unknown>;
+};
+
+type SetupActivationStarterTemplateCatalogResponse = {
+  recommended_template_key: string;
+  items: SetupActivationStarterTemplateItem[];
+  total: number;
 };
 
 type SetupTemplateSchemaField = {
@@ -162,6 +214,8 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     loadingAlertDetail,
     loadingAlerts,
     loadingAlertPolicies,
+    loadingSetupActivation,
+    loadingSetupActivationStarterTemplates,
     loadingSetupChecklist,
     loadingSetupPreflight,
     loadingSetupProfileHistory,
@@ -174,6 +228,9 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     refreshAlerts,
     refreshAlertPolicies,
     refreshSetupWizard,
+    loadSetupActivation,
+    submitSetupActivationFeedback,
+    runningSetupActivationFeedbackKey,
     runningSetupTemplateApply,
     runningSetupTemplatePreview,
     runningSetupProfileApply,
@@ -197,6 +254,9 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     setSetupTemplateParam,
     setupChecklist,
     setupCompleted,
+    setupActivation,
+    setupActivationNotice,
+    setupActivationStarterTemplates,
     setupNotice,
     setupProfileApplyResult,
     setupProfileHistory,
@@ -227,6 +287,8 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
 
   const preflight = setupPreflight as SetupChecklistResponse | null;
   const checklist = setupChecklist as SetupChecklistResponse | null;
+  const activation = setupActivation as SetupActivationResponse | null;
+  const starterTemplates = setupActivationStarterTemplates as SetupActivationStarterTemplateCatalogResponse | null;
   const checklistByKey = new Map<string, SetupCheckItem>(
     (checklist?.checks ?? []).map((item) => [item.key, item])
   );
@@ -245,6 +307,11 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
   const profilePreview = setupProfilePreview as SetupProfilePreviewResponse | null;
   const profileApplyResult = setupProfileApplyResult as SetupProfileApplyResponse | null;
   const profileHistory = (setupProfileHistory as SetupProfileHistoryRecord[]) ?? [];
+  const [activationFeedbackDrafts, setActivationFeedbackDrafts] = useState<Record<string, {
+    feedback_kind: "blocked" | "confused" | "not_applicable";
+    comment: string;
+    template_key: string;
+  }>>({});
 
   const setupSteps = [
     {
@@ -298,6 +365,26 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
   const setupReadyLabel = setupCanComplete
     ? t("setupWizard.summary.ready")
     : t("setupWizard.summary.blocked", { count: blockingChecks.length });
+  const activationItems = activation?.items ?? [];
+  const activationRecommendedTemplateKey = starterTemplates?.recommended_template_key ?? activation?.recommended_profile_key ?? "";
+  const setActivationFeedbackDraft = (
+    stepKey: string,
+    patch: Partial<{
+      feedback_kind: "blocked" | "confused" | "not_applicable";
+      comment: string;
+      template_key: string;
+    }>
+  ) => {
+    setActivationFeedbackDrafts((prev) => ({
+      ...prev,
+      [stepKey]: {
+        feedback_kind: prev[stepKey]?.feedback_kind ?? "blocked",
+        comment: prev[stepKey]?.comment ?? "",
+        template_key: prev[stepKey]?.template_key ?? activationRecommendedTemplateKey,
+        ...patch
+      }
+    }));
+  };
 
   const allAlertIds = (alerts as Array<{ id: number }>).map((item) => item.id);
   const allAlertsSelected = allAlertIds.length > 0 && allAlertIds.every((id) => selectedAlertIds.includes(id));
@@ -342,6 +429,182 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
           </div>
 
           {setupNotice && <p className="banner banner-success">{setupNotice}</p>}
+          {setupActivationNotice && <p className="banner banner-success">{setupActivationNotice}</p>}
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h3 style={{ marginTop: 0, marginBottom: "0.35rem", fontSize: "1rem" }}>First-value activation</h3>
+                <p className="section-note" style={{ marginBottom: 0 }}>
+                  Track whether this environment has reached the first usable SMB baseline and capture pilot friction directly from the setup path.
+                </p>
+              </div>
+              <button
+                onClick={() => void loadSetupActivation()}
+                disabled={loadingSetupActivation}
+              >
+                {loadingSetupActivation ? "Refreshing..." : "Refresh activation"}
+              </button>
+            </div>
+
+            {loadingSetupActivation && !activation ? (
+              <p>Loading activation status...</p>
+            ) : !activation ? (
+              <p>No activation status available.</p>
+            ) : (
+              <>
+                <div className="toolbar-row" style={{ marginTop: "0.6rem", marginBottom: "0.6rem", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <span className={`status-chip ${statusChipClass(activation.overall_status)}`}>{activation.overall_status}</span>
+                  <span className="section-meta">ready={activation.summary.ready}</span>
+                  <span className="section-meta">warning={activation.summary.warning}</span>
+                  <span className="section-meta">blocking={activation.summary.blocking}</span>
+                  {activation.recommended_next_step_key && (
+                    <span className="inline-note">recommended_next={activation.recommended_next_step_key}</span>
+                  )}
+                </div>
+
+                {loadingSetupActivationStarterTemplates ? (
+                  <p>Loading starter templates...</p>
+                ) : starterTemplates && (starterTemplates.items ?? []).length > 0 ? (
+                  <div style={{ display: "grid", gap: "0.55rem", marginBottom: "0.75rem" }}>
+                    <strong>Starter templates</strong>
+                    {(starterTemplates.items ?? []).map((item) => (
+                      <div key={`starter-template-${item.template_key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                        <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                          <div>
+                            <strong>{item.name}</strong>
+                            <div className="inline-note">{item.template_key} | scale={item.target_scale}</div>
+                            <div style={{ marginTop: "0.35rem" }}>{item.summary}</div>
+                            <div className="inline-note" style={{ marginTop: "0.25rem" }}>
+                              first_value_goal={item.first_value_goal}
+                            </div>
+                            <div className="inline-note">{item.recommended_when}</div>
+                          </div>
+                          <div style={{ display: "grid", gap: "0.35rem", justifyItems: "end" }}>
+                            {starterTemplates.recommended_template_key === item.template_key && (
+                              <span className="status-chip status-chip-success">recommended</span>
+                            )}
+                            <button
+                              onClick={() => {
+                                setSelectedSetupProfileKey(item.profile_key);
+                                setSetupStep(3);
+                              }}
+                            >
+                              Use this profile
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div style={{ display: "grid", gap: "0.55rem" }}>
+                  {activationItems.map((item) => {
+                    const draft = activationFeedbackDrafts[item.item_key] ?? {
+                      feedback_kind: "blocked" as const,
+                      comment: "",
+                      template_key: activationRecommendedTemplateKey
+                    };
+                    const runningFeedback = runningSetupActivationFeedbackKey === item.item_key;
+                    const isNext = activation.recommended_next_step_key === item.item_key;
+                    return (
+                      <div key={`activation-item-${item.item_key}`} className="detail-panel">
+                        <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                          <div>
+                            <strong>{item.title}</strong>
+                            <div className="inline-note">{item.item_key}</div>
+                            {isNext && <div className="inline-note">next recommended step</div>}
+                          </div>
+                          <span className={`status-chip ${statusChipClass(item.status)}`}>{item.status}</span>
+                        </div>
+                        <p style={{ marginTop: "0.45rem", marginBottom: "0.35rem" }}>{item.summary}</p>
+                        <p className="section-note" style={{ marginTop: 0 }}>{item.reason}</p>
+                        {item.recommended_action?.href && (
+                          <div className="toolbar-row" style={{ marginBottom: "0.5rem" }}>
+                            <a
+                              href={item.recommended_action.href}
+                              onClick={() => {
+                                if (item.recommended_action?.profile_key) {
+                                  setSelectedSetupProfileKey(item.recommended_action.profile_key);
+                                  setSetupStep(3);
+                                }
+                              }}
+                            >
+                              {item.recommended_action.label}
+                            </a>
+                          </div>
+                        )}
+                        <div style={{ overflowX: "auto", marginBottom: "0.5rem" }}>
+                          <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: "0.8rem" }}>
+                            {JSON.stringify(item.evidence ?? {}, null, 2)}
+                          </pre>
+                        </div>
+                        <div className="filter-grid">
+                          <label className="control-field">
+                            <span>Feedback</span>
+                            <select
+                              value={draft.feedback_kind}
+                              onChange={(event) => setActivationFeedbackDraft(item.item_key, {
+                                feedback_kind: event.target.value as "blocked" | "confused" | "not_applicable"
+                              })}
+                            >
+                              <option value="blocked">blocked</option>
+                              <option value="confused">confused</option>
+                              <option value="not_applicable">not_applicable</option>
+                            </select>
+                          </label>
+                          <label className="control-field">
+                            <span>Starter template</span>
+                            <select
+                              value={draft.template_key}
+                              onChange={(event) => setActivationFeedbackDraft(item.item_key, {
+                                template_key: event.target.value
+                              })}
+                            >
+                              <option value="">none</option>
+                              {(starterTemplates?.items ?? []).map((template) => (
+                                <option key={`feedback-template-${item.item_key}-${template.template_key}`} value={template.template_key}>
+                                  {template.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <label className="control-field" style={{ marginTop: "0.5rem" }}>
+                          <span>Comment</span>
+                          <input
+                            value={draft.comment}
+                            onChange={(event) => setActivationFeedbackDraft(item.item_key, {
+                              comment: event.target.value
+                            })}
+                            placeholder="what blocked or confused this step"
+                          />
+                        </label>
+                        <div className="toolbar-row" style={{ marginTop: "0.5rem" }}>
+                          <button
+                            onClick={() => void submitSetupActivationFeedback(
+                              item.item_key,
+                              draft.feedback_kind,
+                              draft.comment,
+                              draft.template_key || null
+                            ).then((result: any) => {
+                              if (result) {
+                                setActivationFeedbackDraft(item.item_key, { comment: "" });
+                              }
+                            })}
+                            disabled={runningFeedback}
+                          >
+                            {runningFeedback ? "Submitting..." : "Submit feedback"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
 
           <div className="toolbar-row" style={{ marginBottom: "0.75rem", alignItems: "stretch" }}>
             {setupSteps.map((step, index) => (
@@ -1234,13 +1497,13 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
 }
 
 function statusChipClass(status: string): string {
-  if (status === "pass" || status === "open") {
+  if (status === "pass" || status === "open" || status === "ready") {
     return "status-chip-success";
   }
-  if (status === "warn" || status === "acknowledged") {
+  if (status === "warn" || status === "acknowledged" || status === "warning") {
     return "status-chip-warn";
   }
-  if (status === "fail" || status === "critical" || status === "closed") {
+  if (status === "fail" || status === "critical" || status === "closed" || status === "blocking") {
     return "status-chip-danger";
   }
   return "";
