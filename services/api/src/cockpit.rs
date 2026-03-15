@@ -87,7 +87,23 @@ struct GoLiveReadinessDomainItem {
     status: String,
     summary: String,
     reason: String,
+    recommended_action: Option<GoLiveRemediationAction>,
     evidence: Value,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct GoLiveRemediationAction {
+    action_key: String,
+    label: String,
+    description: String,
+    action_type: String,
+    href: Option<String>,
+    api_path: Option<String>,
+    method: Option<String>,
+    body: Option<Value>,
+    requires_write: bool,
+    auto_applicable: bool,
+    blocked_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -289,6 +305,19 @@ struct RunbookExecutionGoLiveRow {
     mode: String,
     live_template_count: i32,
     preset_count: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct GoLiveOwnerSuggestionRow {
+    owner_ref: String,
+    notification_target: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct GoLiveNotificationChannelSuggestionRow {
+    name: String,
+    channel_type: String,
+    target: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1530,6 +1559,12 @@ async fn build_authentication_go_live_domain(
         status: status.to_string(),
         summary,
         reason,
+        recommended_action: Some(link_go_live_action(
+            "go_live.authentication.review",
+            "Review authentication setup",
+            "Review RBAC, OIDC, and local fallback settings before production rollout.",
+            "#/overview",
+        )),
         evidence: json!({
             "rbac_enabled": state.rbac_enabled,
             "oidc_enabled": state.oidc.enabled,
@@ -1589,6 +1624,12 @@ async fn build_monitoring_go_live_domain(
         status: status.to_string(),
         summary,
         reason,
+        recommended_action: Some(link_go_live_action(
+            "go_live.monitoring_sources.review",
+            "Review monitoring sources",
+            "Open monitoring source configuration and probe state before production rollout.",
+            "#/overview",
+        )),
         evidence: json!({
             "enabled_total": row.enabled_total,
             "reachable_total": row.reachable_total,
@@ -1601,6 +1642,24 @@ async fn build_monitoring_go_live_domain(
 async fn build_operator_notifications_go_live_domain(
     db: &sqlx::PgPool,
 ) -> AppResult<GoLiveReadinessDomainItem> {
+    let owner_suggestion: Option<GoLiveOwnerSuggestionRow> = sqlx::query_as(
+        "SELECT owner_ref, notification_target
+         FROM ops_runbook_risk_owner_directory
+         WHERE is_enabled = TRUE
+         ORDER BY display_name ASC, owner_key ASC
+         LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?;
+    let channel_suggestion: Option<GoLiveNotificationChannelSuggestionRow> = sqlx::query_as(
+        "SELECT name, channel_type, target
+         FROM discovery_notification_channels
+         WHERE is_enabled = TRUE
+         ORDER BY id ASC
+         LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?;
     let template_enabled: bool = sqlx::query_scalar(
         "SELECT EXISTS(
             SELECT 1
@@ -1655,6 +1714,54 @@ async fn build_operator_notifications_go_live_domain(
                 .to_string(),
         )
     };
+    let suggested_target = channel_suggestion
+        .as_ref()
+        .map(|item| item.target.clone())
+        .or_else(|| {
+            owner_suggestion
+                .as_ref()
+                .and_then(|item| item.notification_target.clone())
+        });
+    let suggested_channel_name = channel_suggestion
+        .as_ref()
+        .map(|item| item.name.clone())
+        .unwrap_or_else(|| "operator-bootstrap-primary".to_string());
+    let suggested_channel_type = channel_suggestion
+        .as_ref()
+        .map(|item| item.channel_type.clone())
+        .or_else(|| {
+            suggested_target
+                .as_deref()
+                .map(infer_go_live_notification_channel_type)
+        })
+        .unwrap_or_else(|| "email".to_string());
+    let recommended_action = if let Some(target) = suggested_target {
+        Some(api_go_live_action(
+            "go_live.operator_notifications.bootstrap",
+            if status == "ready" {
+                "Re-apply notification defaults"
+            } else {
+                "Apply notification defaults"
+            },
+            "Apply the default operator notification template, channel, and subscription for runbook-risk follow-up.",
+            "/api/v1/ops/cockpit/integrations/bootstrap/apply",
+            "POST",
+            json!({
+                "integration_key": "operator_notifications",
+                "channel_name": suggested_channel_name,
+                "channel_type": suggested_channel_type,
+                "target": target
+            }),
+        ))
+    } else {
+        Some(blocked_api_go_live_action(
+            "go_live.operator_notifications.bootstrap",
+            "Prepare notification bootstrap",
+            "Add an enabled owner notification_target first, then bootstrap operator notifications.",
+            "Missing owner notification_target in runbook risk owner directory.",
+            "#/overview",
+        ))
+    };
 
     Ok(GoLiveReadinessDomainItem {
         domain_key: "operator_notifications".to_string(),
@@ -1662,6 +1769,7 @@ async fn build_operator_notifications_go_live_domain(
         status: status.to_string(),
         summary,
         reason,
+        recommended_action,
         evidence: json!({
             "event_type": GO_LIVE_NOTIFICATION_EVENT,
             "template_enabled": template_enabled,
@@ -1674,6 +1782,15 @@ async fn build_operator_notifications_go_live_domain(
 async fn build_ticket_followup_go_live_domain(
     db: &sqlx::PgPool,
 ) -> AppResult<GoLiveReadinessDomainItem> {
+    let owner_suggestion: Option<GoLiveOwnerSuggestionRow> = sqlx::query_as(
+        "SELECT owner_ref, notification_target
+         FROM ops_runbook_risk_owner_directory
+         WHERE is_enabled = TRUE
+         ORDER BY display_name ASC, owner_key ASC
+         LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?;
     let row: Option<TicketFollowupGoLiveRow> = sqlx::query_as(
         "SELECT is_enabled, escalate_to_assignee
          FROM ticket_escalation_policies
@@ -1683,7 +1800,7 @@ async fn build_ticket_followup_go_live_domain(
     .fetch_optional(db)
     .await?;
 
-    let (status, summary, reason, evidence) = match row {
+    let (status, summary, reason, evidence) = match &row {
         None => (
             "blocking",
             "Default ticket follow-up policy is missing.".to_string(),
@@ -1730,6 +1847,37 @@ async fn build_ticket_followup_go_live_domain(
             }),
         ),
     };
+    let suggested_owner = match &row {
+        Some(row) if row.is_enabled && row.escalate_to_assignee != GO_LIVE_FACTORY_ESCALATION_OWNER => {
+            Some(row.escalate_to_assignee.clone())
+        }
+        _ => owner_suggestion.as_ref().map(|item| item.owner_ref.clone()),
+    };
+    let recommended_action = if let Some(escalation_owner) = suggested_owner {
+        Some(api_go_live_action(
+            "go_live.ticket_followup.bootstrap",
+            if status == "ready" {
+                "Re-apply ticket follow-up defaults"
+            } else {
+                "Apply ticket follow-up defaults"
+            },
+            "Enable the default ticket follow-up policy with a concrete escalation owner.",
+            "/api/v1/ops/cockpit/integrations/bootstrap/apply",
+            "POST",
+            json!({
+                "integration_key": "ticket_followup_policy",
+                "escalation_owner": escalation_owner
+            }),
+        ))
+    } else {
+        Some(blocked_api_go_live_action(
+            "go_live.ticket_followup.bootstrap",
+            "Prepare ticket follow-up bootstrap",
+            "Add an enabled owner_ref first, then bootstrap default ticket follow-up routing.",
+            "Missing enabled owner_ref suggestion in runbook risk owner directory.",
+            "#/overview",
+        ))
+    };
 
     Ok(GoLiveReadinessDomainItem {
         domain_key: "ticket_followup".to_string(),
@@ -1737,6 +1885,7 @@ async fn build_ticket_followup_go_live_domain(
         status: status.to_string(),
         summary,
         reason,
+        recommended_action,
         evidence,
     })
 }
@@ -1798,6 +1947,12 @@ async fn build_backup_restore_go_live_domain(
         status: status.to_string(),
         summary,
         reason,
+        recommended_action: Some(link_go_live_action(
+            "go_live.backup_restore.review",
+            "Review backup and restore readiness",
+            "Open backup policies, runs, and restore evidence to close go-live gaps.",
+            "#/overview",
+        )),
         evidence: json!({
             "total_policies": row.total_policies,
             "stale_backup_policies": row.stale_backup_policies,
@@ -1881,6 +2036,12 @@ async fn build_runbook_execution_go_live_domain(
         status: status.to_string(),
         summary,
         reason,
+        recommended_action: Some(link_go_live_action(
+            "go_live.runbook_execution.review",
+            "Review runbook execution baseline",
+            "Open runbook execution policy and presets before go-live.",
+            "#/overview",
+        )),
         evidence,
     })
 }
@@ -1921,6 +2082,81 @@ fn select_next_go_live_domain(domains: &[GoLiveReadinessDomainItem]) -> Option<S
         .find(|item| item.status == "blocking")
         .or_else(|| domains.iter().find(|item| item.status == "warning"))
         .map(|item| item.domain_key.clone())
+}
+
+fn link_go_live_action(
+    action_key: &str,
+    label: &str,
+    description: &str,
+    href: &str,
+) -> GoLiveRemediationAction {
+    GoLiveRemediationAction {
+        action_key: action_key.to_string(),
+        label: label.to_string(),
+        description: description.to_string(),
+        action_type: "link".to_string(),
+        href: Some(href.to_string()),
+        api_path: None,
+        method: None,
+        body: None,
+        requires_write: false,
+        auto_applicable: false,
+        blocked_reason: None,
+    }
+}
+
+fn api_go_live_action(
+    action_key: &str,
+    label: &str,
+    description: &str,
+    api_path: &str,
+    method: &str,
+    body: Value,
+) -> GoLiveRemediationAction {
+    GoLiveRemediationAction {
+        action_key: action_key.to_string(),
+        label: label.to_string(),
+        description: description.to_string(),
+        action_type: "api".to_string(),
+        href: None,
+        api_path: Some(api_path.to_string()),
+        method: Some(method.to_string()),
+        body: Some(body),
+        requires_write: true,
+        auto_applicable: true,
+        blocked_reason: None,
+    }
+}
+
+fn blocked_api_go_live_action(
+    action_key: &str,
+    label: &str,
+    description: &str,
+    blocked_reason: &str,
+    href: &str,
+) -> GoLiveRemediationAction {
+    GoLiveRemediationAction {
+        action_key: action_key.to_string(),
+        label: label.to_string(),
+        description: description.to_string(),
+        action_type: "api".to_string(),
+        href: Some(href.to_string()),
+        api_path: None,
+        method: None,
+        body: None,
+        requires_write: true,
+        auto_applicable: false,
+        blocked_reason: Some(blocked_reason.to_string()),
+    }
+}
+
+fn infer_go_live_notification_channel_type(target: &str) -> String {
+    let trimmed = target.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        "webhook".to_string()
+    } else {
+        "email".to_string()
+    }
 }
 
 fn sort_next_best_actions(items: &mut [NextBestActionItem]) {
@@ -2520,6 +2756,7 @@ mod tests {
                 status: "ready".to_string(),
                 summary: "ok".to_string(),
                 reason: "ok".to_string(),
+                recommended_action: None,
                 evidence: json!({}),
             },
             GoLiveReadinessDomainItem {
@@ -2528,6 +2765,7 @@ mod tests {
                 status: "warning".to_string(),
                 summary: "warn".to_string(),
                 reason: "warn".to_string(),
+                recommended_action: None,
                 evidence: json!({}),
             },
             GoLiveReadinessDomainItem {
@@ -2536,6 +2774,7 @@ mod tests {
                 status: "blocking".to_string(),
                 summary: "block".to_string(),
                 reason: "block".to_string(),
+                recommended_action: None,
                 evidence: json!({}),
             },
         ]);
@@ -2556,6 +2795,7 @@ mod tests {
                 status: "ready".to_string(),
                 summary: "ok".to_string(),
                 reason: "ok".to_string(),
+                recommended_action: None,
                 evidence: json!({}),
             },
             GoLiveReadinessDomainItem {
@@ -2564,6 +2804,7 @@ mod tests {
                 status: "warning".to_string(),
                 summary: "warn".to_string(),
                 reason: "warn".to_string(),
+                recommended_action: None,
                 evidence: json!({}),
             },
             GoLiveReadinessDomainItem {
@@ -2572,6 +2813,7 @@ mod tests {
                 status: "blocking".to_string(),
                 summary: "block".to_string(),
                 reason: "block".to_string(),
+                recommended_action: None,
                 evidence: json!({}),
             },
         ];
