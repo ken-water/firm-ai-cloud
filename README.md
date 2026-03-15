@@ -154,6 +154,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.15 release gate checklist](docs/51-v0.1.15-release-gate-checklist.md)
 - [v0.1.16 go-live readiness workspace plan](docs/52-v0.1.16-go-live-readiness-plan.md)
 - [v0.1.16 release gate checklist](docs/53-v0.1.16-release-gate-checklist.md)
+- [v0.1.17 first-value activation and pilot feedback plan](docs/54-v0.1.17-first-value-activation-plan.md)
+- [v0.1.17 release gate checklist](docs/55-v0.1.17-release-gate-checklist.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
