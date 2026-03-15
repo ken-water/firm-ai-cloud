@@ -408,6 +408,7 @@ fn required_permission(method: &Method, path: &str) -> Option<String> {
         || matches_scope(&normalized, "/profiles")
         || normalized == "/preflight"
         || normalized == "/checklist"
+        || normalized == "/activation"
     {
         "ops.setup"
     } else if matches_scope(&normalized, "/ops/cockpit") || matches_scope(&normalized, "/cockpit") {
@@ -708,6 +709,7 @@ mod tests {
     fn maps_setup_permissions() {
         assert_permission(Method::GET, "/api/v1/setup/preflight", "ops.setup.read");
         assert_permission(Method::GET, "/api/v1/setup/checklist", "ops.setup.read");
+        assert_permission(Method::GET, "/api/v1/setup/activation", "ops.setup.read");
         assert_permission(Method::GET, "/api/v1/setup/templates", "ops.setup.read");
         assert_permission(Method::GET, "/api/v1/setup/profiles", "ops.setup.read");
         assert_permission(
@@ -755,6 +757,7 @@ mod tests {
         );
         assert_permission(Method::GET, "/preflight", "ops.setup.read");
         assert_permission(Method::GET, "/checklist", "ops.setup.read");
+        assert_permission(Method::GET, "/activation", "ops.setup.read");
     }
 
     #[test]
@@ -1591,6 +1594,7 @@ mod tests {
             ),
             (Method::GET, "/api/v1/setup/preflight", "ops.setup.read"),
             (Method::GET, "/api/v1/setup/checklist", "ops.setup.read"),
+            (Method::GET, "/api/v1/setup/activation", "ops.setup.read"),
             (Method::GET, "/api/v1/setup/templates", "ops.setup.read"),
             (Method::GET, "/api/v1/setup/profiles", "ops.setup.read"),
             (

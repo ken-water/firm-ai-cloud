@@ -39,11 +39,13 @@ const MAX_TEMPLATE_TEXT_LEN: usize = 512;
 const MAX_TEMPLATE_USERS: usize = 32;
 const DEFAULT_PROFILE_HISTORY_LIMIT: u32 = 20;
 const MAX_PROFILE_HISTORY_LIMIT: u32 = 100;
+const ACTIVATION_SETUP_HREF: &str = "#/setup";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/preflight", get(get_setup_preflight))
         .route("/checklist", get(get_setup_checklist))
+        .route("/activation", get(get_setup_activation))
         .route("/templates", get(list_setup_templates))
         .route("/templates/{key}/preview", post(preview_setup_template))
         .route("/templates/{key}/apply", post(apply_setup_template))
@@ -65,7 +67,7 @@ enum SetupCheckStatus {
     Fail,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct SetupCheckItem {
     key: String,
     title: String,
@@ -73,6 +75,47 @@ struct SetupCheckItem {
     critical: bool,
     message: String,
     remediation: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupActivationRecommendedAction {
+    action_key: String,
+    label: String,
+    description: String,
+    action_type: String,
+    href: Option<String>,
+    requires_write: bool,
+    auto_applicable: bool,
+    profile_key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupActivationItem {
+    item_key: String,
+    title: String,
+    status: String,
+    summary: String,
+    reason: String,
+    recommended_action: Option<SetupActivationRecommendedAction>,
+    evidence: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupActivationSummary {
+    total: usize,
+    ready: usize,
+    warning: usize,
+    blocking: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupActivationResponse {
+    generated_at: DateTime<Utc>,
+    overall_status: String,
+    recommended_next_step_key: Option<String>,
+    recommended_profile_key: Option<String>,
+    summary: SetupActivationSummary,
+    items: Vec<SetupActivationItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -419,103 +462,80 @@ struct BackupProfileStateRow {
 async fn get_setup_preflight(
     State(state): State<AppState>,
 ) -> AppResult<Json<SetupChecklistResponse>> {
-    let mut checks = Vec::new();
-
-    checks.push(check_database(state.db.clone()).await);
-    checks.push(check_rbac_mode(state.rbac_enabled));
-    checks.push(check_oidc_settings(&state));
-    checks.push(check_monitoring_secret_settings(&state));
-    checks.push(check_workflow_policy_mode(&state));
-
-    Ok(Json(build_response("preflight", checks)))
+    Ok(Json(build_response(
+        "preflight",
+        collect_setup_preflight_checks(&state).await,
+    )))
 }
 
 async fn get_setup_checklist(
     State(state): State<AppState>,
 ) -> AppResult<Json<SetupChecklistResponse>> {
-    let mut checks = Vec::new();
+    Ok(Json(build_response(
+        "integration_checklist",
+        collect_setup_checklist_checks(&state).await,
+    )))
+}
 
-    checks.push(SetupCheckItem {
-        key: "api-service".to_string(),
-        title: "API Service".to_string(),
-        status: SetupCheckStatus::Pass,
-        critical: true,
-        message: "API endpoint is reachable because checklist request succeeded.".to_string(),
-        remediation: "If this check fails in other environments, start API service and verify API_HOST/API_PORT.".to_string(),
-    });
-
-    checks.push(check_database(state.db.clone()).await.with_key("database"));
-
-    checks.push(
-        tcp_endpoint_check(
-            "web-console",
-            "Web Console",
-            &read_addr("SETUP_WEB_ADDR", DEFAULT_WEB_ADDR),
-            true,
-            "Ensure web console is running (for local stack: bash scripts/install.sh or docker compose up web).",
-        )
-        .await,
+async fn get_setup_activation(
+    State(state): State<AppState>,
+) -> AppResult<Json<SetupActivationResponse>> {
+    let preflight = build_response("preflight", collect_setup_preflight_checks(&state).await);
+    let checklist = build_response(
+        "integration_checklist",
+        collect_setup_checklist_checks(&state).await,
     );
+    let asset_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM assets")
+        .fetch_one(&state.db)
+        .await?;
+    let profile_run_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM setup_operator_profile_runs WHERE status = 'applied'")
+            .fetch_one(&state.db)
+            .await?;
+    let recommended_profile = recommend_setup_profile_key(asset_count);
 
-    checks.push(
-        tcp_endpoint_check(
-            "redis",
-            "Redis",
-            &read_addr("SETUP_REDIS_ADDR", DEFAULT_REDIS_ADDR),
-            false,
-            "Ensure redis service is healthy and accessible from API host.",
-        )
-        .await,
-    );
+    let items = vec![
+        summarize_activation_checklist_item(
+            "environment_preflight",
+            "Environment preflight",
+            "Review foundational platform readiness before applying operator defaults.",
+            &preflight,
+            Some(link_activation_action(
+                "setup.activation.preflight.review",
+                "Review preflight checks",
+                "Open the setup wizard and resolve preflight blockers before continuing.",
+                ACTIVATION_SETUP_HREF,
+                None,
+            )),
+        ),
+        summarize_activation_checklist_item(
+            "integration_checklist",
+            "Integration checklist",
+            "Verify the local stack and baseline integration services are reachable.",
+            &checklist,
+            Some(link_activation_action(
+                "setup.activation.checklist.review",
+                "Review integration checklist",
+                "Open the setup wizard and resolve service or baseline integration gaps.",
+                ACTIVATION_SETUP_HREF,
+                None,
+            )),
+        ),
+        build_activation_profile_item(asset_count, profile_run_count, recommended_profile),
+    ];
 
-    checks.push(
-        tcp_endpoint_check(
-            "opensearch",
-            "OpenSearch",
-            &read_addr("SETUP_OPENSEARCH_ADDR", DEFAULT_OPENSEARCH_ADDR),
-            false,
-            "Ensure opensearch service is healthy and accessible from API host.",
-        )
-        .await,
-    );
+    let summary = summarize_activation_items(&items);
+    let overall_status = derive_activation_overall_status(&summary);
+    let recommended_next_step_key = select_next_activation_item_key(&items);
 
-    checks.push(
-        tcp_endpoint_check(
-            "minio",
-            "MinIO",
-            &read_addr("SETUP_MINIO_ADDR", DEFAULT_MINIO_ADDR),
-            false,
-            "Ensure minio service is healthy and accessible from API host.",
-        )
-        .await,
-    );
-
-    checks.push(
-        tcp_endpoint_check(
-            "zabbix-server",
-            "Zabbix Server",
-            &read_addr("SETUP_ZABBIX_ADDR", DEFAULT_ZABBIX_ADDR),
-            false,
-            "Ensure zabbix server is running and the trapper/listener port is reachable.",
-        )
-        .await,
-    );
-
-    checks.push(check_monitoring_source_seed(state.db.clone()).await);
-    checks.push(check_alert_policy_templates(state.db.clone()).await);
-    checks.push(check_setup_template_baseline(state.db.clone()).await);
-    checks.push(
-        tcp_endpoint_check(
-            "api-port",
-            "API Port",
-            &read_addr("SETUP_API_ADDR", DEFAULT_API_ADDR),
-            true,
-            "Ensure API bind address is reachable on the expected host and port.",
-        )
-        .await,
-    );
-
-    Ok(Json(build_response("integration_checklist", checks)))
+    Ok(Json(SetupActivationResponse {
+        generated_at: Utc::now(),
+        overall_status,
+        recommended_next_step_key,
+        recommended_profile_key: Some(recommended_profile.to_string()),
+        summary,
+        items,
+    }))
 }
 
 async fn list_setup_templates(
@@ -1749,6 +1769,258 @@ fn build_response(category: &str, checks: Vec<SetupCheckItem>) -> SetupChecklist
     }
 }
 
+async fn collect_setup_preflight_checks(state: &AppState) -> Vec<SetupCheckItem> {
+    vec![
+        check_database(state.db.clone()).await,
+        check_rbac_mode(state.rbac_enabled),
+        check_oidc_settings(state),
+        check_monitoring_secret_settings(state),
+        check_workflow_policy_mode(state),
+    ]
+}
+
+async fn collect_setup_checklist_checks(state: &AppState) -> Vec<SetupCheckItem> {
+    vec![
+        SetupCheckItem {
+            key: "api-service".to_string(),
+            title: "API Service".to_string(),
+            status: SetupCheckStatus::Pass,
+            critical: true,
+            message: "API endpoint is reachable because checklist request succeeded.".to_string(),
+            remediation: "If this check fails in other environments, start API service and verify API_HOST/API_PORT.".to_string(),
+        },
+        check_database(state.db.clone()).await.with_key("database"),
+        tcp_endpoint_check(
+            "web-console",
+            "Web Console",
+            &read_addr("SETUP_WEB_ADDR", DEFAULT_WEB_ADDR),
+            true,
+            "Ensure web console is running (for local stack: bash scripts/install.sh or docker compose up web).",
+        )
+        .await,
+        tcp_endpoint_check(
+            "redis",
+            "Redis",
+            &read_addr("SETUP_REDIS_ADDR", DEFAULT_REDIS_ADDR),
+            false,
+            "Ensure redis service is healthy and accessible from API host.",
+        )
+        .await,
+        tcp_endpoint_check(
+            "opensearch",
+            "OpenSearch",
+            &read_addr("SETUP_OPENSEARCH_ADDR", DEFAULT_OPENSEARCH_ADDR),
+            false,
+            "Ensure opensearch service is healthy and accessible from API host.",
+        )
+        .await,
+        tcp_endpoint_check(
+            "minio",
+            "MinIO",
+            &read_addr("SETUP_MINIO_ADDR", DEFAULT_MINIO_ADDR),
+            false,
+            "Ensure minio service is healthy and accessible from API host.",
+        )
+        .await,
+        tcp_endpoint_check(
+            "zabbix-server",
+            "Zabbix Server",
+            &read_addr("SETUP_ZABBIX_ADDR", DEFAULT_ZABBIX_ADDR),
+            false,
+            "Ensure zabbix server is running and the trapper/listener port is reachable.",
+        )
+        .await,
+        check_monitoring_source_seed(state.db.clone()).await,
+        check_alert_policy_templates(state.db.clone()).await,
+        check_setup_template_baseline(state.db.clone()).await,
+        tcp_endpoint_check(
+            "api-port",
+            "API Port",
+            &read_addr("SETUP_API_ADDR", DEFAULT_API_ADDR),
+            true,
+            "Ensure API bind address is reachable on the expected host and port.",
+        )
+        .await,
+    ]
+}
+
+fn summarize_activation_checklist_item(
+    item_key: &str,
+    title: &str,
+    ready_reason: &str,
+    response: &SetupChecklistResponse,
+    recommended_action: Option<SetupActivationRecommendedAction>,
+) -> SetupActivationItem {
+    let (status, summary, reason) = if response.summary.critical_failed > 0 {
+        (
+            "blocking".to_string(),
+            format!(
+                "{} critical checks are blocking activation.",
+                response.summary.critical_failed
+            ),
+            response
+                .checks
+                .iter()
+                .find(|item| item.critical && matches!(item.status, SetupCheckStatus::Fail))
+                .map(|item| item.remediation.clone())
+                .unwrap_or_else(|| "Resolve blocking setup checks before continuing.".to_string()),
+        )
+    } else if response.summary.failed > 0 || response.summary.warned > 0 {
+        (
+            "warning".to_string(),
+            format!(
+                "{} checks still need follow-up.",
+                response.summary.failed + response.summary.warned
+            ),
+            response
+                .checks
+                .iter()
+                .find(|item| matches!(item.status, SetupCheckStatus::Fail | SetupCheckStatus::Warn))
+                .map(|item| item.remediation.clone())
+                .unwrap_or_else(|| "Review setup checks with warnings before wider rollout.".to_string()),
+        )
+    } else {
+        (
+            "ready".to_string(),
+            "Checks are ready for activation.".to_string(),
+            ready_reason.to_string(),
+        )
+    };
+
+    SetupActivationItem {
+        item_key: item_key.to_string(),
+        title: title.to_string(),
+        status,
+        summary,
+        reason,
+        recommended_action,
+        evidence: json!({
+            "category": response.category,
+            "summary": {
+                "total": response.summary.total,
+                "passed": response.summary.passed,
+                "warned": response.summary.warned,
+                "failed": response.summary.failed,
+                "critical_failed": response.summary.critical_failed,
+                "ready": response.summary.ready,
+            }
+        }),
+    }
+}
+
+fn build_activation_profile_item(
+    asset_count: i64,
+    profile_run_count: i64,
+    recommended_profile_key: &'static str,
+) -> SetupActivationItem {
+    let (status, summary, reason) = if profile_run_count <= 0 {
+        (
+            "warning".to_string(),
+            "No operator starter profile has been applied yet.".to_string(),
+            format!(
+                "Use the recommended SMB starter profile '{}' to avoid blank-page setup work.",
+                recommended_profile_key
+            ),
+        )
+    } else {
+        (
+            "ready".to_string(),
+            format!(
+                "{} setup profile run(s) have already been applied.",
+                profile_run_count
+            ),
+            "An operator starter profile has already seeded the environment baseline."
+                .to_string(),
+        )
+    };
+
+    SetupActivationItem {
+        item_key: "operator_profile".to_string(),
+        title: "Operator starter profile".to_string(),
+        status,
+        summary,
+        reason,
+        recommended_action: Some(link_activation_action(
+            "setup.activation.profile.review",
+            "Review starter profile",
+            "Open the setup wizard profile presets and compare the recommended SMB baseline.",
+            ACTIVATION_SETUP_HREF,
+            Some(recommended_profile_key),
+        )),
+        evidence: json!({
+            "asset_count": asset_count,
+            "profile_run_count": profile_run_count,
+            "recommended_profile_key": recommended_profile_key,
+        }),
+    }
+}
+
+fn link_activation_action(
+    action_key: &str,
+    label: &str,
+    description: &str,
+    href: &str,
+    profile_key: Option<&str>,
+) -> SetupActivationRecommendedAction {
+    SetupActivationRecommendedAction {
+        action_key: action_key.to_string(),
+        label: label.to_string(),
+        description: description.to_string(),
+        action_type: "link".to_string(),
+        href: Some(href.to_string()),
+        requires_write: false,
+        auto_applicable: false,
+        profile_key: profile_key.map(str::to_string),
+    }
+}
+
+fn recommend_setup_profile_key(asset_count: i64) -> &'static str {
+    if asset_count > 800 {
+        SETUP_PROFILE_REGIONAL_ENTERPRISE
+    } else if asset_count > 80 {
+        SETUP_PROFILE_MULTI_SITE_RETAIL
+    } else {
+        SETUP_PROFILE_SMALL_OFFICE
+    }
+}
+
+fn summarize_activation_items(items: &[SetupActivationItem]) -> SetupActivationSummary {
+    let mut summary = SetupActivationSummary {
+        total: items.len(),
+        ready: 0,
+        warning: 0,
+        blocking: 0,
+    };
+
+    for item in items {
+        match item.status.as_str() {
+            "ready" => summary.ready += 1,
+            "warning" => summary.warning += 1,
+            "blocking" => summary.blocking += 1,
+            _ => {}
+        }
+    }
+
+    summary
+}
+
+fn derive_activation_overall_status(summary: &SetupActivationSummary) -> String {
+    if summary.blocking > 0 {
+        "blocking".to_string()
+    } else if summary.warning > 0 {
+        "warning".to_string()
+    } else {
+        "ready".to_string()
+    }
+}
+
+fn select_next_activation_item_key(items: &[SetupActivationItem]) -> Option<String> {
+    items.iter()
+        .find(|item| item.status == "blocking")
+        .or_else(|| items.iter().find(|item| item.status == "warning"))
+        .map(|item| item.item_key.clone())
+}
+
 impl From<&SetupTemplateRow> for SetupTemplateCatalogItem {
     fn from(row: &SetupTemplateRow) -> Self {
         Self {
@@ -2934,12 +3206,99 @@ mod tests {
     use serde_json::{Map as JsonMap, Value, json};
 
     use super::{
-        parse_rollback_hints, validate_identity_template_params,
+        SetupActivationItem, derive_activation_overall_status, parse_rollback_hints,
+        recommend_setup_profile_key, select_next_activation_item_key,
+        summarize_activation_items, validate_identity_template_params,
         validate_monitoring_template_params, validate_notification_template_params,
     };
 
     fn json_params(value: Value) -> JsonMap<String, Value> {
         value.as_object().cloned().expect("object")
+    }
+
+    #[test]
+    fn activation_summary_counts_and_derives_overall() {
+        let summary = summarize_activation_items(&[
+            SetupActivationItem {
+                item_key: "environment".to_string(),
+                title: "Environment".to_string(),
+                status: "ready".to_string(),
+                summary: "ok".to_string(),
+                reason: "ok".to_string(),
+                recommended_action: None,
+                evidence: json!({}),
+            },
+            SetupActivationItem {
+                item_key: "profile".to_string(),
+                title: "Profile".to_string(),
+                status: "warning".to_string(),
+                summary: "warn".to_string(),
+                reason: "warn".to_string(),
+                recommended_action: None,
+                evidence: json!({}),
+            },
+            SetupActivationItem {
+                item_key: "integration".to_string(),
+                title: "Integration".to_string(),
+                status: "blocking".to_string(),
+                summary: "block".to_string(),
+                reason: "block".to_string(),
+                recommended_action: None,
+                evidence: json!({}),
+            },
+        ]);
+
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.ready, 1);
+        assert_eq!(summary.warning, 1);
+        assert_eq!(summary.blocking, 1);
+        assert_eq!(derive_activation_overall_status(&summary), "blocking");
+    }
+
+    #[test]
+    fn activation_next_step_prefers_blocking_then_warning() {
+        let items = vec![
+            SetupActivationItem {
+                item_key: "environment".to_string(),
+                title: "Environment".to_string(),
+                status: "ready".to_string(),
+                summary: "ok".to_string(),
+                reason: "ok".to_string(),
+                recommended_action: None,
+                evidence: json!({}),
+            },
+            SetupActivationItem {
+                item_key: "profile".to_string(),
+                title: "Profile".to_string(),
+                status: "warning".to_string(),
+                summary: "warn".to_string(),
+                reason: "warn".to_string(),
+                recommended_action: None,
+                evidence: json!({}),
+            },
+            SetupActivationItem {
+                item_key: "integration".to_string(),
+                title: "Integration".to_string(),
+                status: "blocking".to_string(),
+                summary: "block".to_string(),
+                reason: "block".to_string(),
+                recommended_action: None,
+                evidence: json!({}),
+            },
+        ];
+
+        assert_eq!(
+            select_next_activation_item_key(&items),
+            Some("integration".to_string())
+        );
+    }
+
+    #[test]
+    fn setup_profile_recommendation_tracks_asset_size() {
+        assert_eq!(recommend_setup_profile_key(0), "smb-small-office");
+        assert_eq!(recommend_setup_profile_key(80), "smb-small-office");
+        assert_eq!(recommend_setup_profile_key(81), "smb-multi-site-retail");
+        assert_eq!(recommend_setup_profile_key(801), "smb-regional-enterprise");
     }
 
     #[test]
