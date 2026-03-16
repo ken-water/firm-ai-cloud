@@ -18,6 +18,43 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.18] - 2026-03-16
+
+### Added
+
+- v0.1.18 planning and release-gate documentation:
+  - `docs/56-v0.1.18-daily-ops-return-loop-plan.md`
+  - `docs/57-v0.1.18-release-gate-checklist.md`
+- v0.1.18 issue baseline and closure track: GitHub issues `#211` to `#216`.
+- Daily ops briefing and follow-up APIs:
+  - `GET /api/v1/ops/cockpit/daily-ops/briefing`
+  - `POST /api/v1/ops/cockpit/daily-ops/follow-up-actions`
+- Daily follow-up state persistence:
+  - migration: `202603160002_create_ops_daily_follow_up_states.sql`
+- v0.1.18 one-command operator validation suite:
+  - script: `scripts/qa-v0.1.18-daily-ops-loop.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- Overview cockpit now exposes a dedicated daily ops return-loop workspace with:
+  - prioritized today/overdue/blocked follow-up items,
+  - recommended next task visibility,
+  - inline acknowledge/complete/defer actions,
+  - activation and go-live drift folded into one daily queue.
+- Daily ops briefing now aggregates operator follow-up work across:
+  - alerts,
+  - tickets,
+  - runbook-risk failures,
+  - go-live readiness drift,
+  - activation leftovers and activation friction feedback.
+- RBAC coverage now includes daily ops briefing read and follow-up action write routes.
+
+### Fixed
+
+- Operators no longer need to jump between queue, setup, and go-live surfaces to understand what needs attention today.
+- Daily follow-up completion/defer state is now product-owned and auditable instead of being tracked informally outside the platform.
+
 ## [0.1.17] - 2026-03-16
 
 ### Added
