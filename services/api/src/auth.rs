@@ -910,6 +910,16 @@ mod tests {
             "ops.cockpit.read",
         );
         assert_permission(
+            Method::GET,
+            "/api/v1/ops/cockpit/daily-ops/briefing",
+            "ops.cockpit.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/ops/cockpit/daily-ops/follow-up-actions",
+            "ops.cockpit.write",
+        );
+        assert_permission(
             Method::POST,
             "/api/v1/ops/cockpit/integrations/bootstrap/apply",
             "ops.cockpit.write",
@@ -1363,6 +1373,16 @@ mod tests {
                 Method::GET,
                 "/api/v1/ops/cockpit/go-live/readiness",
                 "ops.cockpit.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/ops/cockpit/daily-ops/briefing",
+                "ops.cockpit.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/ops/cockpit/daily-ops/follow-up-actions",
+                "ops.cockpit.write",
             ),
             (
                 Method::POST,

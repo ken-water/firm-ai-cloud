@@ -22,10 +22,14 @@ const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 200;
 const STALE_PENDING_MINUTES: i64 = 15;
 const STALE_STREAM_MINUTES: i64 = 20;
+const MAX_DAILY_OPS_NOTE_LEN: usize = 1024;
 const CHECKLIST_STATUS_PENDING: &str = "pending";
 const CHECKLIST_STATUS_COMPLETED: &str = "completed";
 const CHECKLIST_STATUS_SKIPPED: &str = "skipped";
 const MAX_CHECKLIST_NOTE_LEN: usize = 1024;
+const DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED: &str = "acknowledged";
+const DAILY_OPS_FOLLOW_UP_STATE_COMPLETED: &str = "completed";
+const DAILY_OPS_FOLLOW_UP_STATE_DEFERRED: &str = "deferred";
 const GO_LIVE_NOTIFICATION_EVENT: &str = "runbook_risk.ticket_linked";
 const GO_LIVE_DEFAULT_TICKET_POLICY_KEY: &str = "default-ticket-sla";
 const GO_LIVE_FACTORY_ESCALATION_OWNER: &str = "ops-escalation";
@@ -34,6 +38,11 @@ const GO_LIVE_DEFAULT_EXECUTION_POLICY_KEY: &str = "global";
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/cockpit/queue", get(get_daily_cockpit_queue))
+        .route("/cockpit/daily-ops/briefing", get(get_daily_ops_briefing))
+        .route(
+            "/cockpit/daily-ops/follow-up-actions",
+            post(apply_daily_ops_follow_up_action),
+        )
         .route("/cockpit/next-actions", get(get_next_best_actions))
         .route("/cockpit/go-live/readiness", get(get_go_live_readiness))
         .route("/cockpit/checklists", get(get_ops_checklist))
@@ -53,6 +62,21 @@ struct DailyCockpitQuery {
     department: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DailyOpsBriefingQuery {
+    site: Option<String>,
+    department: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DailyOpsFollowUpActionRequest {
+    task_key: String,
+    action: String,
+    note: Option<String>,
+    defer_until: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -78,6 +102,82 @@ struct NextBestActionResponse {
     shift_date: String,
     total: usize,
     items: Vec<NextBestActionItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct DailyOpsBriefingResponse {
+    generated_at: DateTime<Utc>,
+    scope: DailyCockpitScope,
+    summary: DailyOpsBriefingSummary,
+    recommended_next_task_key: Option<String>,
+    items: Vec<DailyOpsFollowUpItem>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct DailyOpsBriefingSummary {
+    total: usize,
+    due_today: usize,
+    overdue: usize,
+    blocked: usize,
+    completed: usize,
+    deferred: usize,
+    acknowledged: usize,
+    critical: usize,
+    high: usize,
+    medium: usize,
+    low: usize,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct DailyOpsFollowUpItem {
+    task_key: String,
+    item_type: String,
+    domain: String,
+    status: String,
+    follow_up_state: String,
+    priority: String,
+    summary: String,
+    reason: String,
+    recommended_action: Option<DailyOpsRecommendedAction>,
+    available_actions: Vec<DailyOpsTaskAction>,
+    due_at: Option<DateTime<Utc>>,
+    observed_at: DateTime<Utc>,
+    acknowledged_at: Option<DateTime<Utc>>,
+    completed_at: Option<DateTime<Utc>>,
+    deferred_until: Option<DateTime<Utc>>,
+    evidence: Value,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct DailyOpsRecommendedAction {
+    action_key: String,
+    label: String,
+    description: String,
+    action_type: String,
+    href: Option<String>,
+    api_path: Option<String>,
+    method: Option<String>,
+    body: Option<Value>,
+    requires_write: bool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct DailyOpsTaskAction {
+    action_key: String,
+    label: String,
+    requires_write: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct DailyOpsFollowUpActionResponse {
+    task_key: String,
+    action: String,
+    actor: String,
+    status_before: String,
+    status_after: String,
+    item_before: DailyOpsFollowUpItem,
+    item_after: DailyOpsFollowUpItem,
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -173,6 +273,50 @@ struct DailyCockpitAction {
     method: Option<String>,
     body: Option<Value>,
     requires_write: bool,
+}
+
+#[derive(Debug, Clone)]
+struct DailyOpsCandidateItem {
+    task_key: String,
+    item_type: String,
+    domain: String,
+    base_status: String,
+    priority: String,
+    summary: String,
+    reason: String,
+    recommended_action: Option<DailyOpsRecommendedAction>,
+    due_at: Option<DateTime<Utc>>,
+    observed_at: DateTime<Utc>,
+    evidence: Value,
+}
+
+#[derive(Debug, FromRow)]
+struct DailyOpsFollowUpStateRow {
+    task_key: String,
+    item_type: String,
+    follow_up_state: String,
+    note: Option<String>,
+    defer_until: Option<DateTime<Utc>>,
+    actor: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct DailyOpsRunbookRiskAggregateRow {
+    template_key: String,
+    template_name: String,
+    executions: i64,
+    failed: i64,
+    latest_failed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, FromRow)]
+struct DailyOpsActivationFeedbackRow {
+    step_key: String,
+    template_key: Option<String>,
+    feedback_kind: String,
+    comment: Option<String>,
+    created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, FromRow)]
@@ -465,6 +609,136 @@ async fn get_daily_cockpit_queue(
             total,
         },
         items: paged_items,
+    }))
+}
+
+async fn get_daily_ops_briefing(
+    State(state): State<AppState>,
+    Query(query): Query<DailyOpsBriefingQuery>,
+) -> AppResult<Json<DailyOpsBriefingResponse>> {
+    let limit = query.limit.unwrap_or(24).clamp(1, MAX_LIMIT);
+    let site = trim_optional(query.site, 128);
+    let department = trim_optional(query.department, 128);
+    let now = Utc::now();
+
+    let mut candidates = collect_daily_ops_candidates(
+        &state,
+        site.as_deref(),
+        department.as_deref(),
+        MAX_LIMIT as i64,
+        now,
+    )
+    .await?;
+    let state_by_task = load_daily_ops_follow_up_states(
+        &state.db,
+        &candidates
+            .iter()
+            .map(|item| item.task_key.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+
+    let mut items = candidates
+        .drain(..)
+        .map(|item| {
+            let task_key = item.task_key.clone();
+            build_daily_ops_follow_up_item(item, state_by_task.get(task_key.as_str()), now)
+        })
+        .collect::<Vec<_>>();
+    sort_daily_ops_items(&mut items);
+
+    let summary = summarize_daily_ops_items(&items);
+    let recommended_next_task_key = select_recommended_daily_ops_task(&items);
+    if items.len() > limit as usize {
+        items.truncate(limit as usize);
+    }
+
+    Ok(Json(DailyOpsBriefingResponse {
+        generated_at: now,
+        scope: DailyCockpitScope { site, department },
+        summary,
+        recommended_next_task_key,
+        items,
+    }))
+}
+
+async fn apply_daily_ops_follow_up_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<DailyOpsFollowUpActionRequest>,
+) -> AppResult<Json<DailyOpsFollowUpActionResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let task_key = trim_optional(Some(payload.task_key), 255)
+        .ok_or_else(|| AppError::Validation("task_key is required".to_string()))?;
+    let action = normalize_daily_ops_action(payload.action)?;
+    let note = normalize_daily_ops_follow_up_note(payload.note)?;
+    let defer_until = parse_daily_ops_defer_until(payload.defer_until, action.as_str())?;
+    let now = Utc::now();
+    if action == "defer" && defer_until.map(|value| value <= now).unwrap_or(true) {
+        return Err(AppError::Validation(
+            "defer_until must be a future RFC3339 timestamp".to_string(),
+        ));
+    }
+
+    let mut candidates = collect_daily_ops_candidates(&state, None, None, MAX_LIMIT as i64, now).await?;
+    let state_by_task = load_daily_ops_follow_up_states(
+        &state.db,
+        &candidates
+            .iter()
+            .map(|item| item.task_key.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+    let candidate = candidates
+        .drain(..)
+        .find(|item| item.task_key == task_key)
+        .ok_or_else(|| AppError::Validation(format!("daily ops task '{task_key}' is not available")))?;
+
+    let item_before =
+        build_daily_ops_follow_up_item(candidate.clone(), state_by_task.get(task_key.as_str()), now);
+    let state_after = upsert_daily_ops_follow_up_state(
+        &state.db,
+        &task_key,
+        candidate.item_type.as_str(),
+        action.as_str(),
+        note.clone(),
+        defer_until,
+        actor.as_str(),
+    )
+    .await?;
+    let item_after = build_daily_ops_follow_up_item(candidate, Some(&state_after), now);
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: format!("ops.daily_ops.follow_up.{action}"),
+            target_type: "ops_daily_follow_up".to_string(),
+            target_id: Some(task_key.clone()),
+            result: "success".to_string(),
+            message: Some(format!("daily ops task '{}' updated via {}", task_key, action)),
+            metadata: json!({
+                "item_type": state_after.item_type,
+                "note": note,
+                "defer_until": defer_until,
+                "status_before": item_before.status,
+                "status_after": item_after.status,
+                "follow_up_state_before": item_before.follow_up_state,
+                "follow_up_state_after": item_after.follow_up_state,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(DailyOpsFollowUpActionResponse {
+        task_key,
+        action,
+        actor,
+        status_before: item_before.status.clone(),
+        status_after: item_after.status.clone(),
+        item_before,
+        item_after,
+        updated_at: state_after.updated_at,
     }))
 }
 
@@ -2576,6 +2850,648 @@ fn score_sync_job_item(
     )
 }
 
+async fn collect_daily_ops_candidates(
+    state: &AppState,
+    site: Option<&str>,
+    department: Option<&str>,
+    limit: i64,
+    now: DateTime<Utc>,
+) -> AppResult<Vec<DailyOpsCandidateItem>> {
+    let mut items = Vec::new();
+
+    let alert_items = build_alert_queue_items(
+        fetch_alert_queue_rows(&state.db, site, department, limit).await?,
+    )
+    .into_iter()
+    .map(build_daily_ops_candidate_from_cockpit_item)
+    .collect::<Vec<_>>();
+    items.extend(alert_items);
+
+    let ticket_items = build_ticket_queue_items(
+        fetch_ticket_queue_rows(&state.db, site, department, limit).await?,
+    )
+    .into_iter()
+    .map(build_daily_ops_candidate_from_cockpit_item)
+    .collect::<Vec<_>>();
+    items.extend(ticket_items);
+
+    items.extend(collect_daily_ops_runbook_risk_items(&state.db, now).await?);
+    items.extend(
+        collect_go_live_readiness_domains(state)
+            .await?
+            .into_iter()
+            .filter(|item| item.status != "ready")
+            .map(build_daily_ops_candidate_from_go_live_domain),
+    );
+    items.extend(collect_daily_ops_activation_items(&state.db, now).await?);
+
+    Ok(items)
+}
+
+fn build_daily_ops_candidate_from_cockpit_item(item: DailyCockpitQueueItem) -> DailyOpsCandidateItem {
+    let task_key = item.queue_key;
+    let item_type = item.item_type;
+    let summary = match item_type.as_str() {
+        "alert" => item
+            .entity
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Open alert requires follow-up.")
+            .to_string(),
+        "ticket" => item
+            .entity
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Ticket requires follow-up.")
+            .to_string(),
+        other => format!("{} requires operator follow-up.", other.replace('_', " ")),
+    };
+    let due_at = derive_due_at_for_cockpit_item(&item_type, &item.priority_level, item.observed_at);
+    let base_status = if due_at.map(|value| value <= Utc::now()).unwrap_or(false) {
+        "overdue".to_string()
+    } else {
+        "due_today".to_string()
+    };
+    let recommended_action = select_daily_ops_recommended_action(
+        item.actions.as_slice(),
+        match item_type.as_str() {
+            "alert" => Some("open-alert"),
+            "ticket" => Some("open-ticket"),
+            _ => None,
+        },
+        &summary,
+    );
+
+    DailyOpsCandidateItem {
+        task_key,
+        item_type: item_type.clone(),
+        domain: item_type,
+        base_status,
+        priority: item.priority_level,
+        summary,
+        reason: item.rationale,
+        recommended_action,
+        due_at,
+        observed_at: item.observed_at,
+        evidence: item.entity,
+    }
+}
+
+fn derive_due_at_for_cockpit_item(
+    item_type: &str,
+    priority: &str,
+    observed_at: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let minutes = match item_type {
+        "alert" => match priority {
+            "critical" => 30,
+            "high" => 120,
+            "medium" => 360,
+            _ => 720,
+        },
+        "ticket" => match priority {
+            "critical" => 60,
+            "high" => 240,
+            "medium" => 480,
+            _ => 1_440,
+        },
+        _ => 1_440,
+    };
+    Some(observed_at + chrono::Duration::minutes(minutes))
+}
+
+fn select_daily_ops_recommended_action(
+    actions: &[DailyCockpitAction],
+    preferred_key: Option<&str>,
+    summary: &str,
+) -> Option<DailyOpsRecommendedAction> {
+    let selected = preferred_key
+        .and_then(|key| actions.iter().find(|item| item.key == key))
+        .or_else(|| actions.iter().find(|item| item.href.is_some()))
+        .or_else(|| actions.first())?;
+
+    Some(DailyOpsRecommendedAction {
+        action_key: selected.key.clone(),
+        label: selected.label.clone(),
+        description: summary.to_string(),
+        action_type: if selected.href.is_some() {
+            "link".to_string()
+        } else {
+            "api".to_string()
+        },
+        href: selected.href.clone(),
+        api_path: selected.api_path.clone(),
+        method: selected.method.clone(),
+        body: selected.body.clone(),
+        requires_write: selected.requires_write,
+    })
+}
+
+fn build_daily_ops_candidate_from_go_live_domain(
+    item: GoLiveReadinessDomainItem,
+) -> DailyOpsCandidateItem {
+    let priority = if item.status == "blocking" {
+        "critical".to_string()
+    } else {
+        "high".to_string()
+    };
+    DailyOpsCandidateItem {
+        task_key: format!("go-live:{}", item.domain_key),
+        item_type: "go_live".to_string(),
+        domain: "go_live".to_string(),
+        base_status: if item.status == "blocking" {
+            "blocked".to_string()
+        } else {
+            "due_today".to_string()
+        },
+        priority,
+        summary: item.summary,
+        reason: item.reason,
+        recommended_action: item.recommended_action.map(|action| DailyOpsRecommendedAction {
+            action_key: action.action_key,
+            label: action.label,
+            description: action.description,
+            action_type: action.action_type,
+            href: action.href,
+            api_path: action.api_path,
+            method: action.method,
+            body: action.body,
+            requires_write: action.requires_write,
+        }),
+        due_at: if item.status == "blocking" {
+            Some(Utc::now())
+        } else {
+            Some(Utc::now() + chrono::Duration::hours(12))
+        },
+        observed_at: Utc::now(),
+        evidence: json!({
+            "domain_key": item.domain_key,
+            "status": item.status,
+            "evidence": item.evidence,
+        }),
+    }
+}
+
+async fn collect_daily_ops_runbook_risk_items(
+    db: &sqlx::PgPool,
+    now: DateTime<Utc>,
+) -> AppResult<Vec<DailyOpsCandidateItem>> {
+    let start_at = now - chrono::Duration::days(14);
+    let rows: Vec<DailyOpsRunbookRiskAggregateRow> = sqlx::query_as(
+        "SELECT template_key,
+                MAX(template_name) AS template_name,
+                COUNT(*)::bigint AS executions,
+                COUNT(*) FILTER (WHERE status = 'failed')::bigint AS failed,
+                MAX(created_at) FILTER (WHERE status = 'failed') AS latest_failed_at
+         FROM ops_runbook_template_executions
+         WHERE created_at >= $1
+         GROUP BY template_key
+         HAVING COUNT(*) FILTER (WHERE status = 'failed') > 0
+         ORDER BY failed DESC, latest_failed_at DESC, template_key ASC
+         LIMIT 20",
+    )
+    .bind(start_at)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let failure_rate = if row.executions <= 0 {
+                0.0
+            } else {
+                (row.failed as f64 / row.executions as f64) * 100.0
+            };
+            let (priority, response_window_hours) = if row.failed >= 3 || failure_rate >= 50.0 {
+                ("critical".to_string(), 6)
+            } else if row.failed >= 2 || failure_rate >= 25.0 {
+                ("high".to_string(), 12)
+            } else {
+                ("medium".to_string(), 24)
+            };
+            let due_at = row.latest_failed_at + chrono::Duration::hours(response_window_hours);
+            DailyOpsCandidateItem {
+                task_key: format!("runbook-risk:{}", row.template_key),
+                item_type: "runbook_risk".to_string(),
+                domain: "runbook_risk".to_string(),
+                base_status: if due_at <= now {
+                    "overdue".to_string()
+                } else {
+                    "due_today".to_string()
+                },
+                priority,
+                summary: format!("{} has repeated failed executions.", row.template_name),
+                reason: format!(
+                    "Failure rate is {:.0}% with {} failed run(s) from {} execution(s) in the last 14 days.",
+                    failure_rate, row.failed, row.executions
+                ),
+                recommended_action: Some(DailyOpsRecommendedAction {
+                    action_key: "open-runbook-risk".to_string(),
+                    label: "Review Runbook Risk".to_string(),
+                    description: "Inspect failure hotspots and decide whether the template needs routing, replay, or policy adjustment.".to_string(),
+                    action_type: "link".to_string(),
+                    href: Some("#/overview".to_string()),
+                    api_path: None,
+                    method: None,
+                    body: None,
+                    requires_write: false,
+                }),
+                due_at: Some(due_at),
+                observed_at: row.latest_failed_at,
+                evidence: json!({
+                    "template_key": row.template_key,
+                    "template_name": row.template_name,
+                    "executions": row.executions,
+                    "failed": row.failed,
+                    "failure_rate_percent": failure_rate,
+                    "latest_failed_at": row.latest_failed_at,
+                }),
+            }
+        })
+        .collect())
+}
+
+async fn collect_daily_ops_activation_items(
+    db: &sqlx::PgPool,
+    now: DateTime<Utc>,
+) -> AppResult<Vec<DailyOpsCandidateItem>> {
+    let applied_profiles: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM setup_operator_profile_runs WHERE status = 'applied'",
+    )
+    .fetch_one(db)
+    .await?;
+    let applied_templates: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM setup_bootstrap_template_runs WHERE status = 'applied'",
+    )
+    .fetch_one(db)
+    .await?;
+    let latest_feedback: Option<DailyOpsActivationFeedbackRow> = sqlx::query_as(
+        "SELECT step_key, template_key, feedback_kind, comment, created_at
+         FROM setup_activation_feedback_events
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?;
+
+    let mut items = Vec::new();
+    if applied_profiles <= 0 {
+        items.push(DailyOpsCandidateItem {
+            task_key: "activation:operator_profile".to_string(),
+            item_type: "activation".to_string(),
+            domain: "activation".to_string(),
+            base_status: "due_today".to_string(),
+            priority: "high".to_string(),
+            summary: "Recommended SMB operator profile has not been applied.".to_string(),
+            reason: "Operators still lack the baseline profile that turns activation guidance into reusable defaults.".to_string(),
+            recommended_action: Some(DailyOpsRecommendedAction {
+                action_key: "open-setup-activation".to_string(),
+                label: "Open Setup Activation".to_string(),
+                description: "Apply the recommended activation profile so the environment has an operator-safe baseline.".to_string(),
+                action_type: "link".to_string(),
+                href: Some("#/setup".to_string()),
+                api_path: None,
+                method: None,
+                body: None,
+                requires_write: true,
+            }),
+            due_at: Some(now + chrono::Duration::hours(12)),
+            observed_at: now,
+            evidence: json!({
+                "applied_profile_runs": applied_profiles,
+            }),
+        });
+    }
+    if applied_templates <= 0 {
+        items.push(DailyOpsCandidateItem {
+            task_key: "activation:template-baseline".to_string(),
+            item_type: "activation".to_string(),
+            domain: "activation".to_string(),
+            base_status: "due_today".to_string(),
+            priority: "medium".to_string(),
+            summary: "No setup template baseline has been applied yet.".to_string(),
+            reason: "Activation still depends on blank-page configuration instead of reusable starter templates.".to_string(),
+            recommended_action: Some(DailyOpsRecommendedAction {
+                action_key: "open-setup-templates".to_string(),
+                label: "Review Starter Templates".to_string(),
+                description: "Apply one starter template so monitoring, ticketing, and notification defaults are visible in product.".to_string(),
+                action_type: "link".to_string(),
+                href: Some("#/setup".to_string()),
+                api_path: None,
+                method: None,
+                body: None,
+                requires_write: true,
+            }),
+            due_at: Some(now + chrono::Duration::hours(18)),
+            observed_at: now,
+            evidence: json!({
+                "applied_template_runs": applied_templates,
+            }),
+        });
+    }
+    if let Some(feedback) = latest_feedback.filter(|item| item.feedback_kind != "not_applicable") {
+        items.push(DailyOpsCandidateItem {
+            task_key: format!("activation-feedback:{}", feedback.step_key),
+            item_type: "activation_feedback".to_string(),
+            domain: "activation".to_string(),
+            base_status: "blocked".to_string(),
+            priority: "high".to_string(),
+            summary: "Recent activation feedback reports unresolved friction.".to_string(),
+            reason: feedback
+                .comment
+                .clone()
+                .unwrap_or_else(|| format!("Activation step '{}' is marked as {}.", feedback.step_key, feedback.feedback_kind)),
+            recommended_action: Some(DailyOpsRecommendedAction {
+                action_key: "review-activation-feedback".to_string(),
+                label: "Review Activation Feedback".to_string(),
+                description: "Inspect the blocked or confusing activation step before expecting daily return usage.".to_string(),
+                action_type: "link".to_string(),
+                href: Some("#/setup".to_string()),
+                api_path: None,
+                method: None,
+                body: None,
+                requires_write: false,
+            }),
+            due_at: Some(feedback.created_at),
+            observed_at: feedback.created_at,
+            evidence: json!({
+                "step_key": feedback.step_key,
+                "template_key": feedback.template_key,
+                "feedback_kind": feedback.feedback_kind,
+                "comment": feedback.comment,
+            }),
+        });
+    }
+
+    Ok(items)
+}
+
+async fn load_daily_ops_follow_up_states(
+    db: &sqlx::PgPool,
+    task_keys: &[String],
+) -> AppResult<HashMap<String, DailyOpsFollowUpStateRow>> {
+    if task_keys.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows: Vec<DailyOpsFollowUpStateRow> = sqlx::query_as(
+        "SELECT task_key, item_type, follow_up_state, note, defer_until, actor, updated_at
+         FROM ops_daily_follow_up_states
+         WHERE task_key = ANY($1)",
+    )
+    .bind(task_keys)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.task_key.clone(), row))
+        .collect())
+}
+
+fn build_daily_ops_follow_up_item(
+    candidate: DailyOpsCandidateItem,
+    state: Option<&DailyOpsFollowUpStateRow>,
+    now: DateTime<Utc>,
+) -> DailyOpsFollowUpItem {
+    let follow_up_state = state
+        .map(|item| item.follow_up_state.clone())
+        .unwrap_or_else(|| "new".to_string());
+    let deferred_until = state.and_then(|item| item.defer_until);
+    let status = derive_daily_ops_status(candidate.base_status.as_str(), state, now);
+    let mut evidence = candidate.evidence;
+    if let Some(row) = state {
+        evidence["follow_up_note"] = row
+            .note
+            .clone()
+            .map(Value::String)
+            .unwrap_or(Value::Null);
+        evidence["follow_up_actor"] = Value::String(row.actor.clone());
+        evidence["follow_up_updated_at"] = Value::String(row.updated_at.to_rfc3339());
+    }
+
+    DailyOpsFollowUpItem {
+        task_key: candidate.task_key,
+        item_type: candidate.item_type,
+        domain: candidate.domain,
+        status,
+        follow_up_state: follow_up_state.clone(),
+        priority: candidate.priority,
+        summary: candidate.summary,
+        reason: candidate.reason,
+        recommended_action: candidate.recommended_action,
+        available_actions: build_daily_ops_task_actions(),
+        due_at: candidate.due_at,
+        observed_at: candidate.observed_at,
+        acknowledged_at: state
+            .filter(|item| item.follow_up_state == DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED)
+            .map(|item| item.updated_at),
+        completed_at: state
+            .filter(|item| item.follow_up_state == DAILY_OPS_FOLLOW_UP_STATE_COMPLETED)
+            .map(|item| item.updated_at),
+        deferred_until,
+        evidence,
+    }
+}
+
+fn derive_daily_ops_status(
+    base_status: &str,
+    state: Option<&DailyOpsFollowUpStateRow>,
+    now: DateTime<Utc>,
+) -> String {
+    match state.map(|item| item.follow_up_state.as_str()) {
+        Some(DAILY_OPS_FOLLOW_UP_STATE_COMPLETED) => "completed".to_string(),
+        Some(DAILY_OPS_FOLLOW_UP_STATE_DEFERRED)
+            if state.and_then(|item| item.defer_until).map(|value| value > now).unwrap_or(false) =>
+        {
+            "deferred".to_string()
+        }
+        _ => base_status.to_string(),
+    }
+}
+
+fn build_daily_ops_task_actions() -> Vec<DailyOpsTaskAction> {
+    vec![
+        DailyOpsTaskAction {
+            action_key: "acknowledge".to_string(),
+            label: "Acknowledge".to_string(),
+            requires_write: true,
+        },
+        DailyOpsTaskAction {
+            action_key: "complete".to_string(),
+            label: "Complete".to_string(),
+            requires_write: true,
+        },
+        DailyOpsTaskAction {
+            action_key: "defer".to_string(),
+            label: "Defer".to_string(),
+            requires_write: true,
+        },
+    ]
+}
+
+fn summarize_daily_ops_items(items: &[DailyOpsFollowUpItem]) -> DailyOpsBriefingSummary {
+    let mut summary = DailyOpsBriefingSummary::default();
+    summary.total = items.len();
+    for item in items {
+        match item.status.as_str() {
+            "due_today" => summary.due_today += 1,
+            "overdue" => summary.overdue += 1,
+            "blocked" => summary.blocked += 1,
+            "completed" => summary.completed += 1,
+            "deferred" => summary.deferred += 1,
+            _ => {}
+        }
+        if item.follow_up_state == DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED {
+            summary.acknowledged += 1;
+        }
+        match item.priority.as_str() {
+            "critical" => summary.critical += 1,
+            "high" => summary.high += 1,
+            "medium" => summary.medium += 1,
+            _ => summary.low += 1,
+        }
+    }
+    summary
+}
+
+fn select_recommended_daily_ops_task(items: &[DailyOpsFollowUpItem]) -> Option<String> {
+    items.first().map(|item| item.task_key.clone())
+}
+
+fn sort_daily_ops_items(items: &mut [DailyOpsFollowUpItem]) {
+    items.sort_by(|left, right| {
+        daily_ops_status_rank(right.status.as_str())
+            .cmp(&daily_ops_status_rank(left.status.as_str()))
+            .then_with(|| daily_ops_priority_rank(right.priority.as_str()).cmp(&daily_ops_priority_rank(left.priority.as_str())))
+            .then_with(|| {
+                let left_due = left.due_at.unwrap_or(left.observed_at);
+                let right_due = right.due_at.unwrap_or(right.observed_at);
+                left_due.cmp(&right_due)
+            })
+            .then_with(|| right.observed_at.cmp(&left.observed_at))
+            .then_with(|| left.task_key.cmp(&right.task_key))
+    });
+}
+
+fn daily_ops_status_rank(status: &str) -> i32 {
+    match status {
+        "blocked" => 5,
+        "overdue" => 4,
+        "due_today" => 3,
+        "deferred" => 2,
+        "completed" => 1,
+        _ => 0,
+    }
+}
+
+fn daily_ops_priority_rank(priority: &str) -> i32 {
+    match priority {
+        "critical" => 4,
+        "high" => 3,
+        "medium" => 2,
+        _ => 1,
+    }
+}
+
+fn normalize_daily_ops_action(raw: String) -> AppResult<String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "acknowledge" | "complete" | "defer" => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "action must be one of: acknowledge, complete, defer".to_string(),
+        )),
+    }
+}
+
+fn normalize_daily_ops_follow_up_note(raw: Option<String>) -> AppResult<Option<String>> {
+    match raw {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else if trimmed.len() > MAX_DAILY_OPS_NOTE_LEN {
+                Err(AppError::Validation(format!(
+                    "note must be <= {MAX_DAILY_OPS_NOTE_LEN} characters"
+                )))
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+fn parse_daily_ops_defer_until(
+    raw: Option<String>,
+    action: &str,
+) -> AppResult<Option<DateTime<Utc>>> {
+    match (action, raw) {
+        ("defer", None) => Err(AppError::Validation(
+            "defer_until is required when action=defer".to_string(),
+        )),
+        ("defer", Some(value)) => DateTime::parse_from_rfc3339(value.trim())
+            .map(|item| item.with_timezone(&Utc))
+            .map(Some)
+            .map_err(|_| AppError::Validation("defer_until must be RFC3339".to_string())),
+        (_, None) => Ok(None),
+        (_, Some(value)) if value.trim().is_empty() => Ok(None),
+        (_, Some(value)) => DateTime::parse_from_rfc3339(value.trim())
+            .map(|item| Some(item.with_timezone(&Utc)))
+            .map_err(|_| AppError::Validation("defer_until must be RFC3339".to_string())),
+    }
+}
+
+async fn upsert_daily_ops_follow_up_state(
+    db: &sqlx::PgPool,
+    task_key: &str,
+    item_type: &str,
+    action: &str,
+    note: Option<String>,
+    defer_until: Option<DateTime<Utc>>,
+    actor: &str,
+) -> AppResult<DailyOpsFollowUpStateRow> {
+    let follow_up_state = match action {
+        "acknowledge" => DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED,
+        "complete" => DAILY_OPS_FOLLOW_UP_STATE_COMPLETED,
+        "defer" => DAILY_OPS_FOLLOW_UP_STATE_DEFERRED,
+        _ => {
+            return Err(AppError::Validation(
+                "action must be one of: acknowledge, complete, defer".to_string(),
+            ))
+        }
+    };
+    let metadata = json!({
+        "action": action,
+    });
+
+    let row = sqlx::query_as(
+        "INSERT INTO ops_daily_follow_up_states (
+            task_key, item_type, follow_up_state, note, defer_until, actor, metadata
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (task_key) DO UPDATE
+         SET item_type = EXCLUDED.item_type,
+             follow_up_state = EXCLUDED.follow_up_state,
+             note = EXCLUDED.note,
+             defer_until = EXCLUDED.defer_until,
+             actor = EXCLUDED.actor,
+             metadata = EXCLUDED.metadata,
+             updated_at = NOW()
+         RETURNING task_key, item_type, follow_up_state, note, defer_until, actor, updated_at",
+    )
+    .bind(task_key)
+    .bind(item_type)
+    .bind(follow_up_state)
+    .bind(note)
+    .bind(defer_until)
+    .bind(actor)
+    .bind(metadata)
+    .fetch_one(db)
+    .await?;
+
+    Ok(row)
+}
+
 fn sort_daily_queue_items(items: &mut [DailyCockpitQueueItem]) {
     items.sort_by(|left, right| {
         right
@@ -2614,11 +3530,14 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        DailyCockpitAction, DailyCockpitQueueItem, GoLiveReadinessDomainItem,
-        MAX_CHECKLIST_NOTE_LEN, NextBestActionItem, OpsChecklistEntryRow,
-        OpsChecklistTemplateRow, build_ops_checklist_response, derive_go_live_overall_status,
-        normalize_optional_note, parse_optional_date, score_alert_item, score_ticket_item,
-        select_next_go_live_domain, sort_daily_queue_items, sort_next_best_actions,
+        DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED, DAILY_OPS_FOLLOW_UP_STATE_COMPLETED,
+        DailyCockpitAction, DailyCockpitQueueItem, DailyOpsFollowUpItem,
+        DailyOpsFollowUpStateRow, GoLiveReadinessDomainItem, MAX_CHECKLIST_NOTE_LEN,
+        NextBestActionItem, OpsChecklistEntryRow, OpsChecklistTemplateRow,
+        build_ops_checklist_response, derive_daily_ops_status, derive_go_live_overall_status,
+        normalize_daily_ops_action, normalize_optional_note, parse_optional_date, score_alert_item,
+        score_ticket_item, select_next_go_live_domain, sort_daily_ops_items,
+        sort_daily_queue_items, sort_next_best_actions, summarize_daily_ops_items,
         summarize_go_live_readiness,
     };
 
@@ -2944,6 +3863,183 @@ mod tests {
 
         let too_long = "x".repeat(MAX_CHECKLIST_NOTE_LEN + 1);
         assert!(normalize_optional_note(Some(too_long)).is_err());
+    }
+
+    #[test]
+    fn daily_ops_status_prefers_completed_and_future_defer() {
+        let now = Utc::now();
+        let completed_state = DailyOpsFollowUpStateRow {
+            task_key: "ticket:1".to_string(),
+            item_type: "ticket".to_string(),
+            follow_up_state: DAILY_OPS_FOLLOW_UP_STATE_COMPLETED.to_string(),
+            note: Some("done".to_string()),
+            defer_until: None,
+            actor: "operator".to_string(),
+            updated_at: now,
+        };
+        let deferred_state = DailyOpsFollowUpStateRow {
+            task_key: "ticket:2".to_string(),
+            item_type: "ticket".to_string(),
+            follow_up_state: "deferred".to_string(),
+            note: Some("later".to_string()),
+            defer_until: Some(now + Duration::hours(4)),
+            actor: "operator".to_string(),
+            updated_at: now,
+        };
+
+        assert_eq!(
+            derive_daily_ops_status("overdue", Some(&completed_state), now),
+            "completed"
+        );
+        assert_eq!(
+            derive_daily_ops_status("due_today", Some(&deferred_state), now),
+            "deferred"
+        );
+        assert_eq!(derive_daily_ops_status("blocked", None, now), "blocked");
+    }
+
+    #[test]
+    fn daily_ops_summary_counts_statuses_and_acknowledgements() {
+        let now = Utc::now();
+        let summary = summarize_daily_ops_items(&[
+            DailyOpsFollowUpItem {
+                task_key: "alert:1".to_string(),
+                item_type: "alert".to_string(),
+                domain: "alert".to_string(),
+                status: "overdue".to_string(),
+                follow_up_state: "new".to_string(),
+                priority: "critical".to_string(),
+                summary: "a".to_string(),
+                reason: "a".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now),
+                observed_at: now,
+                acknowledged_at: None,
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+            DailyOpsFollowUpItem {
+                task_key: "ticket:1".to_string(),
+                item_type: "ticket".to_string(),
+                domain: "ticket".to_string(),
+                status: "completed".to_string(),
+                follow_up_state: DAILY_OPS_FOLLOW_UP_STATE_COMPLETED.to_string(),
+                priority: "medium".to_string(),
+                summary: "b".to_string(),
+                reason: "b".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now),
+                observed_at: now,
+                acknowledged_at: None,
+                completed_at: Some(now),
+                deferred_until: None,
+                evidence: json!({}),
+            },
+            DailyOpsFollowUpItem {
+                task_key: "go-live:1".to_string(),
+                item_type: "go_live".to_string(),
+                domain: "go_live".to_string(),
+                status: "due_today".to_string(),
+                follow_up_state: DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED.to_string(),
+                priority: "high".to_string(),
+                summary: "c".to_string(),
+                reason: "c".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now),
+                observed_at: now,
+                acknowledged_at: Some(now),
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+        ]);
+
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.overdue, 1);
+        assert_eq!(summary.completed, 1);
+        assert_eq!(summary.due_today, 1);
+        assert_eq!(summary.acknowledged, 1);
+        assert_eq!(summary.critical, 1);
+        assert_eq!(summary.high, 1);
+        assert_eq!(summary.medium, 1);
+    }
+
+    #[test]
+    fn daily_ops_sort_prioritizes_blocked_and_overdue_first() {
+        let now = Utc::now();
+        let mut items = vec![
+            DailyOpsFollowUpItem {
+                task_key: "a".to_string(),
+                item_type: "alert".to_string(),
+                domain: "alert".to_string(),
+                status: "due_today".to_string(),
+                follow_up_state: "new".to_string(),
+                priority: "critical".to_string(),
+                summary: "a".to_string(),
+                reason: "a".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now + Duration::hours(1)),
+                observed_at: now,
+                acknowledged_at: None,
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+            DailyOpsFollowUpItem {
+                task_key: "b".to_string(),
+                item_type: "go_live".to_string(),
+                domain: "go_live".to_string(),
+                status: "blocked".to_string(),
+                follow_up_state: "new".to_string(),
+                priority: "high".to_string(),
+                summary: "b".to_string(),
+                reason: "b".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now),
+                observed_at: now,
+                acknowledged_at: None,
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+            DailyOpsFollowUpItem {
+                task_key: "c".to_string(),
+                item_type: "ticket".to_string(),
+                domain: "ticket".to_string(),
+                status: "overdue".to_string(),
+                follow_up_state: "new".to_string(),
+                priority: "medium".to_string(),
+                summary: "c".to_string(),
+                reason: "c".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now - Duration::hours(1)),
+                observed_at: now,
+                acknowledged_at: None,
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+        ];
+
+        sort_daily_ops_items(&mut items);
+        let keys = items.into_iter().map(|item| item.task_key).collect::<Vec<_>>();
+        assert_eq!(keys, vec!["b".to_string(), "c".to_string(), "a".to_string()]);
+    }
+
+    #[test]
+    fn validates_daily_ops_action() {
+        assert_eq!(
+            normalize_daily_ops_action(" complete ".to_string()).expect("valid"),
+            "complete"
+        );
+        assert!(normalize_daily_ops_action("unknown".to_string()).is_err());
     }
 
     #[test]

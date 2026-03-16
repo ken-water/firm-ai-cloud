@@ -47,6 +47,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     cockpitOperationalAssets,
     completeOpsChecklistItem,
     createSampleAsset,
+    dailyOpsBriefing,
+    dailyOpsNotice,
     departmentWorkspace,
     departmentWorkspaceOptions,
     dailyCockpitDepartmentFilter,
@@ -123,12 +125,14 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadChangeCalendar,
     loadChangeCalendarReservations,
     loadChangeCalendarSlotRecommendations,
+    loadDailyOpsBriefing,
     loadHandoverDigest,
     loadHandoverReminders,
     loadIncidentCommandDetail,
     loadIncidentCommands,
     loadNextBestActions,
     loadWeeklyDigest,
+    applyDailyOpsFollowUpAction,
     loadDailyCockpitSnapshot,
     loadOpsChecklist,
     loadAssets,
@@ -147,6 +151,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     saveRunbookRiskOwnerRoutingRules,
     closeBackupRestoreEvidence,
     runningBackupPolicyActionId,
+    loadingDailyOpsBriefing,
     loadingDailyCockpit,
     loadingNextBestActions,
     loadingOpsChecklist,
@@ -202,6 +207,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     opsChecklistDate,
     opsChecklistNotice,
     perspectiveScopeLabel,
+    runningDailyOpsFollowUpActionKey,
     recordOpsChecklistException,
     runningOpsChecklistActionKey,
     selectedBusinessAssetCount,
@@ -364,14 +370,15 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           actions={(
             <button
               onClick={() => void loadDailyCockpitSnapshot()}
-              disabled={loadingDailyCockpit || loadingNextBestActions || loadingOpsChecklist}
+              disabled={loadingDailyOpsBriefing || loadingDailyCockpit || loadingNextBestActions || loadingOpsChecklist}
             >
-              {loadingDailyCockpit || loadingNextBestActions || loadingOpsChecklist
+              {loadingDailyOpsBriefing || loadingDailyCockpit || loadingNextBestActions || loadingOpsChecklist
                 ? t("cmdb.actions.loading")
                 : t("cmdb.dailyCockpit.actions.refresh")}
             </button>
           )}
         >
+          {dailyOpsNotice && <p className="banner banner-success">{dailyOpsNotice}</p>}
           {dailyCockpitNotice && <p className="banner banner-success">{dailyCockpitNotice}</p>}
           {opsChecklistNotice && <p className="banner banner-success">{opsChecklistNotice}</p>}
           {!canWriteCmdb && <p className="inline-note">{t("cmdb.dailyCockpit.messages.readOnlyHint")}</p>}
@@ -393,6 +400,139 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 placeholder="platform"
               />
             </label>
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Daily ops return loop</h3>
+              <button onClick={() => void loadDailyOpsBriefing()} disabled={loadingDailyOpsBriefing}>
+                {loadingDailyOpsBriefing ? t("cmdb.actions.loading") : "Refresh daily ops"}
+              </button>
+            </div>
+            <p className="section-note">
+              One prioritized queue for today, overdue work, activation leftovers, and go-live drift.
+            </p>
+
+            {!dailyOpsBriefing ? (
+              <p>{loadingDailyOpsBriefing ? t("cmdb.actions.loading") : "No daily ops briefing yet."}</p>
+            ) : dailyOpsBriefing.items.length === 0 ? (
+              <p>No active daily follow-up item is visible in the current scope.</p>
+            ) : (
+              <>
+                <div className="toolbar-row" style={{ flexWrap: "wrap", marginBottom: "0.65rem" }}>
+                  <span className="status-chip status-chip-danger">overdue={dailyOpsBriefing.summary.overdue}</span>
+                  <span className="status-chip status-chip-warn">blocked={dailyOpsBriefing.summary.blocked}</span>
+                  <span className="status-chip">due_today={dailyOpsBriefing.summary.due_today}</span>
+                  <span className="status-chip status-chip-success">completed={dailyOpsBriefing.summary.completed}</span>
+                  <span className="status-chip">deferred={dailyOpsBriefing.summary.deferred}</span>
+                  <span className="inline-note">
+                    recommended_next={dailyOpsBriefing.recommended_next_task_key ?? "none"}
+                  </span>
+                </div>
+                <div className="toolbar-row" style={{ flexWrap: "wrap", marginBottom: "0.65rem" }}>
+                  <span className="inline-note">critical={dailyOpsBriefing.summary.critical}</span>
+                  <span className="inline-note">high={dailyOpsBriefing.summary.high}</span>
+                  <span className="inline-note">medium={dailyOpsBriefing.summary.medium}</span>
+                  <span className="inline-note">low={dailyOpsBriefing.summary.low}</span>
+                  <span className="inline-note">acknowledged={dailyOpsBriefing.summary.acknowledged}</span>
+                  <span className="inline-note">
+                    generated_at={new Date(dailyOpsBriefing.generated_at).toLocaleString()}
+                  </span>
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", minWidth: "1380px", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Task</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Priority</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Reason</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Timing</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Recommended</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Follow-up</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dailyOpsBriefing.items.map((item: any) => {
+                        const recommended = item.recommended_action;
+                        const statusClass = item.status === "overdue"
+                          ? "status-chip-danger"
+                          : item.status === "blocked"
+                            ? "status-chip-warn"
+                            : item.status === "completed"
+                              ? "status-chip-success"
+                              : "";
+                        return (
+                          <tr key={`daily-ops-${item.task_key}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <strong>{item.summary}</strong>
+                              <div className="inline-note">task_key={item.task_key}</div>
+                              <div className="inline-note">domain={item.domain} / type={item.item_type}</div>
+                              <div className="inline-note">follow_up_state={item.follow_up_state}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <span className={`status-chip ${statusClass}`}>{item.status}</span>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <span className={`status-chip ${item.priority === "critical" ? "status-chip-danger" : item.priority === "high" ? "status-chip-warn" : ""}`}>
+                                {item.priority}
+                              </span>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.reason}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>observed={new Date(item.observed_at).toLocaleString()}</div>
+                              <div>due={item.due_at ? new Date(item.due_at).toLocaleString() : "-"}</div>
+                              <div>deferred_until={item.deferred_until ? new Date(item.deferred_until).toLocaleString() : "-"}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {recommended ? (
+                                <>
+                                  <div>{recommended.description}</div>
+                                  {recommended.href ? (
+                                    <button
+                                      style={{ marginTop: "0.45rem" }}
+                                      onClick={() => {
+                                        if (typeof window !== "undefined") {
+                                          window.location.hash = recommended.href;
+                                        }
+                                      }}
+                                    >
+                                      {recommended.label}
+                                    </button>
+                                  ) : (
+                                    <span className="inline-note">{recommended.label}</span>
+                                  )}
+                                </>
+                              ) : (
+                                <span className="inline-note">No recommended action</span>
+                              )}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div className="toolbar-row" style={{ flexWrap: "wrap" }}>
+                                {(item.available_actions ?? []).map((action: any) => {
+                                  const running = runningDailyOpsFollowUpActionKey === `${item.task_key}:${action.action_key}`;
+                                  return (
+                                    <button
+                                      key={`daily-ops-action-${item.task_key}-${action.action_key}`}
+                                      onClick={() => void applyDailyOpsFollowUpAction(item, action)}
+                                      disabled={!canWriteCmdb || running || runningDailyOpsFollowUpActionKey !== null}
+                                    >
+                                      {running ? t("cmdb.actions.loading") : action.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>

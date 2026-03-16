@@ -764,6 +764,77 @@ type DailyCockpitQueueResponse = {
   items: DailyCockpitQueueItem[];
 };
 
+type DailyOpsRecommendedAction = {
+  action_key: string;
+  label: string;
+  description: string;
+  action_type: "api" | "link";
+  href?: string | null;
+  api_path?: string | null;
+  method?: string | null;
+  body?: Record<string, unknown> | null;
+  requires_write: boolean;
+};
+
+type DailyOpsTaskAction = {
+  action_key: "acknowledge" | "complete" | "defer";
+  label: string;
+  requires_write: boolean;
+};
+
+type DailyOpsFollowUpItem = {
+  task_key: string;
+  item_type: string;
+  domain: string;
+  status: "due_today" | "overdue" | "blocked" | "completed" | "deferred";
+  follow_up_state: "new" | "acknowledged" | "completed" | "deferred";
+  priority: "critical" | "high" | "medium" | "low";
+  summary: string;
+  reason: string;
+  recommended_action?: DailyOpsRecommendedAction | null;
+  available_actions: DailyOpsTaskAction[];
+  due_at: string | null;
+  observed_at: string;
+  acknowledged_at: string | null;
+  completed_at: string | null;
+  deferred_until: string | null;
+  evidence: Record<string, unknown>;
+};
+
+type DailyOpsBriefingResponse = {
+  generated_at: string;
+  scope: {
+    site: string | null;
+    department: string | null;
+  };
+  summary: {
+    total: number;
+    due_today: number;
+    overdue: number;
+    blocked: number;
+    completed: number;
+    deferred: number;
+    acknowledged: number;
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+  };
+  recommended_next_task_key: string | null;
+  items: DailyOpsFollowUpItem[];
+};
+
+type DailyOpsFollowUpActionResponse = {
+  task_key: string;
+  action: string;
+  actor: string;
+  status_before: DailyOpsFollowUpItem["status"];
+  status_after: DailyOpsFollowUpItem["status"];
+  item_before: DailyOpsFollowUpItem;
+  item_after: DailyOpsFollowUpItem;
+  updated_at: string;
+};
+
 type NextBestActionItem = {
   suggestion_key: string;
   domain: string;
@@ -2966,6 +3037,7 @@ export function App() {
   const [playbookDryRunResponse, setPlaybookDryRunResponse] = useState<PlaybookDryRunResponse | null>(null);
   const [playbookExecutionResult, setPlaybookExecutionResult] = useState<PlaybookExecutionDetail | null>(null);
   const [playbookNotice, setPlaybookNotice] = useState<string | null>(null);
+  const [dailyOpsBriefing, setDailyOpsBriefing] = useState<DailyOpsBriefingResponse | null>(null);
   const [dailyCockpitQueue, setDailyCockpitQueue] = useState<DailyCockpitQueueResponse | null>(null);
   const [nextBestActions, setNextBestActions] = useState<NextBestActionResponse | null>(null);
   const [opsChecklist, setOpsChecklist] = useState<OpsChecklistResponse | null>(null);
@@ -3050,6 +3122,7 @@ export function App() {
   const [changeCalendarSlotRecommendations, setChangeCalendarSlotRecommendations] =
     useState<ChangeCalendarSlotRecommendationResponse | null>(null);
   const [loadingDailyCockpit, setLoadingDailyCockpit] = useState(false);
+  const [loadingDailyOpsBriefing, setLoadingDailyOpsBriefing] = useState(false);
   const [loadingNextBestActions, setLoadingNextBestActions] = useState(false);
   const [loadingOpsChecklist, setLoadingOpsChecklist] = useState(false);
   const [loadingIncidentCommands, setLoadingIncidentCommands] = useState(false);
@@ -3115,8 +3188,10 @@ export function App() {
   const [closingHandoverItemKey, setClosingHandoverItemKey] = useState<string | null>(null);
   const [handoverDigestShiftDate, setHandoverDigestShiftDate] = useState(() => formatLocalDateKey(new Date()));
   const [runningDailyCockpitActionKey, setRunningDailyCockpitActionKey] = useState<string | null>(null);
+  const [runningDailyOpsFollowUpActionKey, setRunningDailyOpsFollowUpActionKey] = useState<string | null>(null);
   const [runningOpsChecklistActionKey, setRunningOpsChecklistActionKey] = useState<string | null>(null);
   const [dailyCockpitNotice, setDailyCockpitNotice] = useState<string | null>(null);
+  const [dailyOpsNotice, setDailyOpsNotice] = useState<string | null>(null);
   const [opsChecklistNotice, setOpsChecklistNotice] = useState<string | null>(null);
   const [incidentCommandNotice, setIncidentCommandNotice] = useState<string | null>(null);
   const [runbookNotice, setRunbookNotice] = useState<string | null>(null);
@@ -3989,6 +4064,38 @@ export function App() {
       setLoadingDailyCockpit(false);
     }
   }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter, t]);
+
+  const loadDailyOpsBriefing = useCallback(async () => {
+    setLoadingDailyOpsBriefing(true);
+    setError(null);
+    setDailyOpsNotice(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "24"
+      });
+      if (dailyCockpitSiteFilter.trim().length > 0) {
+        params.set("site", dailyCockpitSiteFilter.trim());
+      }
+      if (dailyCockpitDepartmentFilter.trim().length > 0) {
+        params.set("department", dailyCockpitDepartmentFilter.trim());
+      }
+
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/daily-ops/briefing?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+
+      const payload: DailyOpsBriefingResponse = await response.json();
+      setDailyOpsBriefing(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setDailyOpsBriefing(null);
+      return null;
+    } finally {
+      setLoadingDailyOpsBriefing(false);
+    }
+  }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter]);
 
   const loadNextBestActions = useCallback(async () => {
     setLoadingNextBestActions(true);
@@ -6554,6 +6661,7 @@ export function App() {
 
   const loadDailyCockpitSnapshot = useCallback(async () => {
     const [
+      briefing,
       queue,
       nextActions,
       checklist,
@@ -6577,6 +6685,7 @@ export function App() {
       handover,
       reminders
     ] = await Promise.all([
+      loadDailyOpsBriefing(),
       loadDailyCockpitQueue(),
       loadNextBestActions(),
       loadOpsChecklist(),
@@ -6607,6 +6716,7 @@ export function App() {
       loadHandoverReminders()
     ]);
     return {
+      briefing,
       queue,
       nextActions,
       checklist,
@@ -6646,6 +6756,7 @@ export function App() {
     loadBackupRestoreEvidence,
     loadChangeCalendar,
     loadChangeCalendarReservations,
+    loadDailyOpsBriefing,
     loadDailyCockpitQueue,
     loadHandoverDigest,
     loadHandoverReminders,
@@ -6702,6 +6813,60 @@ export function App() {
       setRunningDailyCockpitActionKey(null);
     }
   }, [canWriteCmdb, loadDailyCockpitSnapshot, t]);
+
+  const applyDailyOpsFollowUpAction = useCallback(async (
+    item: DailyOpsFollowUpItem,
+    action: DailyOpsTaskAction
+  ) => {
+    if (action.requires_write && !canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+
+    const actionKey = `${item.task_key}:${action.action_key}`;
+    let deferUntil: string | null = null;
+    let note: string | null = null;
+    if (action.action_key === "defer") {
+      deferUntil = window.prompt("Defer until (RFC3339)", "")?.trim() ?? "";
+      if (!deferUntil) {
+        return null;
+      }
+      note = window.prompt("Optional defer note", "")?.trim() ?? "";
+    } else if (action.action_key !== "acknowledge") {
+      note = window.prompt("Optional follow-up note", "")?.trim() ?? "";
+    }
+
+    setRunningDailyOpsFollowUpActionKey(actionKey);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/daily-ops/follow-up-actions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          task_key: item.task_key,
+          action: action.action_key,
+          note: note || null,
+          defer_until: deferUntil || null
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: DailyOpsFollowUpActionResponse = await response.json();
+      await loadDailyOpsBriefing();
+      setDailyOpsNotice(
+        `Follow-up ${payload.action} updated ${payload.task_key} (${payload.status_before} -> ${payload.status_after}).`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningDailyOpsFollowUpActionKey(null);
+    }
+  }, [canWriteCmdb, loadDailyOpsBriefing, t]);
 
   const updateOpsChecklistStatus = useCallback(
     async (templateKey: string, action: "complete" | "exception", note?: string) => {
@@ -11625,6 +11790,8 @@ export function App() {
     cockpitOperationalAssets,
     createSampleAsset,
     creatingSample,
+    dailyOpsBriefing,
+    dailyOpsNotice,
     dailyCockpitDepartmentFilter,
     dailyCockpitNotice,
     dailyCockpitQueue,
@@ -11697,12 +11864,14 @@ export function App() {
     loadChangeCalendar,
     loadChangeCalendarReservations,
     loadChangeCalendarSlotRecommendations,
+    loadDailyOpsBriefing,
     loadHandoverDigest,
     loadHandoverReminders,
     loadIncidentCommandDetail,
     loadIncidentCommands,
     loadNextBestActions,
     loadWeeklyDigest,
+    applyDailyOpsFollowUpAction,
     completeOpsChecklistItem,
     departmentWorkspace,
     departmentWorkspaceOptions,
@@ -11724,6 +11893,7 @@ export function App() {
     saveRunbookRiskOwnerDirectory,
     saveRunbookRiskOwnerRoutingRules,
     closeBackupRestoreEvidence,
+    loadingDailyOpsBriefing,
     loadingDailyCockpit,
     loadingNextBestActions,
     loadingOpsChecklist,
@@ -11781,6 +11951,7 @@ export function App() {
     opsChecklistDate,
     opsChecklistNotice,
     perspectiveScopeLabel,
+    runningDailyOpsFollowUpActionKey,
     recordOpsChecklistException,
     runningOpsChecklistActionKey,
     selectedBusinessAssetCount,
