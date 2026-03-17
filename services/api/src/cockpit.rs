@@ -40,6 +40,10 @@ pub fn routes() -> Router<AppState> {
         .route("/cockpit/queue", get(get_daily_cockpit_queue))
         .route("/cockpit/daily-ops/briefing", get(get_daily_ops_briefing))
         .route(
+            "/cockpit/daily-ops/closure-continuity",
+            get(get_daily_ops_closure_continuity),
+        )
+        .route(
             "/cockpit/daily-ops/follow-up-actions",
             post(apply_daily_ops_follow_up_action),
         )
@@ -66,6 +70,13 @@ struct DailyCockpitQuery {
 
 #[derive(Debug, Deserialize, Default)]
 struct DailyOpsBriefingQuery {
+    site: Option<String>,
+    department: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct DailyOpsClosureContinuityQuery {
     site: Option<String>,
     department: Option<String>,
     limit: Option<u32>,
@@ -113,6 +124,24 @@ struct DailyOpsBriefingResponse {
     items: Vec<DailyOpsFollowUpItem>,
 }
 
+#[derive(Debug, Serialize)]
+struct DailyOpsClosureContinuityResponse {
+    generated_at: DateTime<Utc>,
+    scope: DailyCockpitScope,
+    summary: DailyOpsClosureContinuitySummary,
+    carryover_items: Vec<DailyOpsFollowUpItem>,
+    escalation_candidates: Vec<DailyOpsEscalationCandidate>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct DailyOpsClosureContinuitySummary {
+    carryover_total: usize,
+    owner_gap_total: usize,
+    overdue_total: usize,
+    blocked_total: usize,
+    escalation_candidate_total: usize,
+}
+
 #[derive(Debug, Serialize, Default)]
 struct DailyOpsBriefingSummary {
     total: usize,
@@ -126,6 +155,20 @@ struct DailyOpsBriefingSummary {
     high: usize,
     medium: usize,
     low: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct DailyOpsEscalationCandidate {
+    task_key: String,
+    trigger_state: String,
+    trigger_reason: String,
+    owner_ref: String,
+    status: String,
+    priority: String,
+    due_at: Option<DateTime<Utc>>,
+    escalate_at: Option<DateTime<Utc>>,
+    due_policy: DailyOpsDuePolicy,
+    recommended_action: Option<DailyOpsRecommendedAction>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -688,6 +731,58 @@ async fn get_daily_ops_briefing(
         summary,
         recommended_next_task_key,
         items,
+    }))
+}
+
+async fn get_daily_ops_closure_continuity(
+    State(state): State<AppState>,
+    Query(query): Query<DailyOpsClosureContinuityQuery>,
+) -> AppResult<Json<DailyOpsClosureContinuityResponse>> {
+    let limit = query.limit.unwrap_or(24).clamp(1, MAX_LIMIT);
+    let site = trim_optional(query.site, 128);
+    let department = trim_optional(query.department, 128);
+    let now = Utc::now();
+
+    let mut candidates = collect_daily_ops_candidates(
+        &state,
+        site.as_deref(),
+        department.as_deref(),
+        MAX_LIMIT as i64,
+        now,
+    )
+    .await?;
+    let state_by_task = load_daily_ops_follow_up_states(
+        &state.db,
+        &candidates
+            .iter()
+            .map(|item| item.task_key.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+
+    let mut follow_up_items = candidates
+        .drain(..)
+        .map(|item| {
+            let task_key = item.task_key.clone();
+            build_daily_ops_follow_up_item(item, state_by_task.get(task_key.as_str()), now)
+        })
+        .collect::<Vec<_>>();
+    sort_daily_ops_items(&mut follow_up_items);
+
+    let mut carryover_items = collect_daily_ops_carryover_items(&follow_up_items);
+    let escalation_candidates = collect_daily_ops_escalation_candidates(&carryover_items, now);
+    let summary = summarize_daily_ops_closure_continuity(&carryover_items, &escalation_candidates);
+
+    if carryover_items.len() > limit as usize {
+        carryover_items.truncate(limit as usize);
+    }
+
+    Ok(Json(DailyOpsClosureContinuityResponse {
+        generated_at: now,
+        scope: DailyCockpitScope { site, department },
+        summary,
+        carryover_items,
+        escalation_candidates,
     }))
 }
 
@@ -3644,6 +3739,91 @@ fn summarize_daily_ops_items(items: &[DailyOpsFollowUpItem]) -> DailyOpsBriefing
     summary
 }
 
+fn collect_daily_ops_carryover_items(items: &[DailyOpsFollowUpItem]) -> Vec<DailyOpsFollowUpItem> {
+    items
+        .iter()
+        .filter(|item| {
+            if item.status == "completed" || item.status == "deferred" {
+                return false;
+            }
+            matches!(item.status.as_str(), "overdue" | "blocked")
+                || item.owner.owner_state == "owner_gap"
+        })
+        .cloned()
+        .collect()
+}
+
+fn collect_daily_ops_escalation_candidates(
+    items: &[DailyOpsFollowUpItem],
+    now: DateTime<Utc>,
+) -> Vec<DailyOpsEscalationCandidate> {
+    items
+        .iter()
+        .filter_map(|item| {
+            if !matches!(item.status.as_str(), "overdue" | "blocked") {
+                return None;
+            }
+            if !matches!(item.priority.as_str(), "critical" | "high") {
+                return None;
+            }
+            if item.follow_up_state == DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED {
+                return None;
+            }
+            let owner_ref = item.owner.owner_ref.as_ref()?.trim();
+            if owner_ref.is_empty() {
+                return None;
+            }
+            let escalate_at = item.escalate_at?;
+            if escalate_at > now {
+                return None;
+            }
+            let trigger_state = if item.status == "blocked" {
+                "blocked_unattended".to_string()
+            } else {
+                "overdue_unattended".to_string()
+            };
+            let trigger_reason = format!(
+                "Task is {} with priority {} and escalation window reached.",
+                item.status, item.priority
+            );
+            Some(DailyOpsEscalationCandidate {
+                task_key: item.task_key.clone(),
+                trigger_state,
+                trigger_reason,
+                owner_ref: owner_ref.to_string(),
+                status: item.status.clone(),
+                priority: item.priority.clone(),
+                due_at: item.due_at,
+                escalate_at: item.escalate_at,
+                due_policy: item.due_policy.clone(),
+                recommended_action: item.recommended_action.clone(),
+            })
+        })
+        .collect()
+}
+
+fn summarize_daily_ops_closure_continuity(
+    carryover_items: &[DailyOpsFollowUpItem],
+    escalation_candidates: &[DailyOpsEscalationCandidate],
+) -> DailyOpsClosureContinuitySummary {
+    let mut summary = DailyOpsClosureContinuitySummary {
+        carryover_total: carryover_items.len(),
+        escalation_candidate_total: escalation_candidates.len(),
+        ..DailyOpsClosureContinuitySummary::default()
+    };
+    for item in carryover_items {
+        if item.owner.owner_state == "owner_gap" {
+            summary.owner_gap_total += 1;
+        }
+        match item.status.as_str() {
+            "overdue" => summary.overdue_total += 1,
+            "blocked" => summary.blocked_total += 1,
+            _ => {}
+        }
+    }
+    summary
+}
+
 fn select_recommended_daily_ops_task(items: &[DailyOpsFollowUpItem]) -> Option<String> {
     items.first().map(|item| item.task_key.clone())
 }
@@ -3826,10 +4006,12 @@ mod tests {
         DailyCockpitAction, DailyCockpitQueueItem, DailyOpsDuePolicy, DailyOpsFollowUpItem,
         DailyOpsFollowUpStateRow, DailyOpsOwner, GoLiveReadinessDomainItem, MAX_CHECKLIST_NOTE_LEN,
         NextBestActionItem, OpsChecklistEntryRow, OpsChecklistTemplateRow,
-        build_ops_checklist_response, derive_daily_ops_status, derive_go_live_overall_status,
-        normalize_daily_ops_action, normalize_optional_note, parse_optional_date, score_alert_item,
-        score_ticket_item, select_next_go_live_domain, sort_daily_ops_items,
-        sort_daily_queue_items, sort_next_best_actions, summarize_daily_ops_items,
+        build_ops_checklist_response, collect_daily_ops_carryover_items,
+        collect_daily_ops_escalation_candidates, derive_daily_ops_status,
+        derive_go_live_overall_status, normalize_daily_ops_action, normalize_optional_note,
+        parse_optional_date, score_alert_item, score_ticket_item, select_next_go_live_domain,
+        sort_daily_ops_items, sort_daily_queue_items, sort_next_best_actions,
+        summarize_daily_ops_closure_continuity, summarize_daily_ops_items,
         summarize_go_live_readiness,
     };
 
@@ -4285,6 +4467,85 @@ mod tests {
         assert_eq!(summary.critical, 1);
         assert_eq!(summary.high, 1);
         assert_eq!(summary.medium, 1);
+    }
+
+    #[test]
+    fn closure_continuity_collects_carryover_and_escalation_candidates() {
+        let now = Utc::now();
+        let items = vec![
+            DailyOpsFollowUpItem {
+                task_key: "ticket:1".to_string(),
+                item_type: "ticket".to_string(),
+                domain: "ticket".to_string(),
+                status: "overdue".to_string(),
+                follow_up_state: "new".to_string(),
+                priority: "high".to_string(),
+                owner: test_daily_ops_owner(),
+                summary: "needs follow-up".to_string(),
+                reason: "reason".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now - Duration::hours(2)),
+                escalate_at: Some(now - Duration::minutes(10)),
+                due_policy: test_daily_ops_due_policy(),
+                observed_at: now - Duration::hours(4),
+                acknowledged_at: None,
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+            DailyOpsFollowUpItem {
+                task_key: "alert:1".to_string(),
+                item_type: "alert".to_string(),
+                domain: "alert".to_string(),
+                status: "due_today".to_string(),
+                follow_up_state: "new".to_string(),
+                priority: "critical".to_string(),
+                owner: DailyOpsOwner {
+                    owner_ref: None,
+                    owner_state: "owner_gap".to_string(),
+                    source: "test".to_string(),
+                    reason: "gap".to_string(),
+                },
+                summary: "owner missing".to_string(),
+                reason: "reason".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now + Duration::hours(1)),
+                escalate_at: Some(now + Duration::hours(2)),
+                due_policy: test_daily_ops_due_policy(),
+                observed_at: now - Duration::hours(1),
+                acknowledged_at: None,
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+        ];
+        let carryover = collect_daily_ops_carryover_items(&items);
+        let escalation = collect_daily_ops_escalation_candidates(&carryover, now);
+        let summary = summarize_daily_ops_closure_continuity(&carryover, &escalation);
+
+        assert_eq!(carryover.len(), 2);
+        assert_eq!(escalation.len(), 1);
+        assert_eq!(escalation[0].task_key, "ticket:1");
+        assert_eq!(summary.carryover_total, 2);
+        assert_eq!(summary.owner_gap_total, 1);
+        assert_eq!(summary.overdue_total, 1);
+        assert_eq!(summary.blocked_total, 0);
+        assert_eq!(summary.escalation_candidate_total, 1);
+    }
+
+    #[test]
+    fn closure_continuity_handles_empty_state() {
+        let now = Utc::now();
+        let carryover = collect_daily_ops_carryover_items(&[]);
+        let escalation = collect_daily_ops_escalation_candidates(&carryover, now);
+        let summary = summarize_daily_ops_closure_continuity(&carryover, &escalation);
+
+        assert!(carryover.is_empty());
+        assert!(escalation.is_empty());
+        assert_eq!(summary.carryover_total, 0);
+        assert_eq!(summary.escalation_candidate_total, 0);
     }
 
     #[test]
