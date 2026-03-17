@@ -160,6 +160,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.18 release gate checklist](docs/57-v0.1.18-release-gate-checklist.md)
 - [v0.1.19 daily ops ownership and closure continuity plan](docs/58-v0.1.19-daily-ops-ownership-closure-plan.md)
 - [v0.1.19 release gate checklist](docs/59-v0.1.19-release-gate-checklist.md)
+- [v0.1.20 owner assignment and escalation action loop plan](docs/60-v0.1.20-owner-assignment-escalation-loop-plan.md)
+- [v0.1.20 release gate checklist](docs/61-v0.1.20-release-gate-checklist.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
