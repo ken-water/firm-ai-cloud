@@ -136,11 +136,14 @@ struct DailyOpsFollowUpItem {
     status: String,
     follow_up_state: String,
     priority: String,
+    owner: DailyOpsOwner,
     summary: String,
     reason: String,
     recommended_action: Option<DailyOpsRecommendedAction>,
     available_actions: Vec<DailyOpsTaskAction>,
     due_at: Option<DateTime<Utc>>,
+    escalate_at: Option<DateTime<Utc>>,
+    due_policy: DailyOpsDuePolicy,
     observed_at: DateTime<Utc>,
     acknowledged_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
@@ -166,6 +169,22 @@ struct DailyOpsTaskAction {
     action_key: String,
     label: String,
     requires_write: bool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct DailyOpsOwner {
+    owner_ref: Option<String>,
+    owner_state: String,
+    source: String,
+    reason: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct DailyOpsDuePolicy {
+    policy_key: String,
+    due_window_minutes: i32,
+    escalation_window_minutes: i32,
+    source: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -282,10 +301,13 @@ struct DailyOpsCandidateItem {
     domain: String,
     base_status: String,
     priority: String,
+    owner: DailyOpsOwner,
     summary: String,
     reason: String,
     recommended_action: Option<DailyOpsRecommendedAction>,
     due_at: Option<DateTime<Utc>>,
+    escalate_at: Option<DateTime<Utc>>,
+    due_policy: DailyOpsDuePolicy,
     observed_at: DateTime<Utc>,
     evidence: Value,
 }
@@ -320,6 +342,12 @@ struct DailyOpsActivationFeedbackRow {
 }
 
 #[derive(Debug, FromRow)]
+struct RunbookRiskOwnerRouteRow {
+    template_key: String,
+    owner_ref: String,
+}
+
+#[derive(Debug, FromRow)]
 struct AlertQueueRow {
     id: i64,
     alert_source: String,
@@ -345,6 +373,7 @@ struct TicketQueueRow {
     title: String,
     status: String,
     priority: String,
+    assignee: Option<String>,
     updated_at: DateTime<Utc>,
     site: Option<String>,
     department: Option<String>,
@@ -680,7 +709,8 @@ async fn apply_daily_ops_follow_up_action(
         ));
     }
 
-    let mut candidates = collect_daily_ops_candidates(&state, None, None, MAX_LIMIT as i64, now).await?;
+    let mut candidates =
+        collect_daily_ops_candidates(&state, None, None, MAX_LIMIT as i64, now).await?;
     let state_by_task = load_daily_ops_follow_up_states(
         &state.db,
         &candidates
@@ -692,10 +722,15 @@ async fn apply_daily_ops_follow_up_action(
     let candidate = candidates
         .drain(..)
         .find(|item| item.task_key == task_key)
-        .ok_or_else(|| AppError::Validation(format!("daily ops task '{task_key}' is not available")))?;
+        .ok_or_else(|| {
+            AppError::Validation(format!("daily ops task '{task_key}' is not available"))
+        })?;
 
-    let item_before =
-        build_daily_ops_follow_up_item(candidate.clone(), state_by_task.get(task_key.as_str()), now);
+    let item_before = build_daily_ops_follow_up_item(
+        candidate.clone(),
+        state_by_task.get(task_key.as_str()),
+        now,
+    );
     let state_after = upsert_daily_ops_follow_up_state(
         &state.db,
         &task_key,
@@ -716,7 +751,10 @@ async fn apply_daily_ops_follow_up_action(
             target_type: "ops_daily_follow_up".to_string(),
             target_id: Some(task_key.clone()),
             result: "success".to_string(),
-            message: Some(format!("daily ops task '{}' updated via {}", task_key, action)),
+            message: Some(format!(
+                "daily ops task '{}' updated via {}",
+                task_key, action
+            )),
             metadata: json!({
                 "item_type": state_after.item_type,
                 "note": note,
@@ -1302,6 +1340,7 @@ async fn fetch_ticket_queue_rows(
             t.title,
             t.status,
             t.priority,
+            t.assignee,
             t.updated_at,
             scope_asset.site,
             scope_asset.department
@@ -1806,8 +1845,7 @@ async fn build_authentication_go_live_domain(
         (
             "ready",
             "Authentication controls are production-capable.".to_string(),
-            "RBAC is enabled and OIDC configuration is complete for the current mode."
-                .to_string(),
+            "RBAC is enabled and OIDC configuration is complete for the current mode.".to_string(),
         )
     } else if local_ready {
         (
@@ -2122,7 +2160,9 @@ async fn build_ticket_followup_go_live_domain(
         ),
     };
     let suggested_owner = match &row {
-        Some(row) if row.is_enabled && row.escalate_to_assignee != GO_LIVE_FACTORY_ESCALATION_OWNER => {
+        Some(row)
+            if row.is_enabled && row.escalate_to_assignee != GO_LIVE_FACTORY_ESCALATION_OWNER =>
+        {
             Some(row.escalate_to_assignee.clone())
         }
         _ => owner_suggestion.as_ref().map(|item| item.owner_ref.clone()),
@@ -2203,8 +2243,7 @@ async fn build_backup_restore_go_live_domain(
         (
             "warning",
             "Backup coverage exists, but drill or evidence follow-up is incomplete.".to_string(),
-            "At least one drill policy is stale or restore evidence remains open."
-                .to_string(),
+            "At least one drill policy is stale or restore evidence remains open.".to_string(),
         )
     } else {
         (
@@ -2634,6 +2673,7 @@ fn build_ticket_queue_items(rows: Vec<TicketQueueRow>) -> Vec<DailyCockpitQueueI
                     "title": row.title,
                     "status": row.status,
                     "priority": row.priority,
+                    "assignee": row.assignee,
                 }),
                 actions: vec![
                     DailyCockpitAction {
@@ -2858,37 +2898,61 @@ async fn collect_daily_ops_candidates(
     now: DateTime<Utc>,
 ) -> AppResult<Vec<DailyOpsCandidateItem>> {
     let mut items = Vec::new();
+    let escalation_window = load_default_escalation_window(&state.db).await?;
 
-    let alert_items = build_alert_queue_items(
-        fetch_alert_queue_rows(&state.db, site, department, limit).await?,
-    )
-    .into_iter()
-    .map(build_daily_ops_candidate_from_cockpit_item)
-    .collect::<Vec<_>>();
+    let alert_items =
+        build_alert_queue_items(fetch_alert_queue_rows(&state.db, site, department, limit).await?)
+            .into_iter()
+            .map(|item| build_daily_ops_candidate_from_cockpit_item(item, &escalation_window, now))
+            .collect::<Vec<_>>();
     items.extend(alert_items);
 
     let ticket_items = build_ticket_queue_items(
         fetch_ticket_queue_rows(&state.db, site, department, limit).await?,
     )
     .into_iter()
-    .map(build_daily_ops_candidate_from_cockpit_item)
+    .map(|item| build_daily_ops_candidate_from_cockpit_item(item, &escalation_window, now))
     .collect::<Vec<_>>();
     items.extend(ticket_items);
 
-    items.extend(collect_daily_ops_runbook_risk_items(&state.db, now).await?);
+    items.extend(
+        collect_daily_ops_runbook_risk_items(
+            &state.db,
+            escalation_window.escalate_to_assignee.as_str(),
+            now,
+        )
+        .await?,
+    );
     items.extend(
         collect_go_live_readiness_domains(state)
             .await?
             .into_iter()
             .filter(|item| item.status != "ready")
-            .map(build_daily_ops_candidate_from_go_live_domain),
+            .map(|item| {
+                build_daily_ops_candidate_from_go_live_domain(
+                    item,
+                    escalation_window.escalate_to_assignee.as_str(),
+                    now,
+                )
+            }),
     );
-    items.extend(collect_daily_ops_activation_items(&state.db, now).await?);
+    items.extend(
+        collect_daily_ops_activation_items(
+            &state.db,
+            escalation_window.escalate_to_assignee.as_str(),
+            now,
+        )
+        .await?,
+    );
 
     Ok(items)
 }
 
-fn build_daily_ops_candidate_from_cockpit_item(item: DailyCockpitQueueItem) -> DailyOpsCandidateItem {
+fn build_daily_ops_candidate_from_cockpit_item(
+    item: DailyCockpitQueueItem,
+    escalation_window: &EscalationWindowRow,
+    now: DateTime<Utc>,
+) -> DailyOpsCandidateItem {
     let task_key = item.queue_key;
     let item_type = item.item_type;
     let summary = match item_type.as_str() {
@@ -2906,8 +2970,19 @@ fn build_daily_ops_candidate_from_cockpit_item(item: DailyCockpitQueueItem) -> D
             .to_string(),
         other => format!("{} requires operator follow-up.", other.replace('_', " ")),
     };
-    let due_at = derive_due_at_for_cockpit_item(&item_type, &item.priority_level, item.observed_at);
-    let base_status = if due_at.map(|value| value <= Utc::now()).unwrap_or(false) {
+    let due_policy =
+        resolve_due_policy_for_cockpit_item(&item_type, &item.priority_level, escalation_window);
+    let due_at =
+        Some(item.observed_at + chrono::Duration::minutes(due_policy.due_window_minutes as i64));
+    let escalate_at = Some(
+        item.observed_at + chrono::Duration::minutes(due_policy.escalation_window_minutes as i64),
+    );
+    let owner = resolve_owner_for_cockpit_item(
+        &item_type,
+        &item.entity,
+        escalation_window.escalate_to_assignee.as_str(),
+    );
+    let base_status = if due_at.map(|value| value <= now).unwrap_or(false) {
         "overdue".to_string()
     } else {
         "due_today".to_string()
@@ -2928,36 +3003,99 @@ fn build_daily_ops_candidate_from_cockpit_item(item: DailyCockpitQueueItem) -> D
         domain: item_type,
         base_status,
         priority: item.priority_level,
+        owner,
         summary,
         reason: item.rationale,
         recommended_action,
         due_at,
+        escalate_at,
+        due_policy,
         observed_at: item.observed_at,
         evidence: item.entity,
     }
 }
 
-fn derive_due_at_for_cockpit_item(
+fn resolve_due_policy_for_cockpit_item(
     item_type: &str,
     priority: &str,
-    observed_at: DateTime<Utc>,
-) -> Option<DateTime<Utc>> {
-    let minutes = match item_type {
-        "alert" => match priority {
-            "critical" => 30,
-            "high" => 120,
-            "medium" => 360,
-            _ => 720,
+    escalation_window: &EscalationWindowRow,
+) -> DailyOpsDuePolicy {
+    match item_type {
+        "ticket" => {
+            let (due, escalation) = escalation_threshold_for_priority(escalation_window, priority);
+            DailyOpsDuePolicy {
+                policy_key: GO_LIVE_DEFAULT_TICKET_POLICY_KEY.to_string(),
+                due_window_minutes: due,
+                escalation_window_minutes: escalation,
+                source: "ticket_escalation_policies.default-ticket-sla".to_string(),
+            }
+        }
+        "alert" => {
+            let (due, escalation) = match priority {
+                "critical" => (30, 60),
+                "high" => (120, 240),
+                "medium" => (360, 720),
+                _ => (720, 1_440),
+            };
+            DailyOpsDuePolicy {
+                policy_key: "alert-priority-response".to_string(),
+                due_window_minutes: due,
+                escalation_window_minutes: escalation,
+                source: "built_in.alert-priority-response".to_string(),
+            }
+        }
+        _ => DailyOpsDuePolicy {
+            policy_key: "daily-ops-default".to_string(),
+            due_window_minutes: 1_440,
+            escalation_window_minutes: 2_880,
+            source: "built_in.daily-ops-default".to_string(),
         },
-        "ticket" => match priority {
-            "critical" => 60,
-            "high" => 240,
-            "medium" => 480,
-            _ => 1_440,
-        },
-        _ => 1_440,
-    };
-    Some(observed_at + chrono::Duration::minutes(minutes))
+    }
+}
+
+fn resolve_owner_for_cockpit_item(
+    item_type: &str,
+    entity: &Value,
+    fallback_owner: &str,
+) -> DailyOpsOwner {
+    if item_type == "ticket" {
+        if let Some(owner_ref) = entity
+            .get("assignee")
+            .and_then(Value::as_str)
+            .map(str::trim)
+        {
+            if !owner_ref.is_empty() {
+                return DailyOpsOwner {
+                    owner_ref: Some(owner_ref.to_string()),
+                    owner_state: "assigned".to_string(),
+                    source: "ticket.assignee".to_string(),
+                    reason: "Ticket already has an assignee.".to_string(),
+                };
+            }
+        }
+        return DailyOpsOwner {
+            owner_ref: Some(fallback_owner.to_string()),
+            owner_state: "assigned".to_string(),
+            source: "ticket_escalation_policies.default-ticket-sla".to_string(),
+            reason: "Ticket assignee is empty; default escalation owner applied.".to_string(),
+        };
+    }
+
+    if fallback_owner.trim().is_empty() {
+        return DailyOpsOwner {
+            owner_ref: None,
+            owner_state: "owner_gap".to_string(),
+            source: "daily-ops-default".to_string(),
+            reason: "No deterministic owner could be derived.".to_string(),
+        };
+    }
+
+    DailyOpsOwner {
+        owner_ref: Some(fallback_owner.to_string()),
+        owner_state: "assigned".to_string(),
+        source: "ticket_escalation_policies.default-ticket-sla".to_string(),
+        reason: "Default escalation owner applied.".to_string(),
+    }
 }
 
 fn select_daily_ops_recommended_action(
@@ -2989,12 +3127,31 @@ fn select_daily_ops_recommended_action(
 
 fn build_daily_ops_candidate_from_go_live_domain(
     item: GoLiveReadinessDomainItem,
+    default_owner: &str,
+    now: DateTime<Utc>,
 ) -> DailyOpsCandidateItem {
     let priority = if item.status == "blocking" {
         "critical".to_string()
     } else {
         "high".to_string()
     };
+    let due_policy = DailyOpsDuePolicy {
+        policy_key: "go-live-readiness".to_string(),
+        due_window_minutes: if item.status == "blocking" {
+            0
+        } else {
+            12 * 60
+        },
+        escalation_window_minutes: if item.status == "blocking" {
+            60
+        } else {
+            24 * 60
+        },
+        source: "built_in.go-live-readiness".to_string(),
+    };
+    let due_at = Some(now + chrono::Duration::minutes(due_policy.due_window_minutes as i64));
+    let escalate_at =
+        Some(now + chrono::Duration::minutes(due_policy.escalation_window_minutes as i64));
     DailyOpsCandidateItem {
         task_key: format!("go-live:{}", item.domain_key),
         item_type: "go_live".to_string(),
@@ -3005,25 +3162,31 @@ fn build_daily_ops_candidate_from_go_live_domain(
             "due_today".to_string()
         },
         priority,
+        owner: DailyOpsOwner {
+            owner_ref: Some(default_owner.to_string()),
+            owner_state: "assigned".to_string(),
+            source: "ticket_escalation_policies.default-ticket-sla".to_string(),
+            reason: "Go-live follow-up defaults to the escalation owner.".to_string(),
+        },
         summary: item.summary,
         reason: item.reason,
-        recommended_action: item.recommended_action.map(|action| DailyOpsRecommendedAction {
-            action_key: action.action_key,
-            label: action.label,
-            description: action.description,
-            action_type: action.action_type,
-            href: action.href,
-            api_path: action.api_path,
-            method: action.method,
-            body: action.body,
-            requires_write: action.requires_write,
-        }),
-        due_at: if item.status == "blocking" {
-            Some(Utc::now())
-        } else {
-            Some(Utc::now() + chrono::Duration::hours(12))
-        },
-        observed_at: Utc::now(),
+        recommended_action: item
+            .recommended_action
+            .map(|action| DailyOpsRecommendedAction {
+                action_key: action.action_key,
+                label: action.label,
+                description: action.description,
+                action_type: action.action_type,
+                href: action.href,
+                api_path: action.api_path,
+                method: action.method,
+                body: action.body,
+                requires_write: action.requires_write,
+            }),
+        due_at,
+        escalate_at,
+        due_policy,
+        observed_at: now,
         evidence: json!({
             "domain_key": item.domain_key,
             "status": item.status,
@@ -3034,9 +3197,11 @@ fn build_daily_ops_candidate_from_go_live_domain(
 
 async fn collect_daily_ops_runbook_risk_items(
     db: &sqlx::PgPool,
+    default_owner: &str,
     now: DateTime<Utc>,
 ) -> AppResult<Vec<DailyOpsCandidateItem>> {
     let start_at = now - chrono::Duration::days(14);
+    let owner_route_map = load_daily_ops_runbook_owner_route_map(db).await?;
     let rows: Vec<DailyOpsRunbookRiskAggregateRow> = sqlx::query_as(
         "SELECT template_key,
                 MAX(template_name) AS template_name,
@@ -3062,14 +3227,38 @@ async fn collect_daily_ops_runbook_risk_items(
             } else {
                 (row.failed as f64 / row.executions as f64) * 100.0
             };
-            let (priority, response_window_hours) = if row.failed >= 3 || failure_rate >= 50.0 {
-                ("critical".to_string(), 6)
-            } else if row.failed >= 2 || failure_rate >= 25.0 {
-                ("high".to_string(), 12)
-            } else {
-                ("medium".to_string(), 24)
+            let (priority, due_window_hours, escalation_window_hours) =
+                if row.failed >= 3 || failure_rate >= 50.0 {
+                    ("critical".to_string(), 6, 12)
+                } else if row.failed >= 2 || failure_rate >= 25.0 {
+                    ("high".to_string(), 12, 24)
+                } else {
+                    ("medium".to_string(), 24, 48)
+                };
+            let due_policy = DailyOpsDuePolicy {
+                policy_key: "runbook-risk-failure-rate".to_string(),
+                due_window_minutes: due_window_hours * 60,
+                escalation_window_minutes: escalation_window_hours * 60,
+                source: "built_in.runbook-risk-failure-rate".to_string(),
             };
-            let due_at = row.latest_failed_at + chrono::Duration::hours(response_window_hours);
+            let (owner_ref, owner_source, owner_reason) =
+                if let Some(owner) = owner_route_map.get(row.template_key.as_str()) {
+                    (
+                        owner.clone(),
+                        "ops_runbook_risk_owner_routing_rules".to_string(),
+                        "Owner resolved from enabled runbook-risk owner routing rule.".to_string(),
+                    )
+                } else {
+                    (
+                        default_owner.to_string(),
+                        "ticket_escalation_policies.default-ticket-sla".to_string(),
+                        "No enabled route found; fallback to default escalation owner.".to_string(),
+                    )
+                };
+            let due_at =
+                row.latest_failed_at + chrono::Duration::minutes(due_policy.due_window_minutes as i64);
+            let escalate_at = row.latest_failed_at
+                + chrono::Duration::minutes(due_policy.escalation_window_minutes as i64);
             DailyOpsCandidateItem {
                 task_key: format!("runbook-risk:{}", row.template_key),
                 item_type: "runbook_risk".to_string(),
@@ -3080,6 +3269,12 @@ async fn collect_daily_ops_runbook_risk_items(
                     "due_today".to_string()
                 },
                 priority,
+                owner: DailyOpsOwner {
+                    owner_ref: Some(owner_ref.clone()),
+                    owner_state: "assigned".to_string(),
+                    source: owner_source,
+                    reason: owner_reason,
+                },
                 summary: format!("{} has repeated failed executions.", row.template_name),
                 reason: format!(
                     "Failure rate is {:.0}% with {} failed run(s) from {} execution(s) in the last 14 days.",
@@ -3097,10 +3292,13 @@ async fn collect_daily_ops_runbook_risk_items(
                     requires_write: false,
                 }),
                 due_at: Some(due_at),
+                escalate_at: Some(escalate_at),
+                due_policy,
                 observed_at: row.latest_failed_at,
                 evidence: json!({
                     "template_key": row.template_key,
                     "template_name": row.template_name,
+                    "owner_ref": owner_ref,
                     "executions": row.executions,
                     "failed": row.failed,
                     "failure_rate_percent": failure_rate,
@@ -3111,8 +3309,31 @@ async fn collect_daily_ops_runbook_risk_items(
         .collect())
 }
 
+async fn load_daily_ops_runbook_owner_route_map(
+    db: &sqlx::PgPool,
+) -> AppResult<HashMap<String, String>> {
+    let rows: Vec<RunbookRiskOwnerRouteRow> = sqlx::query_as(
+        "SELECT DISTINCT ON (rule.template_key)
+            rule.template_key,
+            directory.owner_ref
+         FROM ops_runbook_risk_owner_routing_rules rule
+         INNER JOIN ops_runbook_risk_owner_directory directory
+                 ON directory.owner_key = rule.owner_key
+         WHERE rule.is_enabled = TRUE
+           AND directory.is_enabled = TRUE
+         ORDER BY rule.template_key ASC, rule.priority ASC, rule.updated_at DESC, rule.id DESC",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.template_key, row.owner_ref))
+        .collect())
+}
+
 async fn collect_daily_ops_activation_items(
     db: &sqlx::PgPool,
+    default_owner: &str,
     now: DateTime<Utc>,
 ) -> AppResult<Vec<DailyOpsCandidateItem>> {
     let applied_profiles: i64 = sqlx::query_scalar(
@@ -3136,12 +3357,24 @@ async fn collect_daily_ops_activation_items(
 
     let mut items = Vec::new();
     if applied_profiles <= 0 {
+        let due_policy = DailyOpsDuePolicy {
+            policy_key: "activation-profile-adoption".to_string(),
+            due_window_minutes: 12 * 60,
+            escalation_window_minutes: 24 * 60,
+            source: "built_in.activation-profile-adoption".to_string(),
+        };
         items.push(DailyOpsCandidateItem {
             task_key: "activation:operator_profile".to_string(),
             item_type: "activation".to_string(),
             domain: "activation".to_string(),
             base_status: "due_today".to_string(),
             priority: "high".to_string(),
+            owner: DailyOpsOwner {
+                owner_ref: Some(default_owner.to_string()),
+                owner_state: "assigned".to_string(),
+                source: "ticket_escalation_policies.default-ticket-sla".to_string(),
+                reason: "Activation tasks route to the default escalation owner.".to_string(),
+            },
             summary: "Recommended SMB operator profile has not been applied.".to_string(),
             reason: "Operators still lack the baseline profile that turns activation guidance into reusable defaults.".to_string(),
             recommended_action: Some(DailyOpsRecommendedAction {
@@ -3155,7 +3388,11 @@ async fn collect_daily_ops_activation_items(
                 body: None,
                 requires_write: true,
             }),
-            due_at: Some(now + chrono::Duration::hours(12)),
+            due_at: Some(now + chrono::Duration::minutes(due_policy.due_window_minutes as i64)),
+            escalate_at: Some(
+                now + chrono::Duration::minutes(due_policy.escalation_window_minutes as i64),
+            ),
+            due_policy,
             observed_at: now,
             evidence: json!({
                 "applied_profile_runs": applied_profiles,
@@ -3163,12 +3400,24 @@ async fn collect_daily_ops_activation_items(
         });
     }
     if applied_templates <= 0 {
+        let due_policy = DailyOpsDuePolicy {
+            policy_key: "activation-template-adoption".to_string(),
+            due_window_minutes: 18 * 60,
+            escalation_window_minutes: 30 * 60,
+            source: "built_in.activation-template-adoption".to_string(),
+        };
         items.push(DailyOpsCandidateItem {
             task_key: "activation:template-baseline".to_string(),
             item_type: "activation".to_string(),
             domain: "activation".to_string(),
             base_status: "due_today".to_string(),
             priority: "medium".to_string(),
+            owner: DailyOpsOwner {
+                owner_ref: Some(default_owner.to_string()),
+                owner_state: "assigned".to_string(),
+                source: "ticket_escalation_policies.default-ticket-sla".to_string(),
+                reason: "Activation tasks route to the default escalation owner.".to_string(),
+            },
             summary: "No setup template baseline has been applied yet.".to_string(),
             reason: "Activation still depends on blank-page configuration instead of reusable starter templates.".to_string(),
             recommended_action: Some(DailyOpsRecommendedAction {
@@ -3182,7 +3431,11 @@ async fn collect_daily_ops_activation_items(
                 body: None,
                 requires_write: true,
             }),
-            due_at: Some(now + chrono::Duration::hours(18)),
+            due_at: Some(now + chrono::Duration::minutes(due_policy.due_window_minutes as i64)),
+            escalate_at: Some(
+                now + chrono::Duration::minutes(due_policy.escalation_window_minutes as i64),
+            ),
+            due_policy,
             observed_at: now,
             evidence: json!({
                 "applied_template_runs": applied_templates,
@@ -3190,12 +3443,25 @@ async fn collect_daily_ops_activation_items(
         });
     }
     if let Some(feedback) = latest_feedback.filter(|item| item.feedback_kind != "not_applicable") {
+        let due_policy = DailyOpsDuePolicy {
+            policy_key: "activation-feedback-blocked".to_string(),
+            due_window_minutes: 0,
+            escalation_window_minutes: 6 * 60,
+            source: "built_in.activation-feedback-blocked".to_string(),
+        };
         items.push(DailyOpsCandidateItem {
             task_key: format!("activation-feedback:{}", feedback.step_key),
             item_type: "activation_feedback".to_string(),
             domain: "activation".to_string(),
             base_status: "blocked".to_string(),
             priority: "high".to_string(),
+            owner: DailyOpsOwner {
+                owner_ref: Some(default_owner.to_string()),
+                owner_state: "assigned".to_string(),
+                source: "ticket_escalation_policies.default-ticket-sla".to_string(),
+                reason: "Blocked activation feedback routes to the default escalation owner."
+                    .to_string(),
+            },
             summary: "Recent activation feedback reports unresolved friction.".to_string(),
             reason: feedback
                 .comment
@@ -3213,6 +3479,11 @@ async fn collect_daily_ops_activation_items(
                 requires_write: false,
             }),
             due_at: Some(feedback.created_at),
+            escalate_at: Some(
+                feedback.created_at
+                    + chrono::Duration::minutes(due_policy.escalation_window_minutes as i64),
+            ),
+            due_policy,
             observed_at: feedback.created_at,
             evidence: json!({
                 "step_key": feedback.step_key,
@@ -3260,12 +3531,24 @@ fn build_daily_ops_follow_up_item(
     let deferred_until = state.and_then(|item| item.defer_until);
     let status = derive_daily_ops_status(candidate.base_status.as_str(), state, now);
     let mut evidence = candidate.evidence;
+    evidence["owner"] = json!({
+        "owner_ref": candidate.owner.owner_ref.clone(),
+        "owner_state": candidate.owner.owner_state.clone(),
+        "source": candidate.owner.source.clone(),
+        "reason": candidate.owner.reason.clone(),
+    });
+    evidence["due_policy"] = json!({
+        "policy_key": candidate.due_policy.policy_key.clone(),
+        "due_window_minutes": candidate.due_policy.due_window_minutes,
+        "escalation_window_minutes": candidate.due_policy.escalation_window_minutes,
+        "source": candidate.due_policy.source.clone(),
+    });
+    evidence["escalate_at"] = candidate
+        .escalate_at
+        .map(|value| Value::String(value.to_rfc3339()))
+        .unwrap_or(Value::Null);
     if let Some(row) = state {
-        evidence["follow_up_note"] = row
-            .note
-            .clone()
-            .map(Value::String)
-            .unwrap_or(Value::Null);
+        evidence["follow_up_note"] = row.note.clone().map(Value::String).unwrap_or(Value::Null);
         evidence["follow_up_actor"] = Value::String(row.actor.clone());
         evidence["follow_up_updated_at"] = Value::String(row.updated_at.to_rfc3339());
     }
@@ -3277,11 +3560,14 @@ fn build_daily_ops_follow_up_item(
         status,
         follow_up_state: follow_up_state.clone(),
         priority: candidate.priority,
+        owner: candidate.owner,
         summary: candidate.summary,
         reason: candidate.reason,
         recommended_action: candidate.recommended_action,
         available_actions: build_daily_ops_task_actions(),
         due_at: candidate.due_at,
+        escalate_at: candidate.escalate_at,
+        due_policy: candidate.due_policy,
         observed_at: candidate.observed_at,
         acknowledged_at: state
             .filter(|item| item.follow_up_state == DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED)
@@ -3302,7 +3588,10 @@ fn derive_daily_ops_status(
     match state.map(|item| item.follow_up_state.as_str()) {
         Some(DAILY_OPS_FOLLOW_UP_STATE_COMPLETED) => "completed".to_string(),
         Some(DAILY_OPS_FOLLOW_UP_STATE_DEFERRED)
-            if state.and_then(|item| item.defer_until).map(|value| value > now).unwrap_or(false) =>
+            if state
+                .and_then(|item| item.defer_until)
+                .map(|value| value > now)
+                .unwrap_or(false) =>
         {
             "deferred".to_string()
         }
@@ -3363,7 +3652,10 @@ fn sort_daily_ops_items(items: &mut [DailyOpsFollowUpItem]) {
     items.sort_by(|left, right| {
         daily_ops_status_rank(right.status.as_str())
             .cmp(&daily_ops_status_rank(left.status.as_str()))
-            .then_with(|| daily_ops_priority_rank(right.priority.as_str()).cmp(&daily_ops_priority_rank(left.priority.as_str())))
+            .then_with(|| {
+                daily_ops_priority_rank(right.priority.as_str())
+                    .cmp(&daily_ops_priority_rank(left.priority.as_str()))
+            })
             .then_with(|| {
                 let left_due = left.due_at.unwrap_or(left.observed_at);
                 let right_due = right.due_at.unwrap_or(right.observed_at);
@@ -3458,7 +3750,7 @@ async fn upsert_daily_ops_follow_up_state(
         _ => {
             return Err(AppError::Validation(
                 "action must be one of: acknowledge, complete, defer".to_string(),
-            ))
+            ));
         }
     };
     let metadata = json!({
@@ -3531,8 +3823,8 @@ mod tests {
 
     use super::{
         DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED, DAILY_OPS_FOLLOW_UP_STATE_COMPLETED,
-        DailyCockpitAction, DailyCockpitQueueItem, DailyOpsFollowUpItem,
-        DailyOpsFollowUpStateRow, GoLiveReadinessDomainItem, MAX_CHECKLIST_NOTE_LEN,
+        DailyCockpitAction, DailyCockpitQueueItem, DailyOpsDuePolicy, DailyOpsFollowUpItem,
+        DailyOpsFollowUpStateRow, DailyOpsOwner, GoLiveReadinessDomainItem, MAX_CHECKLIST_NOTE_LEN,
         NextBestActionItem, OpsChecklistEntryRow, OpsChecklistTemplateRow,
         build_ops_checklist_response, derive_daily_ops_status, derive_go_live_overall_status,
         normalize_daily_ops_action, normalize_optional_note, parse_optional_date, score_alert_item,
@@ -3562,6 +3854,24 @@ mod tests {
                 body: None,
                 requires_write: false,
             }],
+        }
+    }
+
+    fn test_daily_ops_owner() -> DailyOpsOwner {
+        DailyOpsOwner {
+            owner_ref: Some("ops-escalation".to_string()),
+            owner_state: "assigned".to_string(),
+            source: "test".to_string(),
+            reason: "test fixture".to_string(),
+        }
+    }
+
+    fn test_daily_ops_due_policy() -> DailyOpsDuePolicy {
+        DailyOpsDuePolicy {
+            policy_key: "test-policy".to_string(),
+            due_window_minutes: 60,
+            escalation_window_minutes: 120,
+            source: "test".to_string(),
         }
     }
 
@@ -3909,11 +4219,14 @@ mod tests {
                 status: "overdue".to_string(),
                 follow_up_state: "new".to_string(),
                 priority: "critical".to_string(),
+                owner: test_daily_ops_owner(),
                 summary: "a".to_string(),
                 reason: "a".to_string(),
                 recommended_action: None,
                 available_actions: vec![],
                 due_at: Some(now),
+                escalate_at: None,
+                due_policy: test_daily_ops_due_policy(),
                 observed_at: now,
                 acknowledged_at: None,
                 completed_at: None,
@@ -3927,11 +4240,14 @@ mod tests {
                 status: "completed".to_string(),
                 follow_up_state: DAILY_OPS_FOLLOW_UP_STATE_COMPLETED.to_string(),
                 priority: "medium".to_string(),
+                owner: test_daily_ops_owner(),
                 summary: "b".to_string(),
                 reason: "b".to_string(),
                 recommended_action: None,
                 available_actions: vec![],
                 due_at: Some(now),
+                escalate_at: None,
+                due_policy: test_daily_ops_due_policy(),
                 observed_at: now,
                 acknowledged_at: None,
                 completed_at: Some(now),
@@ -3945,11 +4261,14 @@ mod tests {
                 status: "due_today".to_string(),
                 follow_up_state: DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED.to_string(),
                 priority: "high".to_string(),
+                owner: test_daily_ops_owner(),
                 summary: "c".to_string(),
                 reason: "c".to_string(),
                 recommended_action: None,
                 available_actions: vec![],
                 due_at: Some(now),
+                escalate_at: None,
+                due_policy: test_daily_ops_due_policy(),
                 observed_at: now,
                 acknowledged_at: Some(now),
                 completed_at: None,
@@ -3979,11 +4298,14 @@ mod tests {
                 status: "due_today".to_string(),
                 follow_up_state: "new".to_string(),
                 priority: "critical".to_string(),
+                owner: test_daily_ops_owner(),
                 summary: "a".to_string(),
                 reason: "a".to_string(),
                 recommended_action: None,
                 available_actions: vec![],
                 due_at: Some(now + Duration::hours(1)),
+                escalate_at: None,
+                due_policy: test_daily_ops_due_policy(),
                 observed_at: now,
                 acknowledged_at: None,
                 completed_at: None,
@@ -3997,11 +4319,14 @@ mod tests {
                 status: "blocked".to_string(),
                 follow_up_state: "new".to_string(),
                 priority: "high".to_string(),
+                owner: test_daily_ops_owner(),
                 summary: "b".to_string(),
                 reason: "b".to_string(),
                 recommended_action: None,
                 available_actions: vec![],
                 due_at: Some(now),
+                escalate_at: None,
+                due_policy: test_daily_ops_due_policy(),
                 observed_at: now,
                 acknowledged_at: None,
                 completed_at: None,
@@ -4015,11 +4340,14 @@ mod tests {
                 status: "overdue".to_string(),
                 follow_up_state: "new".to_string(),
                 priority: "medium".to_string(),
+                owner: test_daily_ops_owner(),
                 summary: "c".to_string(),
                 reason: "c".to_string(),
                 recommended_action: None,
                 available_actions: vec![],
                 due_at: Some(now - Duration::hours(1)),
+                escalate_at: None,
+                due_policy: test_daily_ops_due_policy(),
                 observed_at: now,
                 acknowledged_at: None,
                 completed_at: None,
@@ -4029,8 +4357,14 @@ mod tests {
         ];
 
         sort_daily_ops_items(&mut items);
-        let keys = items.into_iter().map(|item| item.task_key).collect::<Vec<_>>();
-        assert_eq!(keys, vec!["b".to_string(), "c".to_string(), "a".to_string()]);
+        let keys = items
+            .into_iter()
+            .map(|item| item.task_key)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            vec!["b".to_string(), "c".to_string(), "a".to_string()]
+        );
     }
 
     #[test]
