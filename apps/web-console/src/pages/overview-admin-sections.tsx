@@ -135,7 +135,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadNextBestActions,
     loadWeeklyDigest,
     applyDailyOpsFollowUpAction,
-    applyDailyOpsOwnerFollowUp,
+    applyDailyOpsOwnerAssignment,
+    applyDailyOpsEscalationAction,
     loadDailyCockpitSnapshot,
     loadOpsChecklist,
     loadAssets,
@@ -496,6 +497,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                           <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
                           <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Trigger</th>
                           <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Policy</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -517,6 +519,22 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                               <div className="inline-note">
                                 due={item.due_policy?.due_window_minutes ?? "-"}m / escalation={item.due_policy?.escalation_window_minutes ?? "-"}m
                               </div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {(() => {
+                                const running = runningDailyOpsFollowUpActionKey === `${item.task_key}:escalation-action`;
+                                return (
+                                  <>
+                                    <button
+                                      onClick={() => void applyDailyOpsEscalationAction(item)}
+                                      disabled={!canWriteCmdb || running || runningDailyOpsFollowUpActionKey !== null}
+                                    >
+                                      {running ? t("cmdb.actions.loading") : "Escalate now"}
+                                    </button>
+                                    {!canWriteCmdb && <div className="inline-note">read-only</div>}
+                                  </>
+                                );
+                              })()}
                             </td>
                           </tr>
                         ))}
@@ -666,15 +684,15 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                                   );
                                 })}
                                 <button
-                                  onClick={() => void applyDailyOpsOwnerFollowUp(item)}
+                                  onClick={() => void applyDailyOpsOwnerAssignment(item)}
                                   disabled={
                                     !canWriteCmdb ||
-                                    !item.owner?.owner_ref ||
                                     runningDailyOpsFollowUpActionKey !== null
                                   }
                                 >
-                                  Apply owner
+                                  Update owner
                                 </button>
+                                {!canWriteCmdb && <span className="inline-note">read-only</span>}
                               </div>
                             </td>
                           </tr>

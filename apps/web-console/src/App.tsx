@@ -882,6 +882,28 @@ type DailyOpsFollowUpActionResponse = {
   updated_at: string;
 };
 
+type DailyOpsOwnerAssignmentResponse = {
+  task_key: string;
+  actor: string;
+  owner_before: DailyOpsOwner;
+  owner_after: DailyOpsOwner;
+  item_before: DailyOpsFollowUpItem;
+  item_after: DailyOpsFollowUpItem;
+  updated_at: string;
+};
+
+type DailyOpsEscalationActionResponse = {
+  task_key: string;
+  actor: string;
+  trigger_state: string;
+  owner_ref: string;
+  status_before: DailyOpsFollowUpItem["status"];
+  status_after: DailyOpsFollowUpItem["status"];
+  item_before: DailyOpsFollowUpItem;
+  item_after: DailyOpsFollowUpItem;
+  updated_at: string;
+};
+
 type NextBestActionItem = {
   suggestion_key: string;
   domain: string;
@@ -6954,40 +6976,92 @@ export function App() {
     }
   }, [canWriteCmdb, loadDailyOpsBriefing, loadDailyOpsClosureContinuity, t]);
 
-  const applyDailyOpsOwnerFollowUp = useCallback(async (item: DailyOpsFollowUpItem) => {
+  const applyDailyOpsOwnerAssignment = useCallback(async (item: DailyOpsFollowUpItem) => {
     if (!canWriteCmdb) {
       setError(t("auth.messages.forbiddenAction"));
       return null;
     }
-    const ownerRef = item.owner.owner_ref?.trim();
+    const ownerRefInput = window.prompt(
+      "Owner reference",
+      item.owner.owner_ref?.trim() ?? ""
+    );
+    if (ownerRefInput === null) {
+      return null;
+    }
+    const ownerRef = ownerRefInput.trim();
     if (!ownerRef) {
       setError("Owner reference is required for owner follow-up.");
       return null;
     }
+    const noteInput = window.prompt("Optional owner assignment note", "") ?? "";
+    const note = noteInput.trim().length > 0 ? noteInput.trim() : null;
 
-    const actionKey = `${item.task_key}:owner-ack`;
+    const actionKey = `${item.task_key}:owner-assignment`;
     setRunningDailyOpsFollowUpActionKey(actionKey);
     setError(null);
     try {
-      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/daily-ops/follow-up-actions`, {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/daily-ops/owner-assignments`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
           task_key: item.task_key,
-          action: "acknowledge",
-          note: `owner_confirmed=${ownerRef}`,
-          defer_until: null
+          owner_ref: ownerRef,
+          note
         })
       });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response));
       }
-      const payload: DailyOpsFollowUpActionResponse = await response.json();
+      const payload: DailyOpsOwnerAssignmentResponse = await response.json();
       await Promise.all([loadDailyOpsBriefing(), loadDailyOpsClosureContinuity()]);
       setDailyOpsNotice(
-        `Owner follow-up applied for ${payload.task_key}: ${ownerRef} (${payload.status_before} -> ${payload.status_after}).`
+        `Owner updated for ${payload.task_key}: ${payload.owner_before.owner_ref ?? "-"} -> ${payload.owner_after.owner_ref ?? "-"}.`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningDailyOpsFollowUpActionKey(null);
+    }
+  }, [canWriteCmdb, loadDailyOpsBriefing, loadDailyOpsClosureContinuity, t]);
+
+  const applyDailyOpsEscalationAction = useCallback(async (item: DailyOpsEscalationCandidate) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    const noteInput = window.prompt(
+      "Optional escalation action note",
+      `trigger=${item.trigger_state}; owner=${item.owner_ref}`
+    );
+    if (noteInput === null) {
+      return null;
+    }
+
+    const actionKey = `${item.task_key}:escalation-action`;
+    setRunningDailyOpsFollowUpActionKey(actionKey);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/daily-ops/escalation-actions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          task_key: item.task_key,
+          note: noteInput.trim().length > 0 ? noteInput.trim() : null
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: DailyOpsEscalationActionResponse = await response.json();
+      await Promise.all([loadDailyOpsBriefing(), loadDailyOpsClosureContinuity()]);
+      setDailyOpsNotice(
+        `Escalation action executed for ${payload.task_key} (${payload.status_before} -> ${payload.status_after}).`
       );
       return payload;
     } catch (err) {
@@ -12004,7 +12078,8 @@ export function App() {
     loadNextBestActions,
     loadWeeklyDigest,
     applyDailyOpsFollowUpAction,
-    applyDailyOpsOwnerFollowUp,
+    applyDailyOpsOwnerAssignment,
+    applyDailyOpsEscalationAction,
     completeOpsChecklistItem,
     departmentWorkspace,
     departmentWorkspaceOptions,
