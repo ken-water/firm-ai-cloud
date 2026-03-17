@@ -48,6 +48,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     completeOpsChecklistItem,
     createSampleAsset,
     dailyOpsBriefing,
+    dailyOpsClosureContinuity,
     dailyOpsNotice,
     departmentWorkspace,
     departmentWorkspaceOptions,
@@ -125,6 +126,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadChangeCalendar,
     loadChangeCalendarReservations,
     loadChangeCalendarSlotRecommendations,
+    loadDailyOpsClosureContinuity,
     loadDailyOpsBriefing,
     loadHandoverDigest,
     loadHandoverReminders,
@@ -133,6 +135,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadNextBestActions,
     loadWeeklyDigest,
     applyDailyOpsFollowUpAction,
+    applyDailyOpsOwnerFollowUp,
     loadDailyCockpitSnapshot,
     loadOpsChecklist,
     loadAssets,
@@ -152,6 +155,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     closeBackupRestoreEvidence,
     runningBackupPolicyActionId,
     loadingDailyOpsBriefing,
+    loadingDailyOpsClosureContinuity,
     loadingDailyCockpit,
     loadingNextBestActions,
     loadingOpsChecklist,
@@ -370,9 +374,19 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           actions={(
             <button
               onClick={() => void loadDailyCockpitSnapshot()}
-              disabled={loadingDailyOpsBriefing || loadingDailyCockpit || loadingNextBestActions || loadingOpsChecklist}
+              disabled={
+                loadingDailyOpsBriefing ||
+                loadingDailyOpsClosureContinuity ||
+                loadingDailyCockpit ||
+                loadingNextBestActions ||
+                loadingOpsChecklist
+              }
             >
-              {loadingDailyOpsBriefing || loadingDailyCockpit || loadingNextBestActions || loadingOpsChecklist
+              {loadingDailyOpsBriefing ||
+              loadingDailyOpsClosureContinuity ||
+              loadingDailyCockpit ||
+              loadingNextBestActions ||
+              loadingOpsChecklist
                 ? t("cmdb.actions.loading")
                 : t("cmdb.dailyCockpit.actions.refresh")}
             </button>
@@ -404,9 +418,126 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
 
           <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
             <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>
+                Ownership closure continuity
+              </h3>
+              <button
+                onClick={() => void loadDailyOpsClosureContinuity()}
+                disabled={loadingDailyOpsClosureContinuity}
+              >
+                {loadingDailyOpsClosureContinuity ? t("cmdb.actions.loading") : "Refresh closure continuity"}
+              </button>
+            </div>
+            <p className="section-note">
+              Carryover and escalation signals linked to daily follow-up task keys.
+            </p>
+            {!dailyOpsClosureContinuity ? (
+              <p>{loadingDailyOpsClosureContinuity ? t("cmdb.actions.loading") : "No closure continuity snapshot yet."}</p>
+            ) : (
+              <>
+                <div className="toolbar-row" style={{ flexWrap: "wrap", marginBottom: "0.65rem" }}>
+                  <span className="status-chip status-chip-danger">carryover={dailyOpsClosureContinuity.summary.carryover_total}</span>
+                  <span className="status-chip status-chip-warn">owner_gap={dailyOpsClosureContinuity.summary.owner_gap_total}</span>
+                  <span className="status-chip">overdue={dailyOpsClosureContinuity.summary.overdue_total}</span>
+                  <span className="status-chip">blocked={dailyOpsClosureContinuity.summary.blocked_total}</span>
+                  <span className="status-chip status-chip-danger">
+                    escalation_candidates={dailyOpsClosureContinuity.summary.escalation_candidate_total}
+                  </span>
+                  <span className="inline-note">
+                    generated_at={new Date(dailyOpsClosureContinuity.generated_at).toLocaleString()}
+                  </span>
+                </div>
+                {dailyOpsClosureContinuity.carryover_items.length === 0 ? (
+                  <p className="inline-note">No carryover item remains for current scope.</p>
+                ) : (
+                  <div style={{ overflowX: "auto", marginBottom: "0.6rem" }}>
+                    <table style={{ borderCollapse: "collapse", minWidth: "1040px", width: "100%" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Task</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>State</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Due / Escalate</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dailyOpsClosureContinuity.carryover_items.map((item: any) => (
+                          <tr key={`daily-ops-carryover-${item.task_key}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>{item.task_key}</div>
+                              <div className="inline-note">{item.summary}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>{item.owner?.owner_ref ?? "-"}</div>
+                              <div className="inline-note">{item.owner?.owner_state ?? "-"}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <span className={`status-chip ${item.status === "blocked" ? "status-chip-warn" : item.status === "overdue" ? "status-chip-danger" : ""}`}>
+                                {item.status}
+                              </span>
+                              <div className="inline-note">priority={item.priority}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>due={item.due_at ? new Date(item.due_at).toLocaleString() : "-"}</div>
+                              <div>escalate={item.escalate_at ? new Date(item.escalate_at).toLocaleString() : "-"}</div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {dailyOpsClosureContinuity.escalation_candidates.length > 0 && (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Escalation task</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Trigger</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Policy</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dailyOpsClosureContinuity.escalation_candidates.map((item: any) => (
+                          <tr key={`daily-ops-escalation-${item.task_key}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>{item.task_key}</div>
+                              <div className="inline-note">{item.status} / {item.priority}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.owner_ref}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>{item.trigger_state}</div>
+                              <div className="inline-note">{item.trigger_reason}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>{item.due_policy?.policy_key ?? "-"}</div>
+                              <div className="inline-note">
+                                due={item.due_policy?.due_window_minutes ?? "-"}m / escalation={item.due_policy?.escalation_window_minutes ?? "-"}m
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.85rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
               <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Daily ops return loop</h3>
-              <button onClick={() => void loadDailyOpsBriefing()} disabled={loadingDailyOpsBriefing}>
-                {loadingDailyOpsBriefing ? t("cmdb.actions.loading") : "Refresh daily ops"}
+              <button
+                onClick={() => void Promise.all([loadDailyOpsBriefing(), loadDailyOpsClosureContinuity()])}
+                disabled={loadingDailyOpsBriefing || loadingDailyOpsClosureContinuity}
+              >
+                {loadingDailyOpsBriefing || loadingDailyOpsClosureContinuity
+                  ? t("cmdb.actions.loading")
+                  : "Refresh daily ops"}
               </button>
             </div>
             <p className="section-note">
@@ -446,6 +577,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                         <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Task</th>
                         <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
                         <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Priority</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
                         <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Reason</th>
                         <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Timing</th>
                         <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Recommended</th>
@@ -479,11 +611,21 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                               </span>
                             </td>
                             <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>{item.owner?.owner_ref ?? "-"}</div>
+                              <div className="inline-note">state={item.owner?.owner_state ?? "unknown"}</div>
+                              <div className="inline-note">source={item.owner?.source ?? "-"}</div>
+                              <div className="inline-note">{item.owner?.reason ?? "-"}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                               {item.reason}
                             </td>
                             <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                               <div>observed={new Date(item.observed_at).toLocaleString()}</div>
                               <div>due={item.due_at ? new Date(item.due_at).toLocaleString() : "-"}</div>
+                              <div>escalate={item.escalate_at ? new Date(item.escalate_at).toLocaleString() : "-"}</div>
+                              <div className="inline-note">
+                                due_policy={item.due_policy?.policy_key ?? "-"} ({item.due_policy?.due_window_minutes ?? "-"}m/{item.due_policy?.escalation_window_minutes ?? "-"}m)
+                              </div>
                               <div>deferred_until={item.deferred_until ? new Date(item.deferred_until).toLocaleString() : "-"}</div>
                             </td>
                             <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
@@ -523,6 +665,16 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                                     </button>
                                   );
                                 })}
+                                <button
+                                  onClick={() => void applyDailyOpsOwnerFollowUp(item)}
+                                  disabled={
+                                    !canWriteCmdb ||
+                                    !item.owner?.owner_ref ||
+                                    runningDailyOpsFollowUpActionKey !== null
+                                  }
+                                >
+                                  Apply owner
+                                </button>
                               </div>
                             </td>
                           </tr>

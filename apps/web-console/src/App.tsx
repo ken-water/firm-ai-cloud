@@ -782,6 +782,20 @@ type DailyOpsTaskAction = {
   requires_write: boolean;
 };
 
+type DailyOpsOwner = {
+  owner_ref: string | null;
+  owner_state: string;
+  source: string;
+  reason: string;
+};
+
+type DailyOpsDuePolicy = {
+  policy_key: string;
+  due_window_minutes: number;
+  escalation_window_minutes: number;
+  source: string;
+};
+
 type DailyOpsFollowUpItem = {
   task_key: string;
   item_type: string;
@@ -789,11 +803,14 @@ type DailyOpsFollowUpItem = {
   status: "due_today" | "overdue" | "blocked" | "completed" | "deferred";
   follow_up_state: "new" | "acknowledged" | "completed" | "deferred";
   priority: "critical" | "high" | "medium" | "low";
+  owner: DailyOpsOwner;
   summary: string;
   reason: string;
   recommended_action?: DailyOpsRecommendedAction | null;
   available_actions: DailyOpsTaskAction[];
   due_at: string | null;
+  escalate_at: string | null;
+  due_policy: DailyOpsDuePolicy;
   observed_at: string;
   acknowledged_at: string | null;
   completed_at: string | null;
@@ -822,6 +839,36 @@ type DailyOpsBriefingResponse = {
   };
   recommended_next_task_key: string | null;
   items: DailyOpsFollowUpItem[];
+};
+
+type DailyOpsEscalationCandidate = {
+  task_key: string;
+  trigger_state: string;
+  trigger_reason: string;
+  owner_ref: string;
+  status: DailyOpsFollowUpItem["status"];
+  priority: DailyOpsFollowUpItem["priority"];
+  due_at: string | null;
+  escalate_at: string | null;
+  due_policy: DailyOpsDuePolicy;
+  recommended_action?: DailyOpsRecommendedAction | null;
+};
+
+type DailyOpsClosureContinuityResponse = {
+  generated_at: string;
+  scope: {
+    site: string | null;
+    department: string | null;
+  };
+  summary: {
+    carryover_total: number;
+    owner_gap_total: number;
+    overdue_total: number;
+    blocked_total: number;
+    escalation_candidate_total: number;
+  };
+  carryover_items: DailyOpsFollowUpItem[];
+  escalation_candidates: DailyOpsEscalationCandidate[];
 };
 
 type DailyOpsFollowUpActionResponse = {
@@ -3038,6 +3085,8 @@ export function App() {
   const [playbookExecutionResult, setPlaybookExecutionResult] = useState<PlaybookExecutionDetail | null>(null);
   const [playbookNotice, setPlaybookNotice] = useState<string | null>(null);
   const [dailyOpsBriefing, setDailyOpsBriefing] = useState<DailyOpsBriefingResponse | null>(null);
+  const [dailyOpsClosureContinuity, setDailyOpsClosureContinuity] =
+    useState<DailyOpsClosureContinuityResponse | null>(null);
   const [dailyCockpitQueue, setDailyCockpitQueue] = useState<DailyCockpitQueueResponse | null>(null);
   const [nextBestActions, setNextBestActions] = useState<NextBestActionResponse | null>(null);
   const [opsChecklist, setOpsChecklist] = useState<OpsChecklistResponse | null>(null);
@@ -3123,6 +3172,7 @@ export function App() {
     useState<ChangeCalendarSlotRecommendationResponse | null>(null);
   const [loadingDailyCockpit, setLoadingDailyCockpit] = useState(false);
   const [loadingDailyOpsBriefing, setLoadingDailyOpsBriefing] = useState(false);
+  const [loadingDailyOpsClosureContinuity, setLoadingDailyOpsClosureContinuity] = useState(false);
   const [loadingNextBestActions, setLoadingNextBestActions] = useState(false);
   const [loadingOpsChecklist, setLoadingOpsChecklist] = useState(false);
   const [loadingIncidentCommands, setLoadingIncidentCommands] = useState(false);
@@ -4094,6 +4144,38 @@ export function App() {
       return null;
     } finally {
       setLoadingDailyOpsBriefing(false);
+    }
+  }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter]);
+
+  const loadDailyOpsClosureContinuity = useCallback(async () => {
+    setLoadingDailyOpsClosureContinuity(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        limit: "24"
+      });
+      if (dailyCockpitSiteFilter.trim().length > 0) {
+        params.set("site", dailyCockpitSiteFilter.trim());
+      }
+      if (dailyCockpitDepartmentFilter.trim().length > 0) {
+        params.set("department", dailyCockpitDepartmentFilter.trim());
+      }
+
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/daily-ops/closure-continuity?${params.toString()}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: DailyOpsClosureContinuityResponse = await response.json();
+      setDailyOpsClosureContinuity(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setDailyOpsClosureContinuity(null);
+      return null;
+    } finally {
+      setLoadingDailyOpsClosureContinuity(false);
     }
   }, [dailyCockpitDepartmentFilter, dailyCockpitSiteFilter]);
 
@@ -6662,6 +6744,7 @@ export function App() {
   const loadDailyCockpitSnapshot = useCallback(async () => {
     const [
       briefing,
+      closureContinuity,
       queue,
       nextActions,
       checklist,
@@ -6686,6 +6769,7 @@ export function App() {
       reminders
     ] = await Promise.all([
       loadDailyOpsBriefing(),
+      loadDailyOpsClosureContinuity(),
       loadDailyCockpitQueue(),
       loadNextBestActions(),
       loadOpsChecklist(),
@@ -6717,6 +6801,7 @@ export function App() {
     ]);
     return {
       briefing,
+      closureContinuity,
       queue,
       nextActions,
       checklist,
@@ -6756,6 +6841,7 @@ export function App() {
     loadBackupRestoreEvidence,
     loadChangeCalendar,
     loadChangeCalendarReservations,
+    loadDailyOpsClosureContinuity,
     loadDailyOpsBriefing,
     loadDailyCockpitQueue,
     loadHandoverDigest,
@@ -6855,7 +6941,7 @@ export function App() {
         throw new Error(await readErrorMessage(response));
       }
       const payload: DailyOpsFollowUpActionResponse = await response.json();
-      await loadDailyOpsBriefing();
+      await Promise.all([loadDailyOpsBriefing(), loadDailyOpsClosureContinuity()]);
       setDailyOpsNotice(
         `Follow-up ${payload.action} updated ${payload.task_key} (${payload.status_before} -> ${payload.status_after}).`
       );
@@ -6866,7 +6952,51 @@ export function App() {
     } finally {
       setRunningDailyOpsFollowUpActionKey(null);
     }
-  }, [canWriteCmdb, loadDailyOpsBriefing, t]);
+  }, [canWriteCmdb, loadDailyOpsBriefing, loadDailyOpsClosureContinuity, t]);
+
+  const applyDailyOpsOwnerFollowUp = useCallback(async (item: DailyOpsFollowUpItem) => {
+    if (!canWriteCmdb) {
+      setError(t("auth.messages.forbiddenAction"));
+      return null;
+    }
+    const ownerRef = item.owner.owner_ref?.trim();
+    if (!ownerRef) {
+      setError("Owner reference is required for owner follow-up.");
+      return null;
+    }
+
+    const actionKey = `${item.task_key}:owner-ack`;
+    setRunningDailyOpsFollowUpActionKey(actionKey);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/daily-ops/follow-up-actions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          task_key: item.task_key,
+          action: "acknowledge",
+          note: `owner_confirmed=${ownerRef}`,
+          defer_until: null
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: DailyOpsFollowUpActionResponse = await response.json();
+      await Promise.all([loadDailyOpsBriefing(), loadDailyOpsClosureContinuity()]);
+      setDailyOpsNotice(
+        `Owner follow-up applied for ${payload.task_key}: ${ownerRef} (${payload.status_before} -> ${payload.status_after}).`
+      );
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return null;
+    } finally {
+      setRunningDailyOpsFollowUpActionKey(null);
+    }
+  }, [canWriteCmdb, loadDailyOpsBriefing, loadDailyOpsClosureContinuity, t]);
 
   const updateOpsChecklistStatus = useCallback(
     async (templateKey: string, action: "complete" | "exception", note?: string) => {
@@ -11791,6 +11921,7 @@ export function App() {
     createSampleAsset,
     creatingSample,
     dailyOpsBriefing,
+    dailyOpsClosureContinuity,
     dailyOpsNotice,
     dailyCockpitDepartmentFilter,
     dailyCockpitNotice,
@@ -11864,6 +11995,7 @@ export function App() {
     loadChangeCalendar,
     loadChangeCalendarReservations,
     loadChangeCalendarSlotRecommendations,
+    loadDailyOpsClosureContinuity,
     loadDailyOpsBriefing,
     loadHandoverDigest,
     loadHandoverReminders,
@@ -11872,6 +12004,7 @@ export function App() {
     loadNextBestActions,
     loadWeeklyDigest,
     applyDailyOpsFollowUpAction,
+    applyDailyOpsOwnerFollowUp,
     completeOpsChecklistItem,
     departmentWorkspace,
     departmentWorkspaceOptions,
@@ -11894,6 +12027,7 @@ export function App() {
     saveRunbookRiskOwnerRoutingRules,
     closeBackupRestoreEvidence,
     loadingDailyOpsBriefing,
+    loadingDailyOpsClosureContinuity,
     loadingDailyCockpit,
     loadingNextBestActions,
     loadingOpsChecklist,
