@@ -18,6 +18,38 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.19] - 2026-03-17
+
+### Added
+
+- v0.1.19 planning and release-gate documentation:
+  - `docs/58-v0.1.19-daily-ops-ownership-closure-plan.md`
+  - `docs/59-v0.1.19-release-gate-checklist.md`
+- v0.1.19 issue baseline and closure track: GitHub issues `#217` to `#222`.
+- Daily ops ownership and closure continuity APIs:
+  - `GET /api/v1/ops/cockpit/daily-ops/briefing` now includes `owner`, `due_policy`, `due_at`, `escalate_at`
+  - `GET /api/v1/ops/cockpit/daily-ops/closure-continuity`
+- v0.1.19 one-command owner-closure validation suite:
+  - script: `scripts/qa-v0.1.19-owner-closure-loop.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- Daily follow-up owner derivation is now deterministic and policy-backed:
+  - ticket assignee first,
+  - default ticket escalation owner fallback,
+  - runbook-risk owner route from enabled routing rules/directory with fallback.
+- Daily follow-up due/escalation semantics are now explicit per item via `due_policy` and `escalate_at`.
+- Overview cockpit daily ops workspace now adds:
+  - owner and due-policy visibility per task,
+  - closure continuity panel (carryover + escalation candidates),
+  - owner-oriented follow-up action path for write-capable users.
+
+### Fixed
+
+- Handoff and escalation follow-up no longer depends on implicit operator memory; carryover and trigger semantics are now queryable from product APIs.
+- SMB teams can now see ownership gaps directly in the daily loop instead of inferring them from scattered ticket/runbook state.
+
 ## [0.1.18] - 2026-03-16
 
 ### Added
