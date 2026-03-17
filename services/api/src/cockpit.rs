@@ -23,6 +23,7 @@ const MAX_LIMIT: u32 = 200;
 const STALE_PENDING_MINUTES: i64 = 15;
 const STALE_STREAM_MINUTES: i64 = 20;
 const MAX_DAILY_OPS_NOTE_LEN: usize = 1024;
+const MAX_DAILY_OPS_OWNER_REF_LEN: usize = 128;
 const CHECKLIST_STATUS_PENDING: &str = "pending";
 const CHECKLIST_STATUS_COMPLETED: &str = "completed";
 const CHECKLIST_STATUS_SKIPPED: &str = "skipped";
@@ -42,6 +43,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/cockpit/daily-ops/closure-continuity",
             get(get_daily_ops_closure_continuity),
+        )
+        .route(
+            "/cockpit/daily-ops/owner-assignments",
+            post(apply_daily_ops_owner_assignment),
         )
         .route(
             "/cockpit/daily-ops/follow-up-actions",
@@ -88,6 +93,13 @@ struct DailyOpsFollowUpActionRequest {
     action: String,
     note: Option<String>,
     defer_until: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DailyOpsOwnerAssignmentRequest {
+    task_key: String,
+    owner_ref: String,
+    note: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -242,6 +254,17 @@ struct DailyOpsFollowUpActionResponse {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize)]
+struct DailyOpsOwnerAssignmentResponse {
+    task_key: String,
+    actor: String,
+    owner_before: DailyOpsOwner,
+    owner_after: DailyOpsOwner,
+    item_before: DailyOpsFollowUpItem,
+    item_after: DailyOpsFollowUpItem,
+    updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 struct GoLiveReadinessDomainItem {
     domain_key: String,
@@ -363,6 +386,7 @@ struct DailyOpsFollowUpStateRow {
     note: Option<String>,
     defer_until: Option<DateTime<Utc>>,
     actor: String,
+    metadata: Value,
     updated_at: DateTime<Utc>,
 }
 
@@ -783,6 +807,83 @@ async fn get_daily_ops_closure_continuity(
         summary,
         carryover_items,
         escalation_candidates,
+    }))
+}
+
+async fn apply_daily_ops_owner_assignment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<DailyOpsOwnerAssignmentRequest>,
+) -> AppResult<Json<DailyOpsOwnerAssignmentResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let task_key = trim_optional(Some(payload.task_key), 255)
+        .ok_or_else(|| AppError::Validation("task_key is required".to_string()))?;
+    let owner_ref = normalize_daily_ops_owner_ref(payload.owner_ref)?;
+    let note = normalize_daily_ops_follow_up_note(payload.note)?;
+    let now = Utc::now();
+
+    let mut candidates =
+        collect_daily_ops_candidates(&state, None, None, MAX_LIMIT as i64, now).await?;
+    let state_by_task = load_daily_ops_follow_up_states(
+        &state.db,
+        &candidates
+            .iter()
+            .map(|item| item.task_key.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+    let candidate = candidates
+        .drain(..)
+        .find(|item| item.task_key == task_key)
+        .ok_or_else(|| {
+            AppError::Validation(format!("daily ops task '{task_key}' is not available"))
+        })?;
+    let state_before = state_by_task.get(task_key.as_str());
+    let item_before = build_daily_ops_follow_up_item(candidate.clone(), state_before, now);
+
+    let assigned_state = upsert_daily_ops_owner_assignment_state(
+        &state.db,
+        task_key.as_str(),
+        candidate.item_type.as_str(),
+        owner_ref.as_str(),
+        note,
+        actor.as_str(),
+    )
+    .await?;
+    let item_after = build_daily_ops_follow_up_item(candidate, Some(&assigned_state), now);
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "ops.cockpit.daily_ops.owner_assignment".to_string(),
+            target_type: "ops_daily_follow_up".to_string(),
+            target_id: Some(task_key.clone()),
+            result: "success".to_string(),
+            message: Some(format!(
+                "daily ops task '{}' owner assigned to {}",
+                task_key, owner_ref
+            )),
+            metadata: json!({
+                "owner_before": item_before.owner.owner_ref,
+                "owner_after": item_after.owner.owner_ref,
+                "follow_up_state_before": item_before.follow_up_state,
+                "follow_up_state_after": item_after.follow_up_state,
+                "item_type": item_after.item_type,
+                "note": assigned_state.note,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(DailyOpsOwnerAssignmentResponse {
+        task_key,
+        actor,
+        owner_before: item_before.owner.clone(),
+        owner_after: item_after.owner.clone(),
+        item_before,
+        item_after,
+        updated_at: assigned_state.updated_at,
     }))
 }
 
@@ -3601,7 +3702,7 @@ async fn load_daily_ops_follow_up_states(
     }
 
     let rows: Vec<DailyOpsFollowUpStateRow> = sqlx::query_as(
-        "SELECT task_key, item_type, follow_up_state, note, defer_until, actor, updated_at
+        "SELECT task_key, item_type, follow_up_state, note, defer_until, actor, metadata, updated_at
          FROM ops_daily_follow_up_states
          WHERE task_key = ANY($1)",
     )
@@ -3625,12 +3726,15 @@ fn build_daily_ops_follow_up_item(
         .unwrap_or_else(|| "new".to_string());
     let deferred_until = state.and_then(|item| item.defer_until);
     let status = derive_daily_ops_status(candidate.base_status.as_str(), state, now);
+    let owner = state
+        .and_then(|row| derive_daily_ops_owner_override(&row.metadata))
+        .unwrap_or_else(|| candidate.owner.clone());
     let mut evidence = candidate.evidence;
     evidence["owner"] = json!({
-        "owner_ref": candidate.owner.owner_ref.clone(),
-        "owner_state": candidate.owner.owner_state.clone(),
-        "source": candidate.owner.source.clone(),
-        "reason": candidate.owner.reason.clone(),
+        "owner_ref": owner.owner_ref.clone(),
+        "owner_state": owner.owner_state.clone(),
+        "source": owner.source.clone(),
+        "reason": owner.reason.clone(),
     });
     evidence["due_policy"] = json!({
         "policy_key": candidate.due_policy.policy_key.clone(),
@@ -3655,7 +3759,7 @@ fn build_daily_ops_follow_up_item(
         status,
         follow_up_state: follow_up_state.clone(),
         priority: candidate.priority,
-        owner: candidate.owner,
+        owner,
         summary: candidate.summary,
         reason: candidate.reason,
         recommended_action: candidate.recommended_action,
@@ -3692,6 +3796,33 @@ fn derive_daily_ops_status(
         }
         _ => base_status.to_string(),
     }
+}
+
+fn derive_daily_ops_owner_override(metadata: &Value) -> Option<DailyOpsOwner> {
+    let override_payload = metadata.get("owner_override")?;
+    let owner_ref = override_payload
+        .get("owner_ref")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(DailyOpsOwner {
+        owner_ref: Some(owner_ref.to_string()),
+        owner_state: override_payload
+            .get("owner_state")
+            .and_then(Value::as_str)
+            .unwrap_or("assigned")
+            .to_string(),
+        source: override_payload
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("manual_assignment")
+            .to_string(),
+        reason: override_payload
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("Owner assignment override is active.")
+            .to_string(),
+    })
 }
 
 fn build_daily_ops_task_actions() -> Vec<DailyOpsTaskAction> {
@@ -3894,6 +4025,19 @@ fn normalize_daily_ops_follow_up_note(raw: Option<String>) -> AppResult<Option<S
     }
 }
 
+fn normalize_daily_ops_owner_ref(raw: String) -> AppResult<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation("owner_ref is required".to_string()));
+    }
+    if trimmed.len() > MAX_DAILY_OPS_OWNER_REF_LEN {
+        return Err(AppError::Validation(format!(
+            "owner_ref length must be <= {MAX_DAILY_OPS_OWNER_REF_LEN}"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
 fn parse_daily_ops_defer_until(
     raw: Option<String>,
     action: &str,
@@ -3949,12 +4093,83 @@ async fn upsert_daily_ops_follow_up_state(
              actor = EXCLUDED.actor,
              metadata = EXCLUDED.metadata,
              updated_at = NOW()
-         RETURNING task_key, item_type, follow_up_state, note, defer_until, actor, updated_at",
+         RETURNING task_key, item_type, follow_up_state, note, defer_until, actor, metadata, updated_at",
     )
     .bind(task_key)
     .bind(item_type)
     .bind(follow_up_state)
     .bind(note)
+    .bind(defer_until)
+    .bind(actor)
+    .bind(metadata)
+    .fetch_one(db)
+    .await?;
+
+    Ok(row)
+}
+
+async fn upsert_daily_ops_owner_assignment_state(
+    db: &sqlx::PgPool,
+    task_key: &str,
+    item_type: &str,
+    owner_ref: &str,
+    note: Option<String>,
+    actor: &str,
+) -> AppResult<DailyOpsFollowUpStateRow> {
+    let existing: Option<DailyOpsFollowUpStateRow> = sqlx::query_as(
+        "SELECT task_key, item_type, follow_up_state, note, defer_until, actor, metadata, updated_at
+         FROM ops_daily_follow_up_states
+         WHERE task_key = $1
+         LIMIT 1",
+    )
+    .bind(task_key)
+    .fetch_optional(db)
+    .await?;
+
+    let follow_up_state = existing
+        .as_ref()
+        .map(|row| row.follow_up_state.clone())
+        .unwrap_or_else(|| DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED.to_string());
+    let defer_until = existing.as_ref().and_then(|row| row.defer_until);
+    let owner_note = note.or_else(|| existing.as_ref().and_then(|row| row.note.clone()));
+    let mut metadata = existing
+        .as_ref()
+        .map(|row| row.metadata.clone())
+        .unwrap_or_else(|| json!({}));
+    if !metadata.is_object() {
+        metadata = json!({});
+    }
+    metadata["owner_override"] = json!({
+        "owner_ref": owner_ref,
+        "owner_state": "assigned",
+        "source": "manual_assignment",
+        "reason": "Owner assigned from daily ops owner assignment API.",
+    });
+    metadata["owner_assignment"] = json!({
+        "owner_ref": owner_ref,
+        "note": owner_note,
+        "actor": actor,
+        "updated_at": Utc::now().to_rfc3339(),
+    });
+
+    let row = sqlx::query_as(
+        "INSERT INTO ops_daily_follow_up_states (
+            task_key, item_type, follow_up_state, note, defer_until, actor, metadata
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (task_key) DO UPDATE
+         SET item_type = EXCLUDED.item_type,
+             follow_up_state = EXCLUDED.follow_up_state,
+             note = EXCLUDED.note,
+             defer_until = EXCLUDED.defer_until,
+             actor = EXCLUDED.actor,
+             metadata = EXCLUDED.metadata,
+             updated_at = NOW()
+         RETURNING task_key, item_type, follow_up_state, note, defer_until, actor, metadata, updated_at",
+    )
+    .bind(task_key)
+    .bind(item_type)
+    .bind(follow_up_state)
+    .bind(owner_note)
     .bind(defer_until)
     .bind(actor)
     .bind(metadata)
@@ -4007,12 +4222,12 @@ mod tests {
         DailyOpsFollowUpStateRow, DailyOpsOwner, GoLiveReadinessDomainItem, MAX_CHECKLIST_NOTE_LEN,
         NextBestActionItem, OpsChecklistEntryRow, OpsChecklistTemplateRow,
         build_ops_checklist_response, collect_daily_ops_carryover_items,
-        collect_daily_ops_escalation_candidates, derive_daily_ops_status,
-        derive_go_live_overall_status, normalize_daily_ops_action, normalize_optional_note,
-        parse_optional_date, score_alert_item, score_ticket_item, select_next_go_live_domain,
-        sort_daily_ops_items, sort_daily_queue_items, sort_next_best_actions,
-        summarize_daily_ops_closure_continuity, summarize_daily_ops_items,
-        summarize_go_live_readiness,
+        collect_daily_ops_escalation_candidates, derive_daily_ops_owner_override,
+        derive_daily_ops_status, derive_go_live_overall_status, normalize_daily_ops_action,
+        normalize_daily_ops_owner_ref, normalize_optional_note, parse_optional_date,
+        score_alert_item, score_ticket_item, select_next_go_live_domain, sort_daily_ops_items,
+        sort_daily_queue_items, sort_next_best_actions, summarize_daily_ops_closure_continuity,
+        summarize_daily_ops_items, summarize_go_live_readiness,
     };
 
     fn test_item(key: &str, score: i32, observed_at_offset_minutes: i64) -> DailyCockpitQueueItem {
@@ -4367,6 +4582,7 @@ mod tests {
             note: Some("done".to_string()),
             defer_until: None,
             actor: "operator".to_string(),
+            metadata: json!({}),
             updated_at: now,
         };
         let deferred_state = DailyOpsFollowUpStateRow {
@@ -4376,6 +4592,7 @@ mod tests {
             note: Some("later".to_string()),
             defer_until: Some(now + Duration::hours(4)),
             actor: "operator".to_string(),
+            metadata: json!({}),
             updated_at: now,
         };
 
@@ -4635,6 +4852,31 @@ mod tests {
             "complete"
         );
         assert!(normalize_daily_ops_action("unknown".to_string()).is_err());
+    }
+
+    #[test]
+    fn validates_daily_ops_owner_ref() {
+        assert_eq!(
+            normalize_daily_ops_owner_ref("  ops-team  ".to_string()).expect("valid"),
+            "ops-team"
+        );
+        assert!(normalize_daily_ops_owner_ref("   ".to_string()).is_err());
+    }
+
+    #[test]
+    fn derives_owner_override_from_metadata() {
+        let owner = derive_daily_ops_owner_override(&json!({
+            "owner_override": {
+                "owner_ref": "ops-owner",
+                "owner_state": "assigned",
+                "source": "manual_assignment",
+                "reason": "operator updated owner"
+            }
+        }))
+        .expect("owner override should exist");
+
+        assert_eq!(owner.owner_ref.as_deref(), Some("ops-owner"));
+        assert_eq!(owner.source, "manual_assignment");
     }
 
     #[test]
