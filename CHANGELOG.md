@@ -18,6 +18,35 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.20] - 2026-03-17
+
+### Added
+
+- v0.1.20 planning and release-gate documentation:
+  - `docs/60-v0.1.20-owner-assignment-escalation-loop-plan.md`
+  - `docs/61-v0.1.20-release-gate-checklist.md`
+- v0.1.20 issue baseline and closure track: GitHub issues `#223` to `#228`.
+- Daily ops owner-assignment and escalation-action APIs:
+  - `POST /api/v1/ops/cockpit/daily-ops/owner-assignments`
+  - `POST /api/v1/ops/cockpit/daily-ops/escalation-actions`
+- v0.1.20 one-command owner/escalation validation suite:
+  - script: `scripts/qa-v0.1.20-owner-escalation-loop.sh`
+  - artifacts: `summary.json`, `summary.md`, `artifact-index.json`, stage logs.
+
+### Changed
+
+- Daily follow-up metadata updates now preserve existing structured metadata across follow-up actions, preventing owner override loss.
+- Overview daily ops workspace now supports:
+  - inline owner reassignment per task,
+  - direct escalation-action trigger from closure continuity candidates,
+  - explicit read-only guard hints for write actions.
+- Closure continuity escalation loop now supports operator-triggered action write path with deterministic eligibility re-check before mutation.
+
+### Fixed
+
+- Operators no longer need to leave daily workspace for owner reassignment and escalation follow-up execution.
+- Escalation action writes now enforce candidate guardrails at apply time instead of relying on stale client-side snapshots.
+
 ## [0.1.19] - 2026-03-17
 
 ### Added
