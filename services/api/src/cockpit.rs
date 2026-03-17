@@ -49,6 +49,10 @@ pub fn routes() -> Router<AppState> {
             post(apply_daily_ops_owner_assignment),
         )
         .route(
+            "/cockpit/daily-ops/escalation-actions",
+            post(apply_daily_ops_escalation_action),
+        )
+        .route(
             "/cockpit/daily-ops/follow-up-actions",
             post(apply_daily_ops_follow_up_action),
         )
@@ -99,6 +103,12 @@ struct DailyOpsFollowUpActionRequest {
 struct DailyOpsOwnerAssignmentRequest {
     task_key: String,
     owner_ref: String,
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DailyOpsEscalationActionRequest {
+    task_key: String,
     note: Option<String>,
 }
 
@@ -169,7 +179,7 @@ struct DailyOpsBriefingSummary {
     low: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct DailyOpsEscalationCandidate {
     task_key: String,
     trigger_state: String,
@@ -260,6 +270,19 @@ struct DailyOpsOwnerAssignmentResponse {
     actor: String,
     owner_before: DailyOpsOwner,
     owner_after: DailyOpsOwner,
+    item_before: DailyOpsFollowUpItem,
+    item_after: DailyOpsFollowUpItem,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct DailyOpsEscalationActionResponse {
+    task_key: String,
+    actor: String,
+    trigger_state: String,
+    owner_ref: String,
+    status_before: String,
+    status_after: String,
     item_before: DailyOpsFollowUpItem,
     item_after: DailyOpsFollowUpItem,
     updated_at: DateTime<Utc>,
@@ -884,6 +907,102 @@ async fn apply_daily_ops_owner_assignment(
         item_before,
         item_after,
         updated_at: assigned_state.updated_at,
+    }))
+}
+
+async fn apply_daily_ops_escalation_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<DailyOpsEscalationActionRequest>,
+) -> AppResult<Json<DailyOpsEscalationActionResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let task_key = trim_optional(Some(payload.task_key), 255)
+        .ok_or_else(|| AppError::Validation("task_key is required".to_string()))?;
+    let note = normalize_daily_ops_follow_up_note(payload.note)?;
+    let now = Utc::now();
+
+    let mut candidates =
+        collect_daily_ops_candidates(&state, None, None, MAX_LIMIT as i64, now).await?;
+    let state_by_task = load_daily_ops_follow_up_states(
+        &state.db,
+        &candidates
+            .iter()
+            .map(|item| item.task_key.clone())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+    let mut follow_up_items = candidates
+        .iter()
+        .map(|item| {
+            let task_key = item.task_key.clone();
+            build_daily_ops_follow_up_item(item.clone(), state_by_task.get(task_key.as_str()), now)
+        })
+        .collect::<Vec<_>>();
+    sort_daily_ops_items(&mut follow_up_items);
+    let carryover_items = collect_daily_ops_carryover_items(&follow_up_items);
+    let escalation_candidates = collect_daily_ops_escalation_candidates(&carryover_items, now);
+    let escalation_candidate = escalation_candidates
+        .iter()
+        .find(|item| item.task_key == task_key)
+        .ok_or_else(|| {
+            AppError::Validation(format!(
+                "daily ops task '{task_key}' is not eligible for escalation action"
+            ))
+        })?
+        .clone();
+    let candidate = candidates
+        .drain(..)
+        .find(|item| item.task_key == task_key)
+        .ok_or_else(|| {
+            AppError::Validation(format!("daily ops task '{task_key}' is not available"))
+        })?;
+    let state_before = state_by_task.get(task_key.as_str());
+    let item_before = build_daily_ops_follow_up_item(candidate.clone(), state_before, now);
+
+    let state_after = upsert_daily_ops_escalation_action_state(
+        &state.db,
+        task_key.as_str(),
+        candidate.item_type.as_str(),
+        &escalation_candidate,
+        note.clone(),
+        actor.as_str(),
+    )
+    .await?;
+    let item_after = build_daily_ops_follow_up_item(candidate, Some(&state_after), now);
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor: actor.clone(),
+            action: "ops.cockpit.daily_ops.escalation_action".to_string(),
+            target_type: "ops_daily_follow_up".to_string(),
+            target_id: Some(task_key.clone()),
+            result: "success".to_string(),
+            message: Some(format!("daily ops task '{}' escalation action executed", task_key)),
+            metadata: json!({
+                "trigger_state": escalation_candidate.trigger_state.clone(),
+                "trigger_reason": escalation_candidate.trigger_reason.clone(),
+                "owner_ref": escalation_candidate.owner_ref.clone(),
+                "status_before": item_before.status,
+                "status_after": item_after.status,
+                "follow_up_state_before": item_before.follow_up_state,
+                "follow_up_state_after": item_after.follow_up_state,
+                "note": state_after.note,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(DailyOpsEscalationActionResponse {
+        task_key,
+        actor,
+        trigger_state: escalation_candidate.trigger_state.clone(),
+        owner_ref: escalation_candidate.owner_ref.clone(),
+        status_before: item_before.status.clone(),
+        status_after: item_after.status.clone(),
+        item_before,
+        item_after,
+        updated_at: state_after.updated_at,
     }))
 }
 
@@ -4077,9 +4196,23 @@ async fn upsert_daily_ops_follow_up_state(
             ));
         }
     };
-    let metadata = json!({
-        "action": action,
-    });
+    let existing: Option<DailyOpsFollowUpStateRow> = sqlx::query_as(
+        "SELECT task_key, item_type, follow_up_state, note, defer_until, actor, metadata, updated_at
+         FROM ops_daily_follow_up_states
+         WHERE task_key = $1
+         LIMIT 1",
+    )
+    .bind(task_key)
+    .fetch_optional(db)
+    .await?;
+    let mut metadata = existing
+        .as_ref()
+        .map(|row| row.metadata.clone())
+        .unwrap_or_else(|| json!({}));
+    if !metadata.is_object() {
+        metadata = json!({});
+    }
+    metadata["action"] = json!(action);
 
     let row = sqlx::query_as(
         "INSERT INTO ops_daily_follow_up_states (
@@ -4100,6 +4233,71 @@ async fn upsert_daily_ops_follow_up_state(
     .bind(follow_up_state)
     .bind(note)
     .bind(defer_until)
+    .bind(actor)
+    .bind(metadata)
+    .fetch_one(db)
+    .await?;
+
+    Ok(row)
+}
+
+async fn upsert_daily_ops_escalation_action_state(
+    db: &sqlx::PgPool,
+    task_key: &str,
+    item_type: &str,
+    escalation_candidate: &DailyOpsEscalationCandidate,
+    note: Option<String>,
+    actor: &str,
+) -> AppResult<DailyOpsFollowUpStateRow> {
+    let existing: Option<DailyOpsFollowUpStateRow> = sqlx::query_as(
+        "SELECT task_key, item_type, follow_up_state, note, defer_until, actor, metadata, updated_at
+         FROM ops_daily_follow_up_states
+         WHERE task_key = $1
+         LIMIT 1",
+    )
+    .bind(task_key)
+    .fetch_optional(db)
+    .await?;
+
+    let merged_note = note.or_else(|| existing.as_ref().and_then(|row| row.note.clone()));
+    let mut metadata = existing
+        .as_ref()
+        .map(|row| row.metadata.clone())
+        .unwrap_or_else(|| json!({}));
+    if !metadata.is_object() {
+        metadata = json!({});
+    }
+    metadata["action"] = json!("escalation_action");
+    metadata["escalation_action"] = json!({
+        "trigger_state": escalation_candidate.trigger_state.clone(),
+        "trigger_reason": escalation_candidate.trigger_reason.clone(),
+        "owner_ref": escalation_candidate.owner_ref.clone(),
+        "status": escalation_candidate.status.clone(),
+        "priority": escalation_candidate.priority.clone(),
+        "note": merged_note,
+        "actor": actor,
+        "updated_at": Utc::now().to_rfc3339(),
+    });
+
+    let row = sqlx::query_as(
+        "INSERT INTO ops_daily_follow_up_states (
+            task_key, item_type, follow_up_state, note, defer_until, actor, metadata
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (task_key) DO UPDATE
+         SET item_type = EXCLUDED.item_type,
+             follow_up_state = EXCLUDED.follow_up_state,
+             note = EXCLUDED.note,
+             defer_until = EXCLUDED.defer_until,
+             actor = EXCLUDED.actor,
+             metadata = EXCLUDED.metadata,
+             updated_at = NOW()
+         RETURNING task_key, item_type, follow_up_state, note, defer_until, actor, metadata, updated_at",
+    )
+    .bind(task_key)
+    .bind(item_type)
+    .bind(DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED)
+    .bind(merged_note)
+    .bind(existing.as_ref().and_then(|row| row.defer_until))
     .bind(actor)
     .bind(metadata)
     .fetch_one(db)
@@ -4763,6 +4961,102 @@ mod tests {
         assert!(escalation.is_empty());
         assert_eq!(summary.carryover_total, 0);
         assert_eq!(summary.escalation_candidate_total, 0);
+    }
+
+    #[test]
+    fn escalation_candidates_require_eligible_state_and_timing() {
+        let now = Utc::now();
+        let items = vec![
+            DailyOpsFollowUpItem {
+                task_key: "eligible".to_string(),
+                item_type: "ticket".to_string(),
+                domain: "ticket".to_string(),
+                status: "overdue".to_string(),
+                follow_up_state: "new".to_string(),
+                priority: "high".to_string(),
+                owner: test_daily_ops_owner(),
+                summary: "eligible".to_string(),
+                reason: "eligible".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now - Duration::hours(2)),
+                escalate_at: Some(now - Duration::minutes(5)),
+                due_policy: test_daily_ops_due_policy(),
+                observed_at: now - Duration::hours(3),
+                acknowledged_at: None,
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+            DailyOpsFollowUpItem {
+                task_key: "acknowledged".to_string(),
+                item_type: "ticket".to_string(),
+                domain: "ticket".to_string(),
+                status: "blocked".to_string(),
+                follow_up_state: DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED.to_string(),
+                priority: "critical".to_string(),
+                owner: test_daily_ops_owner(),
+                summary: "ack".to_string(),
+                reason: "ack".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now - Duration::hours(1)),
+                escalate_at: Some(now - Duration::minutes(2)),
+                due_policy: test_daily_ops_due_policy(),
+                observed_at: now - Duration::hours(2),
+                acknowledged_at: Some(now - Duration::minutes(20)),
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+            DailyOpsFollowUpItem {
+                task_key: "low-priority".to_string(),
+                item_type: "alert".to_string(),
+                domain: "alert".to_string(),
+                status: "overdue".to_string(),
+                follow_up_state: "new".to_string(),
+                priority: "low".to_string(),
+                owner: test_daily_ops_owner(),
+                summary: "low".to_string(),
+                reason: "low".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now - Duration::hours(1)),
+                escalate_at: Some(now - Duration::minutes(1)),
+                due_policy: test_daily_ops_due_policy(),
+                observed_at: now - Duration::hours(2),
+                acknowledged_at: None,
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+            DailyOpsFollowUpItem {
+                task_key: "future-window".to_string(),
+                item_type: "ticket".to_string(),
+                domain: "ticket".to_string(),
+                status: "overdue".to_string(),
+                follow_up_state: "new".to_string(),
+                priority: "critical".to_string(),
+                owner: test_daily_ops_owner(),
+                summary: "future".to_string(),
+                reason: "future".to_string(),
+                recommended_action: None,
+                available_actions: vec![],
+                due_at: Some(now - Duration::minutes(50)),
+                escalate_at: Some(now + Duration::minutes(15)),
+                due_policy: test_daily_ops_due_policy(),
+                observed_at: now - Duration::hours(1),
+                acknowledged_at: None,
+                completed_at: None,
+                deferred_until: None,
+                evidence: json!({}),
+            },
+        ];
+
+        let carryover = collect_daily_ops_carryover_items(&items);
+        let escalation = collect_daily_ops_escalation_candidates(&carryover, now);
+        assert_eq!(escalation.len(), 1);
+        assert_eq!(escalation[0].task_key, "eligible");
     }
 
     #[test]
