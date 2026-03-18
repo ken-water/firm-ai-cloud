@@ -257,6 +257,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     exportWeeklyDigest,
     handoverDigest,
     handoverReminders,
+    handoverReadiness,
     handoverDigestNotice,
     handoverDigestShiftDate,
     functionWorkspace,
@@ -289,6 +290,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadDailyOpsClosureContinuity,
     loadDailyOpsBriefing,
     loadHandoverDigest,
+    loadHandoverReadiness,
     loadHandoverReminders,
     loadIncidentCommandDetail,
     loadIncidentCommands,
@@ -356,6 +358,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     savingRunbookRiskOwnerRoutingRules,
     replayingRunbookExecutionId,
     loadingHandoverDigest,
+    loadingHandoverReadiness,
     loadingHandoverReminders,
     loadingBackupPolicies,
     loadingBackupPolicyRuns,
@@ -840,6 +843,73 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 focus_items={handoffFocusItems.length} | read_only={canWriteCmdb ? "false" : "true"}
               </span>
             </div>
+            <div className="toolbar-row" style={{ marginBottom: "0.55rem", flexWrap: "wrap" }}>
+              <button onClick={() => void loadHandoverReadiness()} disabled={loadingHandoverReadiness}>
+                {loadingHandoverReadiness ? "Loading readiness..." : "Refresh handoff readiness"}
+              </button>
+              {handoverReadiness && (
+                <>
+                  <span className={`status-chip ${handoverReadiness.readiness_state === "blocking" ? "status-chip-danger" : handoverReadiness.readiness_state === "at_risk" ? "status-chip-warn" : "status-chip-success"}`}>
+                    state={handoverReadiness.readiness_state}
+                  </span>
+                  <span className="status-chip">open={handoverReadiness.summary.open_items}</span>
+                  <span className="status-chip status-chip-danger">blocking={handoverReadiness.summary.blocking}</span>
+                  <span className="status-chip status-chip-warn">at_risk={handoverReadiness.summary.at_risk}</span>
+                  <span className="status-chip status-chip-success">ready={handoverReadiness.summary.ready}</span>
+                </>
+              )}
+            </div>
+            {!handoverReadiness ? (
+              <p className="inline-note">
+                {loadingHandoverReadiness ? "Loading handoff readiness..." : "No handoff readiness snapshot yet."}
+              </p>
+            ) : (
+              <>
+                <p className="inline-note">
+                  reasons={(handoverReadiness.reasons ?? []).join(", ") || "-"} | generated_at={new Date(handoverReadiness.generated_at).toLocaleString()}
+                </p>
+                <div style={{ overflowX: "auto", marginBottom: "0.55rem" }}>
+                  <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Item</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>State</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Priority</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(handoverReadiness.items ?? []).slice(0, 12).map((item: any) => (
+                        <tr key={`handover-readiness-${item.item_key}`}>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            <div>{item.title}</div>
+                            <div className="inline-note">{item.item_key}</div>
+                          </td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            <span className={`status-chip ${item.readiness_state === "blocking" ? "status-chip-danger" : item.readiness_state === "at_risk" ? "status-chip-warn" : "status-chip-success"}`}>
+                              {item.readiness_state}
+                            </span>
+                          </td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            <div>{item.owner}</div>
+                            <div className="inline-note">next={item.next_owner}</div>
+                          </td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            <div>score={item.priority_score}</div>
+                            <div className="inline-note">{item.risk_level}</div>
+                          </td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            <div>{item.reason}</div>
+                            <div className="inline-note">action={item.next_action}</div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
             {handoffFocusItems.length === 0 ? (
               <p className="inline-note">No handoff focus item yet. Refresh cockpit modules to generate summary.</p>
             ) : (
@@ -4643,7 +4713,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
             <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
               <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Shift handover digest</h3>
               <div className="toolbar-row">
-                <button onClick={() => void loadHandoverDigest()} disabled={loadingHandoverDigest}>
+                <button
+                  onClick={() => void Promise.all([loadHandoverDigest(), loadHandoverReadiness()])}
+                  disabled={loadingHandoverDigest || loadingHandoverReadiness}
+                >
                   {loadingHandoverDigest ? t("cmdb.actions.loading") : "Generate handover"}
                 </button>
                 <button onClick={() => void loadHandoverReminders()} disabled={loadingHandoverReminders}>

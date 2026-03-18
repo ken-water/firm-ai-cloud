@@ -37,6 +37,7 @@ pub fn routes() -> Router<AppState> {
             "/cockpit/handover-digest/reminders/export",
             get(export_handover_reminders),
         )
+        .route("/cockpit/handover-readiness", get(get_handover_readiness))
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -190,6 +191,44 @@ struct HandoverReminderExportResponse {
     digest_key: String,
     format: String,
     content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HandoverReadinessResponse {
+    generated_at: DateTime<Utc>,
+    digest_key: String,
+    shift_date: String,
+    readiness_state: String,
+    summary: HandoverReadinessSummary,
+    reasons: Vec<String>,
+    items: Vec<HandoverReadinessItem>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct HandoverReadinessSummary {
+    total: usize,
+    ready: usize,
+    at_risk: usize,
+    blocking: usize,
+    open_items: usize,
+    closed_items: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct HandoverReadinessItem {
+    item_key: String,
+    source_type: String,
+    title: String,
+    owner: String,
+    next_owner: String,
+    next_action: String,
+    status: String,
+    risk_level: String,
+    readiness_state: String,
+    priority_score: i32,
+    reason: String,
+    observed_at: DateTime<Utc>,
+    evidence_timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -362,6 +401,15 @@ async fn get_handover_reminders(
         total: items.len(),
         items,
     }))
+}
+
+async fn get_handover_readiness(
+    State(state): State<AppState>,
+    Query(query): Query<HandoverDigestQuery>,
+) -> AppResult<Json<HandoverReadinessResponse>> {
+    let digest = build_handover_digest(&state, query.shift_date).await?;
+    let readiness = build_handover_readiness_response(&digest);
+    Ok(Json(readiness))
 }
 
 async fn export_handover_reminders(
@@ -1068,6 +1116,166 @@ fn resolve_handover_item_state(
     }
 }
 
+fn build_handover_readiness_response(digest: &HandoverDigestResponse) -> HandoverReadinessResponse {
+    let mut items = digest
+        .items
+        .iter()
+        .map(build_handover_readiness_item)
+        .collect::<Vec<_>>();
+    sort_handover_readiness_items(&mut items);
+    let summary = summarize_handover_readiness(items.as_slice());
+    let readiness_state = derive_handover_readiness_state(digest, &summary);
+    let reasons = derive_handover_readiness_reasons(digest, &summary);
+
+    HandoverReadinessResponse {
+        generated_at: Utc::now(),
+        digest_key: digest.digest_key.clone(),
+        shift_date: digest.shift_date.clone(),
+        readiness_state: readiness_state.to_string(),
+        summary,
+        reasons,
+        items,
+    }
+}
+
+fn build_handover_readiness_item(item: &HandoverCarryoverItem) -> HandoverReadinessItem {
+    let (readiness_state, reason) = derive_handover_item_readiness(item);
+    HandoverReadinessItem {
+        item_key: item.item_key.clone(),
+        source_type: item.source_type.clone(),
+        title: item.title.clone(),
+        owner: item.owner.clone(),
+        next_owner: item.next_owner.clone(),
+        next_action: item.next_action.clone(),
+        status: item.status.clone(),
+        risk_level: item.risk_level.clone(),
+        readiness_state: readiness_state.to_string(),
+        priority_score: score_handover_readiness_item(item, readiness_state),
+        reason,
+        observed_at: item.observed_at,
+        evidence_timestamp: item.observed_at,
+    }
+}
+
+fn derive_handover_item_readiness(item: &HandoverCarryoverItem) -> (&'static str, String) {
+    if item.status == "closed" {
+        return ("ready", "Item is already closed for this shift.".to_string());
+    }
+    if item.overdue {
+        return (
+            "blocking",
+            format!("Overdue by {} day(s).", item.overdue_days.max(1)),
+        );
+    }
+    if !item.ownership_violations.is_empty() {
+        return (
+            "blocking",
+            format!(
+                "Ownership violation: {}.",
+                item.ownership_violations.join(", ")
+            ),
+        );
+    }
+    if matches!(item.risk_level.as_str(), "critical" | "high") {
+        return (
+            "at_risk",
+            format!("Open {} risk item requires explicit owner follow-up.", item.risk_level),
+        );
+    }
+    ("at_risk", "Open carryover item requires handoff confirmation.".to_string())
+}
+
+fn score_handover_readiness_item(item: &HandoverCarryoverItem, readiness_state: &str) -> i32 {
+    let risk_component = risk_rank(item.risk_level.as_str()) as i32 * 100;
+    let state_component = match readiness_state {
+        "blocking" => 90,
+        "at_risk" => 40,
+        _ => 0,
+    };
+    let overdue_component = (item.overdue_days.max(0) as i32) * 20;
+    let ownership_component = item.ownership_violations.len() as i32 * 15;
+    let open_component = if item.status == "open" { 10 } else { 0 };
+    risk_component + state_component + overdue_component + ownership_component + open_component
+}
+
+fn sort_handover_readiness_items(items: &mut [HandoverReadinessItem]) {
+    items.sort_by(|left, right| {
+        right
+            .priority_score
+            .cmp(&left.priority_score)
+            .then_with(|| right.observed_at.cmp(&left.observed_at))
+            .then_with(|| left.item_key.cmp(&right.item_key))
+    });
+}
+
+fn summarize_handover_readiness(items: &[HandoverReadinessItem]) -> HandoverReadinessSummary {
+    let mut summary = HandoverReadinessSummary {
+        total: items.len(),
+        ..HandoverReadinessSummary::default()
+    };
+    for item in items {
+        if item.status == "open" {
+            summary.open_items += 1;
+        } else {
+            summary.closed_items += 1;
+        }
+        match item.readiness_state.as_str() {
+            "blocking" => summary.blocking += 1,
+            "at_risk" => summary.at_risk += 1,
+            _ => summary.ready += 1,
+        }
+    }
+    summary
+}
+
+fn derive_handover_readiness_state(
+    digest: &HandoverDigestResponse,
+    summary: &HandoverReadinessSummary,
+) -> &'static str {
+    if summary.blocking > 0
+        || digest.metrics.overdue_open_items > 0
+        || digest.metrics.ownership_gap_items > 0
+    {
+        "blocking"
+    } else if summary.at_risk > 0 || summary.open_items > 0 {
+        "at_risk"
+    } else {
+        "ready"
+    }
+}
+
+fn derive_handover_readiness_reasons(
+    digest: &HandoverDigestResponse,
+    summary: &HandoverReadinessSummary,
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if digest.metrics.overdue_open_items > 0 {
+        reasons.push(format!(
+            "overdue_open_items={}",
+            digest.metrics.overdue_open_items
+        ));
+    }
+    if digest.metrics.ownership_gap_items > 0 {
+        reasons.push(format!(
+            "ownership_gap_items={}",
+            digest.metrics.ownership_gap_items
+        ));
+    }
+    if summary.blocking > 0 {
+        reasons.push(format!("blocking_items={}", summary.blocking));
+    }
+    if summary.at_risk > 0 {
+        reasons.push(format!("at_risk_items={}", summary.at_risk));
+    }
+    if summary.open_items > 0 {
+        reasons.push(format!("open_items={}", summary.open_items));
+    }
+    if reasons.is_empty() {
+        reasons.push("no_open_blocker_or_risk_detected".to_string());
+    }
+    reasons
+}
+
 fn parse_week_start(value: Option<String>) -> AppResult<DateTime<Utc>> {
     match value {
         Some(raw) => {
@@ -1422,9 +1630,9 @@ mod tests {
     use chrono::{Datelike, Utc};
 
     use super::{
-        HandoverCarryoverItem, HandoverDigestMetrics, HandoverDigestResponse, WeeklyDigestMetrics,
-        WeeklyDigestResponse, default_week_start, digest_to_csv, handover_digest_to_csv,
-        parse_shift_date,
+        HandoverCarryoverItem, HandoverDigestMetrics, HandoverDigestResponse,
+        WeeklyDigestMetrics, WeeklyDigestResponse, build_handover_readiness_response,
+        default_week_start, digest_to_csv, handover_digest_to_csv, parse_shift_date,
     };
 
     #[test]
@@ -1514,5 +1722,68 @@ mod tests {
         assert!(csv.contains("handover-2026-03-07"));
         assert!(csv.contains("incident:10"));
         assert!(csv.contains("restore_evidence_missing_runs,1"));
+    }
+
+    #[test]
+    fn handover_readiness_derivation_is_deterministic() {
+        let now = Utc::now();
+        let digest = HandoverDigestResponse {
+            generated_at: now,
+            digest_key: "handover-2026-03-18".to_string(),
+            shift_date: "2026-03-18".to_string(),
+            metrics: HandoverDigestMetrics {
+                unresolved_incidents: 1,
+                escalation_backlog: 1,
+                failed_continuity_runs: 0,
+                pending_approvals: 1,
+                restore_evidence_missing_runs: 0,
+                closed_items: 1,
+                overdue_open_items: 1,
+                ownership_gap_items: 0,
+            },
+            overdue_trend: vec![],
+            items: vec![
+                HandoverCarryoverItem {
+                    item_key: "incident:20".to_string(),
+                    source_type: "incident_command".to_string(),
+                    source_id: 20,
+                    title: "critical incident".to_string(),
+                    owner: "ops-a".to_string(),
+                    next_owner: "ops-a".to_string(),
+                    next_action: "continue".to_string(),
+                    status: "open".to_string(),
+                    note: None,
+                    risk_level: "critical".to_string(),
+                    observed_at: now,
+                    source_ref: "/api/v1/ops/cockpit/incidents/20".to_string(),
+                    overdue: true,
+                    overdue_days: 2,
+                    ownership_violations: vec![],
+                },
+                HandoverCarryoverItem {
+                    item_key: "ticket:100".to_string(),
+                    source_type: "ticket_backlog".to_string(),
+                    source_id: 100,
+                    title: "ticket".to_string(),
+                    owner: "ops-b".to_string(),
+                    next_owner: "ops-b".to_string(),
+                    next_action: "review".to_string(),
+                    status: "closed".to_string(),
+                    note: None,
+                    risk_level: "medium".to_string(),
+                    observed_at: now,
+                    source_ref: "/api/v1/tickets/100".to_string(),
+                    overdue: false,
+                    overdue_days: 0,
+                    ownership_violations: vec![],
+                },
+            ],
+        };
+        let readiness = build_handover_readiness_response(&digest);
+        assert_eq!(readiness.readiness_state, "blocking");
+        assert_eq!(readiness.summary.total, 2);
+        assert_eq!(readiness.summary.blocking, 1);
+        assert_eq!(readiness.summary.ready, 1);
+        assert_eq!(readiness.items[0].item_key, "incident:20");
     }
 }
