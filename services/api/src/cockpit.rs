@@ -39,6 +39,7 @@ const GO_LIVE_DEFAULT_EXECUTION_POLICY_KEY: &str = "global";
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/cockpit/queue", get(get_daily_cockpit_queue))
+        .route("/cockpit/business-overview", get(get_business_overview))
         .route("/cockpit/daily-ops/briefing", get(get_daily_ops_briefing))
         .route(
             "/cockpit/daily-ops/closure-continuity",
@@ -88,6 +89,14 @@ struct DailyOpsBriefingQuery {
 struct DailyOpsClosureContinuityQuery {
     site: Option<String>,
     department: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct BusinessOverviewQuery {
+    site: Option<String>,
+    department: Option<String>,
+    business_service: Option<String>,
     limit: Option<u32>,
 }
 
@@ -153,6 +162,48 @@ struct DailyOpsClosureContinuityResponse {
     summary: DailyOpsClosureContinuitySummary,
     carryover_items: Vec<DailyOpsFollowUpItem>,
     escalation_candidates: Vec<DailyOpsEscalationCandidate>,
+}
+
+#[derive(Debug, Serialize)]
+struct BusinessOverviewResponse {
+    generated_at: DateTime<Utc>,
+    scope: BusinessOverviewScope,
+    summary: BusinessOverviewSummary,
+    items: Vec<BusinessOverviewItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct BusinessOverviewScope {
+    site: Option<String>,
+    department: Option<String>,
+    business_service: Option<String>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct BusinessOverviewSummary {
+    business_service_total: usize,
+    asset_total: i64,
+    active_asset_total: i64,
+    idle_asset_total: i64,
+    open_alert_total: i64,
+    critical_alert_total: i64,
+    open_ticket_total: i64,
+    escalation_ticket_total: i64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct BusinessOverviewItem {
+    business_service: String,
+    risk_score: i32,
+    asset_total: i64,
+    active_asset_total: i64,
+    idle_asset_total: i64,
+    open_alert_total: i64,
+    critical_alert_total: i64,
+    open_ticket_total: i64,
+    escalation_ticket_total: i64,
+    top_departments: Vec<String>,
+    top_sites: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -664,6 +715,20 @@ struct OpsChecklistEntryRow {
     updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, FromRow)]
+struct BusinessOverviewRow {
+    business_service: String,
+    asset_total: i64,
+    active_asset_total: i64,
+    idle_asset_total: i64,
+    open_alert_total: i64,
+    critical_alert_total: i64,
+    open_ticket_total: i64,
+    escalation_ticket_total: i64,
+    top_departments: Vec<String>,
+    top_sites: Vec<String>,
+}
+
 async fn get_daily_cockpit_queue(
     State(state): State<AppState>,
     Query(query): Query<DailyCockpitQuery>,
@@ -728,6 +793,60 @@ async fn get_daily_cockpit_queue(
             total,
         },
         items: paged_items,
+    }))
+}
+
+async fn get_business_overview(
+    State(state): State<AppState>,
+    Query(query): Query<BusinessOverviewQuery>,
+) -> AppResult<Json<BusinessOverviewResponse>> {
+    let limit = query.limit.unwrap_or(12).clamp(1, 50);
+    let site = trim_optional(query.site, 128);
+    let department = trim_optional(query.department, 128);
+    let business_service = trim_optional(query.business_service, 128);
+    let rows = fetch_business_overview_rows(
+        &state.db,
+        site.as_deref(),
+        department.as_deref(),
+        business_service.as_deref(),
+        limit as i64,
+    )
+    .await?;
+
+    let mut items = rows
+        .into_iter()
+        .map(|row| BusinessOverviewItem {
+            business_service: row.business_service,
+            risk_score: compute_business_risk_score(
+                row.critical_alert_total,
+                row.open_alert_total,
+                row.escalation_ticket_total,
+                row.open_ticket_total,
+                row.idle_asset_total,
+            ),
+            asset_total: row.asset_total,
+            active_asset_total: row.active_asset_total,
+            idle_asset_total: row.idle_asset_total,
+            open_alert_total: row.open_alert_total,
+            critical_alert_total: row.critical_alert_total,
+            open_ticket_total: row.open_ticket_total,
+            escalation_ticket_total: row.escalation_ticket_total,
+            top_departments: row.top_departments,
+            top_sites: row.top_sites,
+        })
+        .collect::<Vec<_>>();
+    sort_business_overview_items(&mut items);
+    let summary = summarize_business_overview(items.as_slice());
+
+    Ok(Json(BusinessOverviewResponse {
+        generated_at: Utc::now(),
+        scope: BusinessOverviewScope {
+            site,
+            department,
+            business_service,
+        },
+        summary,
+        items,
     }))
 }
 
@@ -1862,6 +1981,149 @@ async fn fetch_handover_next_action_rows(
     Ok(rows)
 }
 
+async fn fetch_business_overview_rows(
+    db: &sqlx::PgPool,
+    site: Option<&str>,
+    department: Option<&str>,
+    business_service: Option<&str>,
+    limit: i64,
+) -> AppResult<Vec<BusinessOverviewRow>> {
+    let rows: Vec<BusinessOverviewRow> = sqlx::query_as(
+        "WITH scoped_bindings AS (
+            SELECT b.business_service, b.asset_id
+            FROM asset_business_service_bindings b
+            INNER JOIN assets a ON a.id = b.asset_id
+            WHERE ($1::TEXT IS NULL OR a.site = $1)
+              AND ($2::TEXT IS NULL OR a.department = $2)
+              AND ($3::TEXT IS NULL OR b.business_service = $3)
+         ),
+         services AS (
+            SELECT DISTINCT business_service
+            FROM scoped_bindings
+         ),
+         service_assets AS (
+            SELECT
+                s.business_service,
+                COUNT(DISTINCT sb.asset_id)::bigint AS asset_total,
+                COUNT(DISTINCT sb.asset_id) FILTER (
+                    WHERE lower(COALESCE(a.status, '')) NOT IN ('idle', 'retired', 'decommissioned')
+                )::bigint AS active_asset_total,
+                COUNT(DISTINCT sb.asset_id) FILTER (
+                    WHERE lower(COALESCE(a.status, '')) IN ('idle', 'retired', 'decommissioned')
+                )::bigint AS idle_asset_total
+            FROM services s
+            LEFT JOIN scoped_bindings sb ON sb.business_service = s.business_service
+            LEFT JOIN assets a ON a.id = sb.asset_id
+            GROUP BY s.business_service
+         ),
+         service_alerts AS (
+            SELECT
+                s.business_service,
+                COUNT(DISTINCT ua.id) FILTER (
+                    WHERE ua.status IN ('open', 'acknowledged')
+                )::bigint AS open_alert_total,
+                COUNT(DISTINCT ua.id) FILTER (
+                    WHERE ua.status IN ('open', 'acknowledged')
+                      AND ua.severity = 'critical'
+                )::bigint AS critical_alert_total
+            FROM services s
+            LEFT JOIN scoped_bindings sb ON sb.business_service = s.business_service
+            LEFT JOIN unified_alerts ua ON ua.asset_id = sb.asset_id
+            GROUP BY s.business_service
+         ),
+         service_tickets AS (
+            SELECT
+                s.business_service,
+                COUNT(DISTINCT t.id) FILTER (
+                    WHERE t.status IN ('open', 'in_progress')
+                )::bigint AS open_ticket_total,
+                COUNT(DISTINCT t.id) FILTER (
+                    WHERE t.status IN ('open', 'in_progress')
+                      AND t.priority IN ('critical', 'high')
+                )::bigint AS escalation_ticket_total
+            FROM services s
+            LEFT JOIN scoped_bindings sb ON sb.business_service = s.business_service
+            LEFT JOIN ticket_asset_links tal ON tal.asset_id = sb.asset_id
+            LEFT JOIN tickets t ON t.id = tal.ticket_id
+            GROUP BY s.business_service
+         ),
+         service_departments AS (
+            SELECT
+                s.business_service,
+                COALESCE(
+                    ARRAY(
+                        SELECT dept.department
+                        FROM (
+                            SELECT
+                                a.department,
+                                COUNT(*) AS department_assets
+                            FROM scoped_bindings sb
+                            INNER JOIN assets a ON a.id = sb.asset_id
+                            WHERE sb.business_service = s.business_service
+                              AND a.department IS NOT NULL
+                              AND btrim(a.department) <> ''
+                            GROUP BY a.department
+                            ORDER BY department_assets DESC, a.department ASC
+                            LIMIT 3
+                        ) AS dept
+                    ),
+                    ARRAY[]::TEXT[]
+                ) AS top_departments
+            FROM services s
+         ),
+         service_sites AS (
+            SELECT
+                s.business_service,
+                COALESCE(
+                    ARRAY(
+                        SELECT site_bucket.site
+                        FROM (
+                            SELECT
+                                a.site,
+                                COUNT(*) AS site_assets
+                            FROM scoped_bindings sb
+                            INNER JOIN assets a ON a.id = sb.asset_id
+                            WHERE sb.business_service = s.business_service
+                              AND a.site IS NOT NULL
+                              AND btrim(a.site) <> ''
+                            GROUP BY a.site
+                            ORDER BY site_assets DESC, a.site ASC
+                            LIMIT 3
+                        ) AS site_bucket
+                    ),
+                    ARRAY[]::TEXT[]
+                ) AS top_sites
+            FROM services s
+         )
+         SELECT
+            s.business_service,
+            COALESCE(sa.asset_total, 0) AS asset_total,
+            COALESCE(sa.active_asset_total, 0) AS active_asset_total,
+            COALESCE(sa.idle_asset_total, 0) AS idle_asset_total,
+            COALESCE(al.open_alert_total, 0) AS open_alert_total,
+            COALESCE(al.critical_alert_total, 0) AS critical_alert_total,
+            COALESCE(tk.open_ticket_total, 0) AS open_ticket_total,
+            COALESCE(tk.escalation_ticket_total, 0) AS escalation_ticket_total,
+            COALESCE(dep.top_departments, ARRAY[]::TEXT[]) AS top_departments,
+            COALESCE(site_bucket.top_sites, ARRAY[]::TEXT[]) AS top_sites
+         FROM services s
+         LEFT JOIN service_assets sa ON sa.business_service = s.business_service
+         LEFT JOIN service_alerts al ON al.business_service = s.business_service
+         LEFT JOIN service_tickets tk ON tk.business_service = s.business_service
+         LEFT JOIN service_departments dep ON dep.business_service = s.business_service
+         LEFT JOIN service_sites site_bucket ON site_bucket.business_service = s.business_service
+         ORDER BY s.business_service ASC
+         LIMIT $4",
+    )
+    .bind(site)
+    .bind(department)
+    .bind(business_service)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
 async fn load_default_escalation_window(db: &sqlx::PgPool) -> AppResult<EscalationWindowRow> {
     let row: Option<EscalationWindowRow> = sqlx::query_as(
         "SELECT
@@ -2785,6 +3047,50 @@ fn infer_go_live_notification_channel_type(target: &str) -> String {
     } else {
         "email".to_string()
     }
+}
+
+fn compute_business_risk_score(
+    critical_alert_total: i64,
+    open_alert_total: i64,
+    escalation_ticket_total: i64,
+    open_ticket_total: i64,
+    idle_asset_total: i64,
+) -> i32 {
+    let score = critical_alert_total * 100
+        + open_alert_total * 20
+        + escalation_ticket_total * 12
+        + open_ticket_total * 6
+        + idle_asset_total * 2;
+    score.clamp(0, 9999) as i32
+}
+
+fn sort_business_overview_items(items: &mut [BusinessOverviewItem]) {
+    items.sort_by(|left, right| {
+        right
+            .risk_score
+            .cmp(&left.risk_score)
+            .then_with(|| right.critical_alert_total.cmp(&left.critical_alert_total))
+            .then_with(|| right.open_alert_total.cmp(&left.open_alert_total))
+            .then_with(|| right.open_ticket_total.cmp(&left.open_ticket_total))
+            .then_with(|| left.business_service.cmp(&right.business_service))
+    });
+}
+
+fn summarize_business_overview(items: &[BusinessOverviewItem]) -> BusinessOverviewSummary {
+    let mut summary = BusinessOverviewSummary {
+        business_service_total: items.len(),
+        ..BusinessOverviewSummary::default()
+    };
+    for item in items {
+        summary.asset_total += item.asset_total;
+        summary.active_asset_total += item.active_asset_total;
+        summary.idle_asset_total += item.idle_asset_total;
+        summary.open_alert_total += item.open_alert_total;
+        summary.critical_alert_total += item.critical_alert_total;
+        summary.open_ticket_total += item.open_ticket_total;
+        summary.escalation_ticket_total += item.escalation_ticket_total;
+    }
+    summary
 }
 
 fn sort_next_best_actions(items: &mut [NextBestActionItem]) {
@@ -4416,15 +4722,16 @@ mod tests {
 
     use super::{
         DAILY_OPS_FOLLOW_UP_STATE_ACKNOWLEDGED, DAILY_OPS_FOLLOW_UP_STATE_COMPLETED,
-        DailyCockpitAction, DailyCockpitQueueItem, DailyOpsDuePolicy, DailyOpsFollowUpItem,
-        DailyOpsFollowUpStateRow, DailyOpsOwner, GoLiveReadinessDomainItem, MAX_CHECKLIST_NOTE_LEN,
-        NextBestActionItem, OpsChecklistEntryRow, OpsChecklistTemplateRow,
+        BusinessOverviewItem, DailyCockpitAction, DailyCockpitQueueItem, DailyOpsDuePolicy,
+        DailyOpsFollowUpItem, DailyOpsFollowUpStateRow, DailyOpsOwner, GoLiveReadinessDomainItem,
+        MAX_CHECKLIST_NOTE_LEN, NextBestActionItem, OpsChecklistEntryRow, OpsChecklistTemplateRow,
         build_ops_checklist_response, collect_daily_ops_carryover_items,
-        collect_daily_ops_escalation_candidates, derive_daily_ops_owner_override,
-        derive_daily_ops_status, derive_go_live_overall_status, normalize_daily_ops_action,
-        normalize_daily_ops_owner_ref, normalize_optional_note, parse_optional_date,
-        score_alert_item, score_ticket_item, select_next_go_live_domain, sort_daily_ops_items,
-        sort_daily_queue_items, sort_next_best_actions, summarize_daily_ops_closure_continuity,
+        collect_daily_ops_escalation_candidates, compute_business_risk_score,
+        derive_daily_ops_owner_override, derive_daily_ops_status, derive_go_live_overall_status,
+        normalize_daily_ops_action, normalize_daily_ops_owner_ref, normalize_optional_note,
+        parse_optional_date, score_alert_item, score_ticket_item, select_next_go_live_domain,
+        sort_business_overview_items, sort_daily_ops_items, sort_daily_queue_items,
+        sort_next_best_actions, summarize_business_overview, summarize_daily_ops_closure_continuity,
         summarize_daily_ops_items, summarize_go_live_readiness,
     };
 
@@ -4569,6 +4876,96 @@ mod tests {
                 "handover:item-2".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn business_overview_sort_is_deterministic_by_risk_then_name() {
+        let mut items = vec![
+            BusinessOverviewItem {
+                business_service: "billing".to_string(),
+                risk_score: 100,
+                asset_total: 10,
+                active_asset_total: 9,
+                idle_asset_total: 1,
+                open_alert_total: 2,
+                critical_alert_total: 0,
+                open_ticket_total: 1,
+                escalation_ticket_total: 0,
+                top_departments: vec![],
+                top_sites: vec![],
+            },
+            BusinessOverviewItem {
+                business_service: "crm".to_string(),
+                risk_score: 260,
+                asset_total: 7,
+                active_asset_total: 7,
+                idle_asset_total: 0,
+                open_alert_total: 3,
+                critical_alert_total: 2,
+                open_ticket_total: 2,
+                escalation_ticket_total: 1,
+                top_departments: vec![],
+                top_sites: vec![],
+            },
+            BusinessOverviewItem {
+                business_service: "auth".to_string(),
+                risk_score: 260,
+                asset_total: 12,
+                active_asset_total: 11,
+                idle_asset_total: 1,
+                open_alert_total: 3,
+                critical_alert_total: 2,
+                open_ticket_total: 2,
+                escalation_ticket_total: 1,
+                top_departments: vec![],
+                top_sites: vec![],
+            },
+        ];
+        sort_business_overview_items(&mut items);
+        assert_eq!(items[0].business_service, "auth");
+        assert_eq!(items[1].business_service, "crm");
+        assert_eq!(items[2].business_service, "billing");
+    }
+
+    #[test]
+    fn business_overview_summary_adds_metrics() {
+        let items = vec![
+            BusinessOverviewItem {
+                business_service: "svc-a".to_string(),
+                risk_score: compute_business_risk_score(1, 3, 1, 2, 1),
+                asset_total: 8,
+                active_asset_total: 7,
+                idle_asset_total: 1,
+                open_alert_total: 3,
+                critical_alert_total: 1,
+                open_ticket_total: 2,
+                escalation_ticket_total: 1,
+                top_departments: vec!["platform".to_string()],
+                top_sites: vec!["dc-a".to_string()],
+            },
+            BusinessOverviewItem {
+                business_service: "svc-b".to_string(),
+                risk_score: compute_business_risk_score(0, 1, 0, 1, 3),
+                asset_total: 6,
+                active_asset_total: 3,
+                idle_asset_total: 3,
+                open_alert_total: 1,
+                critical_alert_total: 0,
+                open_ticket_total: 1,
+                escalation_ticket_total: 0,
+                top_departments: vec!["security".to_string()],
+                top_sites: vec!["dc-b".to_string()],
+            },
+        ];
+        let summary = summarize_business_overview(items.as_slice());
+        assert_eq!(summary.business_service_total, 2);
+        assert_eq!(summary.asset_total, 14);
+        assert_eq!(summary.active_asset_total, 10);
+        assert_eq!(summary.idle_asset_total, 4);
+        assert_eq!(summary.open_alert_total, 4);
+        assert_eq!(summary.critical_alert_total, 1);
+        assert_eq!(summary.open_ticket_total, 3);
+        assert_eq!(summary.escalation_ticket_total, 1);
     }
 
     #[test]

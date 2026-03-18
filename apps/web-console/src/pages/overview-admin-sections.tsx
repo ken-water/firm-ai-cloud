@@ -243,6 +243,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     applyDailyOpsOwnerAssignment,
     applyDailyOpsEscalationAction,
     loadDailyCockpitSnapshot,
+    loadBusinessOverview,
     loadMonitoringOverview,
     loadOpsChecklist,
     loadAssets,
@@ -311,6 +312,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingAssets,
     loadingFields,
     loadingMonitoringOverview,
+    businessOverview,
+    loadingBusinessOverview,
     menuAxis,
     monitoringOverview,
     monitoringSources,
@@ -589,7 +592,18 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
             Module-first entry with configurable widgets for quick risk/owner/action visibility.
           </p>
           <div className="toolbar-row" style={{ marginBottom: "0.65rem", flexWrap: "wrap" }}>
-            <button onClick={() => void Promise.all([loadMonitoringOverview(), loadDailyCockpitSnapshot(), loadAssets(), loadAssetStats()])}>
+            <button
+              onClick={() => void Promise.all([
+                loadMonitoringOverview(),
+                loadBusinessOverview({
+                  department: menuAxis === "department" ? departmentWorkspace : undefined,
+                  business_service: menuAxis === "business" ? businessWorkspace : undefined
+                }),
+                loadDailyCockpitSnapshot(),
+                loadAssets(),
+                loadAssetStats()
+              ])}
+            >
               Refresh cockpit
             </button>
             <button onClick={resetDashboardLayout}>Reset widget layout</button>
@@ -616,6 +630,90 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 </div>
               );
             })}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Business risk and resource baseline</h3>
+              <button
+                onClick={() => void loadBusinessOverview({
+                  department: menuAxis === "department" ? departmentWorkspace : undefined,
+                  business_service: menuAxis === "business" ? businessWorkspace : undefined
+                })}
+                disabled={loadingBusinessOverview}
+              >
+                {loadingBusinessOverview ? "Loading..." : "Refresh business overview"}
+              </button>
+            </div>
+            {!businessOverview ? (
+              <p className="inline-note">
+                {loadingBusinessOverview ? "Loading business scope analytics..." : "Business overview is not loaded yet."}
+              </p>
+            ) : (
+              <>
+                <div className="toolbar-row" style={{ flexWrap: "wrap", marginBottom: "0.6rem" }}>
+                  <span className="status-chip">services={businessOverview.summary.business_service_total}</span>
+                  <span className="status-chip">assets={businessOverview.summary.asset_total}</span>
+                  <span className="status-chip">active={businessOverview.summary.active_asset_total}</span>
+                  <span className="status-chip status-chip-warn">idle={businessOverview.summary.idle_asset_total}</span>
+                  <span className="status-chip">open_alerts={businessOverview.summary.open_alert_total}</span>
+                  <span className="status-chip status-chip-danger">critical_alerts={businessOverview.summary.critical_alert_total}</span>
+                  <span className="status-chip">open_tickets={businessOverview.summary.open_ticket_total}</span>
+                  <span className="status-chip status-chip-danger">
+                    escalation_tickets={businessOverview.summary.escalation_ticket_total}
+                  </span>
+                  <span className="inline-note">generated_at={new Date(businessOverview.generated_at).toLocaleString()}</span>
+                </div>
+                {businessOverview.items.length === 0 ? (
+                  <p className="inline-note">No business service binding found for current scope.</p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ borderCollapse: "collapse", minWidth: "1100px", width: "100%" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Business service</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Risk score</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Assets (active / idle)</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Alerts</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Tickets</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Scope hints</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {businessOverview.items.map((item: any) => (
+                          <tr key={`business-overview-${item.business_service}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.business_service}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <span className={`status-chip ${item.risk_score >= 180 ? "status-chip-danger" : item.risk_score >= 80 ? "status-chip-warn" : "status-chip-success"}`}>
+                                {item.risk_score}
+                              </span>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>total={item.asset_total}</div>
+                              <div className="inline-note">active={item.active_asset_total} / idle={item.idle_asset_total}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>open={item.open_alert_total}</div>
+                              <div className="inline-note">critical={item.critical_alert_total}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>open={item.open_ticket_total}</div>
+                              <div className="inline-note">escalation={item.escalation_ticket_total}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div className="inline-note">departments={(item.top_departments ?? []).join(", ") || "-"}</div>
+                              <div className="inline-note">sites={(item.top_sites ?? []).join(", ") || "-"}</div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>

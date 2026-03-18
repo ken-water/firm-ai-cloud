@@ -470,6 +470,42 @@ type MonitoringOverviewResponse = {
   empty: boolean;
 };
 
+type BusinessOverviewSummary = {
+  business_service_total: number;
+  asset_total: number;
+  active_asset_total: number;
+  idle_asset_total: number;
+  open_alert_total: number;
+  critical_alert_total: number;
+  open_ticket_total: number;
+  escalation_ticket_total: number;
+};
+
+type BusinessOverviewItem = {
+  business_service: string;
+  risk_score: number;
+  asset_total: number;
+  active_asset_total: number;
+  idle_asset_total: number;
+  open_alert_total: number;
+  critical_alert_total: number;
+  open_ticket_total: number;
+  escalation_ticket_total: number;
+  top_departments: string[];
+  top_sites: string[];
+};
+
+type BusinessOverviewResponse = {
+  generated_at: string;
+  scope: {
+    site: string | null;
+    department: string | null;
+    business_service: string | null;
+  };
+  summary: BusinessOverviewSummary;
+  items: BusinessOverviewItem[];
+};
+
 type MonitoringMetricPoint = {
   timestamp: string;
   value: number;
@@ -3314,6 +3350,8 @@ export function App() {
   const [monitoringMetricsError, setMonitoringMetricsError] = useState<string | null>(null);
   const [monitoringOverview, setMonitoringOverview] = useState<MonitoringOverviewResponse | null>(null);
   const [loadingMonitoringOverview, setLoadingMonitoringOverview] = useState(false);
+  const [businessOverview, setBusinessOverview] = useState<BusinessOverviewResponse | null>(null);
+  const [loadingBusinessOverview, setLoadingBusinessOverview] = useState(false);
   const [setupPreflight, setSetupPreflight] = useState<SetupChecklistResponse | null>(null);
   const [setupChecklist, setSetupChecklist] = useState<SetupChecklistResponse | null>(null);
   const [setupActivation, setSetupActivation] = useState<SetupActivationResponse | null>(null);
@@ -7549,6 +7587,35 @@ export function App() {
     }
   }, []);
 
+  const loadBusinessOverview = useCallback(async (filters?: { department?: string; business_service?: string }) => {
+    setLoadingBusinessOverview(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (filters?.department && filters.department !== "all") {
+        params.set("department", filters.department);
+      }
+      if (filters?.business_service && filters.business_service !== "all") {
+        params.set("business_service", filters.business_service);
+      }
+      params.set("limit", "20");
+      const query = params.toString();
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/business-overview${query ? `?${query}` : ""}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BusinessOverviewResponse = await response.json();
+      setBusinessOverview(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setBusinessOverview(null);
+      return null;
+    } finally {
+      setLoadingBusinessOverview(false);
+    }
+  }, []);
+
   const buildSetupTemplateDraft = useCallback((template: SetupTemplateCatalogItem | null) => {
     if (!template) {
       return {};
@@ -10129,10 +10196,12 @@ export function App() {
       loadFieldDefinitions(),
       loadMonitoringSources(defaultMonitoringSourceFilters),
       loadMonitoringOverview(),
+      loadBusinessOverview(),
     ]);
   }, [
     loadAssetStats,
     loadAssets,
+    loadBusinessOverview,
     loadFieldDefinitions,
     loadMonitoringOverview,
     loadMonitoringSources,
@@ -10397,7 +10466,19 @@ export function App() {
     }
     const scopedDepartment = menuAxis === "department" ? departmentWorkspace : undefined;
     void loadMonitoringOverview(scopedDepartment);
-  }, [authIdentity, departmentWorkspace, loadMonitoringOverview, menuAxis]);
+    const scopedBusinessService = menuAxis === "business" ? businessWorkspace : undefined;
+    void loadBusinessOverview({
+      department: scopedDepartment,
+      business_service: scopedBusinessService,
+    });
+  }, [
+    authIdentity,
+    businessWorkspace,
+    departmentWorkspace,
+    loadBusinessOverview,
+    loadMonitoringOverview,
+    menuAxis
+  ]);
 
   useEffect(() => {
     if (!authIdentity) {
@@ -12085,6 +12166,7 @@ export function App() {
     departmentWorkspaceOptions,
     functionWorkspace,
     loadDailyCockpitSnapshot,
+    loadBusinessOverview,
     loadMonitoringOverview,
     loadOpsChecklist,
     loadAssets,
@@ -12154,6 +12236,8 @@ export function App() {
     loadingAssets,
     loadingFields,
     loadingMonitoringOverview,
+    businessOverview,
+    loadingBusinessOverview,
     menuAxis,
     monitoringOverview,
     monitoringSources,
