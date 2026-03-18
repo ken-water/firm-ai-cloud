@@ -15,7 +15,14 @@ export const defaultConsolePage: ConsolePage = "overview";
 
 export const consolePageSections: Record<ConsolePage, string[]> = {
   setup: ["section-setup-wizard"],
-  overview: ["section-daily-cockpit", "section-cockpit", "section-monitoring-metrics", "section-topology", "section-asset-stats"],
+  overview: [
+    "section-module-cockpit",
+    "section-daily-cockpit",
+    "section-cockpit",
+    "section-monitoring-metrics",
+    "section-topology",
+    "section-asset-stats"
+  ],
   cmdb: [
     "section-scan",
     "section-fields",
@@ -41,6 +48,7 @@ export const consolePageSections: Record<ConsolePage, string[]> = {
 };
 
 const legacySectionToPage: Record<string, ConsolePage> = {
+  "section-module-cockpit": "overview",
   "section-setup-wizard": "setup",
   "section-alert-center": "alerts",
   "section-admin": "admin",

@@ -12085,6 +12085,7 @@ export function App() {
     departmentWorkspaceOptions,
     functionWorkspace,
     loadDailyCockpitSnapshot,
+    loadMonitoringOverview,
     loadOpsChecklist,
     loadAssets,
     loadAssetStats,
@@ -12156,6 +12157,7 @@ export function App() {
     menuAxis,
     monitoringOverview,
     monitoringSources,
+    ticketEscalationQueue,
     opsChecklist,
     opsChecklistDate,
     opsChecklistNotice,
@@ -12214,7 +12216,8 @@ export function App() {
     weeklyDigest,
     weeklyDigestNotice,
     weeklyDigestWeekStart,
-    visibleSections
+    visibleSections,
+    topologyMap
   };
 
   return (

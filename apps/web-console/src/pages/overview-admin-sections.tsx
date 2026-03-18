@@ -1,5 +1,110 @@
+import { useMemo, useState } from "react";
 import { HorizontalFillBar } from "../components/chart-primitives";
 import { SectionCard } from "../components/layout";
+
+type DashboardWidgetKey =
+  | "monitoring_health"
+  | "daily_ops_risk"
+  | "cmdb_capacity"
+  | "ticket_escalation"
+  | "topology_risk";
+
+type DashboardWidgetLayout = {
+  key: DashboardWidgetKey;
+  enabled: boolean;
+  order: number;
+};
+
+type DashboardLayoutPayload = {
+  version: 1;
+  widgets: DashboardWidgetLayout[];
+};
+
+const DASHBOARD_LAYOUT_STORAGE_KEY = "cloudops.dashboard_layout.v1";
+const DASHBOARD_WIDGETS: Array<{ key: DashboardWidgetKey; title: string; description: string }> = [
+  {
+    key: "monitoring_health",
+    title: "Monitoring health",
+    description: "Reachability and critical source health."
+  },
+  {
+    key: "daily_ops_risk",
+    title: "Daily ops risk",
+    description: "Overdue/blocked workload and escalation pressure."
+  },
+  {
+    key: "cmdb_capacity",
+    title: "CMDB capacity",
+    description: "Asset volume and binding completeness."
+  },
+  {
+    key: "ticket_escalation",
+    title: "Ticket escalation",
+    description: "Escalation queue pressure and pending items."
+  },
+  {
+    key: "topology_risk",
+    title: "Topology risk",
+    description: "Topology map scale and diagnostics visibility."
+  }
+];
+
+function buildDefaultDashboardLayout(): DashboardWidgetLayout[] {
+  return DASHBOARD_WIDGETS.map((item, index) => ({
+    key: item.key,
+    enabled: true,
+    order: index + 1
+  }));
+}
+
+function parseDashboardLayout(raw: string | null): DashboardWidgetLayout[] {
+  if (!raw) {
+    return buildDefaultDashboardLayout();
+  }
+  try {
+    const parsed = JSON.parse(raw) as DashboardLayoutPayload;
+    if (parsed.version !== 1 || !Array.isArray(parsed.widgets)) {
+      return buildDefaultDashboardLayout();
+    }
+    const byKey = new Map<DashboardWidgetKey, DashboardWidgetLayout>();
+    for (const item of parsed.widgets) {
+      if (!item || typeof item !== "object") {
+        continue;
+      }
+      if (!DASHBOARD_WIDGETS.some((widget) => widget.key === item.key)) {
+        continue;
+      }
+      byKey.set(item.key, {
+        key: item.key,
+        enabled: Boolean(item.enabled),
+        order: Number.isFinite(item.order) ? Math.max(1, Math.floor(item.order)) : 999
+      });
+    }
+    return DASHBOARD_WIDGETS.map((item, index) => {
+      const existing = byKey.get(item.key);
+      return (
+        existing ?? {
+          key: item.key,
+          enabled: true,
+          order: index + 1
+        }
+      );
+    });
+  } catch {
+    return buildDefaultDashboardLayout();
+  }
+}
+
+function persistDashboardLayout(layout: DashboardWidgetLayout[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const payload: DashboardLayoutPayload = {
+    version: 1,
+    widgets: layout
+  };
+  window.localStorage.setItem(DASHBOARD_LAYOUT_STORAGE_KEY, JSON.stringify(payload));
+}
 
 export function OverviewAdminSections(rawProps: Record<string, unknown>) {
   const {
@@ -138,6 +243,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     applyDailyOpsOwnerAssignment,
     applyDailyOpsEscalationAction,
     loadDailyCockpitSnapshot,
+    loadMonitoringOverview,
     loadOpsChecklist,
     loadAssets,
     loadAssetStats,
@@ -208,6 +314,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     menuAxis,
     monitoringOverview,
     monitoringSources,
+    ticketEscalationQueue,
     opsChecklist,
     opsChecklistDate,
     opsChecklistNotice,
@@ -267,7 +374,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     weeklyDigestNotice,
     weeklyDigestWeekStart,
     visibleSections,
-    creatingSample
+    creatingSample,
+    topologyMap
   } = rawProps as any;
   const selectedRunbookTemplate =
     (runbookTemplates as any[]).find((item) => item.key === selectedRunbookTemplateKey) ?? null;
@@ -277,6 +385,113 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       item
     ])
   );
+  const [dashboardLayout, setDashboardLayout] = useState<DashboardWidgetLayout[]>(() => {
+    if (typeof window === "undefined") {
+      return buildDefaultDashboardLayout();
+    }
+    return parseDashboardLayout(window.localStorage.getItem(DASHBOARD_LAYOUT_STORAGE_KEY));
+  });
+  const dashboardWidgets = useMemo(() => {
+    const detailByKey = new Map(DASHBOARD_WIDGETS.map((item) => [item.key, item]));
+    return [...dashboardLayout]
+      .sort((left, right) => left.order - right.order)
+      .map((item) => ({
+        ...item,
+        detail: detailByKey.get(item.key)
+      }))
+      .filter((item) => item.enabled);
+  }, [dashboardLayout]);
+  const moduleStatusCards = useMemo(() => {
+    const monitoringUnreachable = Number(monitoringOverview?.summary?.source_unreachable_total ?? 0);
+    const monitoringCritical = Number(monitoringOverview?.layers?.reduce((sum: number, layer: any) => {
+      return sum + Number(layer?.health?.critical ?? 0);
+    }, 0) ?? 0);
+    const dailyBlocked = Number(dailyOpsBriefing?.summary?.blocked ?? 0);
+    const dailyOverdue = Number(dailyOpsBriefing?.summary?.overdue ?? 0);
+    const escalationQueue = Number((ticketEscalationQueue ?? []).length);
+    const cmdbAssets = Number(assetStats?.total_assets ?? 0);
+    const cmdbUnbound = Number(assetStats?.unbound?.department_assets ?? 0) + Number(assetStats?.unbound?.business_service_assets ?? 0);
+    const topologyNodes = Number(topologyMap?.nodes?.length ?? 0);
+    return [
+      {
+        key: "monitoring",
+        label: "Monitoring",
+        risk: monitoringUnreachable + monitoringCritical,
+        summary: `unreachable=${monitoringUnreachable}, critical=${monitoringCritical}`,
+        href: "#/monitoring"
+      },
+      {
+        key: "cmdb",
+        label: "CMDB",
+        risk: cmdbUnbound,
+        summary: `assets=${cmdbAssets}, unbound=${cmdbUnbound}`,
+        href: "#/cmdb"
+      },
+      {
+        key: "topology",
+        label: "Topology",
+        risk: 0,
+        summary: `nodes=${topologyNodes}`,
+        href: "#/topology"
+      },
+      {
+        key: "workflow",
+        label: "Workflow",
+        risk: Number(runbookRiskAlerts?.items?.length ?? 0),
+        summary: `risk_alerts=${Number(runbookRiskAlerts?.items?.length ?? 0)}`,
+        href: "#/workflow"
+      },
+      {
+        key: "tickets",
+        label: "Tickets",
+        risk: escalationQueue,
+        summary: `escalation_queue=${escalationQueue}`,
+        href: "#/tickets"
+      },
+      {
+        key: "overview",
+        label: "Daily Ops",
+        risk: dailyBlocked + dailyOverdue,
+        summary: `overdue=${dailyOverdue}, blocked=${dailyBlocked}`,
+        href: "#/overview"
+      }
+    ];
+  }, [assetStats, dailyOpsBriefing, monitoringOverview, runbookRiskAlerts, ticketEscalationQueue, topologyMap]);
+
+  const updateDashboardLayout = (updater: (prev: DashboardWidgetLayout[]) => DashboardWidgetLayout[]) => {
+    setDashboardLayout((prev) => {
+      const next = updater(prev);
+      persistDashboardLayout(next);
+      return next;
+    });
+  };
+  const toggleWidget = (key: DashboardWidgetKey) => {
+    updateDashboardLayout((prev) =>
+      prev.map((item) => (item.key === key ? { ...item, enabled: !item.enabled } : item))
+    );
+  };
+  const moveWidget = (key: DashboardWidgetKey, direction: -1 | 1) => {
+    updateDashboardLayout((prev) => {
+      const sorted = [...prev].sort((left, right) => left.order - right.order);
+      const index = sorted.findIndex((item) => item.key === key);
+      if (index < 0) {
+        return prev;
+      }
+      const target = index + direction;
+      if (target < 0 || target >= sorted.length) {
+        return prev;
+      }
+      const current = sorted[index];
+      sorted[index] = sorted[target];
+      sorted[target] = current;
+      return sorted.map((item, order) => ({ ...item, order: order + 1 }));
+    });
+  };
+  const resetDashboardLayout = () => {
+    const next = buildDefaultDashboardLayout();
+    persistDashboardLayout(next);
+    setDashboardLayout(next);
+  };
 
   return (
     <>
@@ -365,6 +580,105 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
               scope: perspectiveScopeLabel
             })}
           </p>
+        </SectionCard>
+      )}
+
+      {activePage === "overview" && visibleSections.has("section-module-cockpit") && (
+        <SectionCard id="section-module-cockpit" title="Module operation cockpit">
+          <p className="section-note" style={{ marginTop: 0 }}>
+            Module-first entry with configurable widgets for quick risk/owner/action visibility.
+          </p>
+          <div className="toolbar-row" style={{ marginBottom: "0.65rem", flexWrap: "wrap" }}>
+            <button onClick={() => void Promise.all([loadMonitoringOverview(), loadDailyCockpitSnapshot(), loadAssets(), loadAssetStats()])}>
+              Refresh cockpit
+            </button>
+            <button onClick={resetDashboardLayout}>Reset widget layout</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.65rem", marginBottom: "0.85rem" }}>
+            {moduleStatusCards.map((card) => {
+              const severityClass = card.risk > 0 ? "status-chip status-chip-danger" : "status-chip status-chip-success";
+              return (
+                <div key={`module-card-${card.key}`} className="detail-panel">
+                  <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                    <strong>{card.label}</strong>
+                    <span className={severityClass}>risk={card.risk}</span>
+                  </div>
+                  <p className="inline-note">{card.summary}</p>
+                  <button
+                    onClick={() => {
+                      if (typeof window !== "undefined") {
+                        window.location.hash = card.href;
+                      }
+                    }}
+                  >
+                    Open {card.label}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: "0.45rem" }}>Widget layout contract (v1)</h3>
+            <p className="inline-note">Storage key: {DASHBOARD_LAYOUT_STORAGE_KEY} | scope: current user browser profile</p>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "920px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Widget</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Description</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Enabled</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Order</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...dashboardLayout].sort((left, right) => left.order - right.order).map((item) => {
+                    const detail = DASHBOARD_WIDGETS.find((widget) => widget.key === item.key);
+                    return (
+                      <tr key={`dashboard-widget-row-${item.key}`}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{detail?.title ?? item.key}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{detail?.description ?? "-"}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                          <span className={`status-chip ${item.enabled ? "status-chip-success" : ""}`}>
+                            {item.enabled ? "enabled" : "disabled"}
+                          </span>
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{item.order}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                          <div className="toolbar-row" style={{ flexWrap: "wrap" }}>
+                            <button onClick={() => toggleWidget(item.key)}>
+                              {item.enabled ? "Disable" : "Enable"}
+                            </button>
+                            <button onClick={() => moveWidget(item.key, -1)} disabled={item.order <= 1}>
+                              Move up
+                            </button>
+                            <button onClick={() => moveWidget(item.key, 1)} disabled={item.order >= dashboardLayout.length}>
+                              Move down
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {dashboardWidgets.length > 0 && (
+            <div className="detail-panel">
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: "0.45rem" }}>Widget preview</h3>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.65rem" }}>
+                {dashboardWidgets.map((item) => (
+                  <div key={`dashboard-widget-preview-${item.key}`} className="detail-panel">
+                    <strong>{item.detail?.title ?? item.key}</strong>
+                    <p className="inline-note">{item.detail?.description ?? "-"}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </SectionCard>
       )}
 
