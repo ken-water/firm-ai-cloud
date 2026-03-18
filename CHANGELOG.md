@@ -18,6 +18,29 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.22] - 2026-03-18
+
+### Added
+
+- v0.1.22 planning and release-gate documentation:
+  - `docs/65-v0.1.22-dashboard-studio-topology-ai-plan.md`
+  - `docs/66-v0.1.22-release-gate-checklist.md`
+- v0.1.22 issue baseline and closure track: GitHub issues `#235` to `#240`.
+- Cockpit baseline APIs:
+  - `GET /api/v1/ops/cockpit/business-topology-overview`
+  - `GET /api/v1/ops/cockpit/ai/intent-presets`
+
+### Changed
+
+- Module cockpit now includes dashboard studio v1 role templates (`operator/admin/network/business`) with deterministic widget composition.
+- Added business topology risk baseline panel and one-screen operator handoff panel for prioritized risk/owner/action visibility.
+- AI evidence panel now supports intent preset-driven query flow and evidence continuity hints.
+
+### Fixed
+
+- SMB operators now have a deterministic dashboard baseline apply path instead of manual widget-only setup.
+- Cross-domain handoff focus is consolidated into one screen with deterministic priority ordering.
+
 ## [0.1.21] - 2026-03-18
 
 ### Added
