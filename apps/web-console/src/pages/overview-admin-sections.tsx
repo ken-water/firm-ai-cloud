@@ -539,6 +539,70 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       }
     ];
   }, [assetStats, dailyOpsBriefing, monitoringOverview, runbookRiskAlerts, ticketEscalationQueue, topologyMap]);
+  const handoffFocusItems = useMemo(() => {
+    const rows: Array<{
+      key: string;
+      domain: string;
+      score: number;
+      owner: string;
+      action: string;
+      summary: string;
+    }> = [];
+
+    (dailyOpsClosureContinuity?.escalation_candidates ?? []).slice(0, 8).forEach((item: any, index: number) => {
+      const criticalBoost = item.priority === "critical" ? 120 : 80;
+      rows.push({
+        key: `daily-escalation-${item.task_key}-${index}`,
+        domain: "daily_ops",
+        score: criticalBoost,
+        owner: item.owner_ref ?? "unassigned",
+        action: "Escalate now",
+        summary: `${item.task_key} (${item.status}/${item.priority})`
+      });
+    });
+
+    (businessTopologyOverview?.items ?? []).slice(0, 6).forEach((item: any, index: number) => {
+      rows.push({
+        key: `biz-topology-${item.business_service}-${index}`,
+        domain: "business_topology",
+        score: Number(item.risk_score ?? 0),
+        owner: "service-owner",
+        action: "Review topology risk",
+        summary: `${item.business_service} nodes=${item.node_total}, cross_site_edges=${item.cross_site_edge_total}`
+      });
+    });
+
+    (workflowOrgBaseline?.departments ?? []).slice(0, 6).forEach((item: any, index: number) => {
+      const score = Number(item.pending_approval_total ?? 0) * 20 + Number(item.inflight_total ?? 0) * 10;
+      rows.push({
+        key: `workflow-dept-${item.department}-${index}`,
+        domain: "workflow",
+        score,
+        owner: item.escalation_owner ?? "ops-escalation",
+        action: "Clear approval queue",
+        summary: `${item.department} pending=${item.pending_approval_total}, inflight=${item.inflight_total}`
+      });
+    });
+
+    const aiSummary = aiEvidenceResponse?.answer?.summary;
+    if (typeof aiSummary === "string" && aiSummary.trim().length > 0) {
+      rows.push({
+        key: "ai-summary",
+        domain: "ai",
+        score: 40,
+        owner: "operator",
+        action: "Review evidence answer",
+        summary: aiSummary
+      });
+    }
+
+    rows.sort((left, right) =>
+      right.score - left.score
+      || left.domain.localeCompare(right.domain)
+      || left.key.localeCompare(right.key)
+    );
+    return rows.slice(0, 12);
+  }, [aiEvidenceResponse, businessTopologyOverview, dailyOpsClosureContinuity, workflowOrgBaseline]);
 
   const updateDashboardLayout = (updater: (prev: DashboardWidgetLayout[]) => DashboardWidgetLayout[]) => {
     setDashboardLayout((prev) => {
@@ -760,6 +824,49 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 </div>
               );
             })}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>One-screen operator handoff</h3>
+              <span className="inline-note">
+                focus_items={handoffFocusItems.length} | read_only={canWriteCmdb ? "false" : "true"}
+              </span>
+            </div>
+            {handoffFocusItems.length === 0 ? (
+              <p className="inline-note">No handoff focus item yet. Refresh cockpit modules to generate summary.</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Domain</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Priority</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Summary</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {handoffFocusItems.map((item) => (
+                      <tr key={`handoff-focus-${item.key}`}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          {item.domain}
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                          <span className={`status-chip ${item.score >= 120 ? "status-chip-danger" : item.score >= 60 ? "status-chip-warn" : "status-chip-success"}`}>
+                            {item.score}
+                          </span>
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>{item.owner}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>{item.action}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>{item.summary}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
