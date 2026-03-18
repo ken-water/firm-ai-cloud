@@ -167,6 +167,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.21 release gate checklist](docs/64-v0.1.21-release-gate-checklist.md)
 - [v0.1.22 dashboard studio + topology/AI copilot baseline plan](docs/65-v0.1.22-dashboard-studio-topology-ai-plan.md)
 - [v0.1.22 release gate checklist](docs/66-v0.1.22-release-gate-checklist.md)
+- [v0.1.23 copilot guided actions + topology board + handoff readiness plan](docs/67-v0.1.23-copilot-actions-topology-board-plan.md)
+- [v0.1.23 release gate checklist](docs/68-v0.1.23-release-gate-checklist.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
