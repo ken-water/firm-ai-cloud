@@ -299,6 +299,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     applyDailyOpsEscalationAction,
     loadDailyCockpitSnapshot,
     loadBusinessOverview,
+    loadBusinessTopologyOverview,
     loadWorkflowOrgBaseline,
     runAiEvidenceQuery,
     loadMonitoringOverview,
@@ -371,6 +372,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingMonitoringOverview,
     businessOverview,
     loadingBusinessOverview,
+    businessTopologyOverview,
+    loadingBusinessTopologyOverview,
     workflowOrgBaseline,
     loadingWorkflowOrgBaseline,
     aiEvidenceResponse,
@@ -675,6 +678,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   department: menuAxis === "department" ? departmentWorkspace : undefined,
                   business_service: menuAxis === "business" ? businessWorkspace : undefined
                 }),
+                loadBusinessTopologyOverview({
+                  department: menuAxis === "department" ? departmentWorkspace : undefined,
+                  business_service: menuAxis === "business" ? businessWorkspace : undefined
+                }),
                 loadWorkflowOrgBaseline(30),
                 loadDailyCockpitSnapshot(),
                 loadAssets(),
@@ -822,6 +829,87 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                             <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
                               <div className="inline-note">departments={(item.top_departments ?? []).join(", ") || "-"}</div>
                               <div className="inline-note">sites={(item.top_sites ?? []).join(", ") || "-"}</div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Business topology risk view</h3>
+              <button
+                onClick={() =>
+                  void loadBusinessTopologyOverview({
+                    department: menuAxis === "department" ? departmentWorkspace : undefined,
+                    business_service: menuAxis === "business" ? businessWorkspace : undefined
+                  })}
+                disabled={loadingBusinessTopologyOverview}
+              >
+                {loadingBusinessTopologyOverview ? "Loading..." : "Refresh topology view"}
+              </button>
+            </div>
+            {!businessTopologyOverview ? (
+              <p className="inline-note">
+                {loadingBusinessTopologyOverview ? "Loading business topology risk..." : "Business topology overview is not loaded yet."}
+              </p>
+            ) : (
+              <>
+                <div className="toolbar-row" style={{ flexWrap: "wrap", marginBottom: "0.6rem" }}>
+                  <span className="status-chip">services={businessTopologyOverview.summary.business_service_total}</span>
+                  <span className="status-chip">nodes={businessTopologyOverview.summary.node_total}</span>
+                  <span className="status-chip">edges={businessTopologyOverview.summary.edge_total}</span>
+                  <span className="status-chip status-chip-warn">
+                    cross_site_edges={businessTopologyOverview.summary.cross_site_edge_total}
+                  </span>
+                  <span className="status-chip status-chip-danger">
+                    critical_alerts={businessTopologyOverview.summary.critical_alert_total}
+                  </span>
+                  <span className="status-chip status-chip-danger">
+                    escalation_tickets={businessTopologyOverview.summary.escalation_ticket_total}
+                  </span>
+                  <span className="inline-note">
+                    generated_at={new Date(businessTopologyOverview.generated_at).toLocaleString()}
+                  </span>
+                </div>
+                {businessTopologyOverview.items.length === 0 ? (
+                  <p className="inline-note">No business topology snapshot found for current scope.</p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ borderCollapse: "collapse", minWidth: "1040px", width: "100%" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Business service</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Topology</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Risk signals</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Risk score</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {businessTopologyOverview.items.map((item: any) => (
+                          <tr key={`business-topology-${item.business_service}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.business_service}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>nodes={item.node_total}</div>
+                              <div className="inline-note">edges={item.edge_total}, cross_site={item.cross_site_edge_total}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>critical_alerts={item.critical_alert_total}</div>
+                              <div className="inline-note">
+                                open_tickets={item.open_ticket_total}, escalation={item.escalation_ticket_total}
+                              </div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <span className={`status-chip ${item.risk_score >= 180 ? "status-chip-danger" : item.risk_score >= 80 ? "status-chip-warn" : "status-chip-success"}`}>
+                                {item.risk_score}
+                              </span>
                             </td>
                           </tr>
                         ))}

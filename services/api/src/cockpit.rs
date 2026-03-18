@@ -40,6 +40,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/cockpit/queue", get(get_daily_cockpit_queue))
         .route("/cockpit/business-overview", get(get_business_overview))
+        .route("/cockpit/business-topology-overview", get(get_business_topology_overview))
         .route("/cockpit/workflow-org-baseline", get(get_workflow_org_baseline))
         .route("/cockpit/ai/evidence-query", post(query_ai_evidence_baseline))
         .route("/cockpit/daily-ops/briefing", get(get_daily_ops_briefing))
@@ -105,6 +106,14 @@ struct BusinessOverviewQuery {
 #[derive(Debug, Deserialize, Default)]
 struct WorkflowOrgBaselineQuery {
     days: Option<u32>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct BusinessTopologyOverviewQuery {
+    site: Option<String>,
+    department: Option<String>,
+    business_service: Option<String>,
     limit: Option<u32>,
 }
 
@@ -223,6 +232,36 @@ struct BusinessOverviewItem {
     escalation_ticket_total: i64,
     top_departments: Vec<String>,
     top_sites: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BusinessTopologyOverviewResponse {
+    generated_at: DateTime<Utc>,
+    scope: BusinessOverviewScope,
+    summary: BusinessTopologyOverviewSummary,
+    items: Vec<BusinessTopologyOverviewItem>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct BusinessTopologyOverviewSummary {
+    business_service_total: usize,
+    node_total: i64,
+    edge_total: i64,
+    cross_site_edge_total: i64,
+    critical_alert_total: i64,
+    escalation_ticket_total: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct BusinessTopologyOverviewItem {
+    business_service: String,
+    node_total: i64,
+    edge_total: i64,
+    cross_site_edge_total: i64,
+    critical_alert_total: i64,
+    open_ticket_total: i64,
+    escalation_ticket_total: i64,
+    risk_score: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -875,6 +914,17 @@ struct AiWorkflowSummaryRow {
     waiting_manual_total: i64,
 }
 
+#[derive(Debug, FromRow)]
+struct BusinessTopologyOverviewRow {
+    business_service: String,
+    node_total: i64,
+    edge_total: i64,
+    cross_site_edge_total: i64,
+    critical_alert_total: i64,
+    open_ticket_total: i64,
+    escalation_ticket_total: i64,
+}
+
 async fn get_daily_cockpit_queue(
     State(state): State<AppState>,
     Query(query): Query<DailyCockpitQuery>,
@@ -985,6 +1035,55 @@ async fn get_business_overview(
     let summary = summarize_business_overview(items.as_slice());
 
     Ok(Json(BusinessOverviewResponse {
+        generated_at: Utc::now(),
+        scope: BusinessOverviewScope {
+            site,
+            department,
+            business_service,
+        },
+        summary,
+        items,
+    }))
+}
+
+async fn get_business_topology_overview(
+    State(state): State<AppState>,
+    Query(query): Query<BusinessTopologyOverviewQuery>,
+) -> AppResult<Json<BusinessTopologyOverviewResponse>> {
+    let limit = query.limit.unwrap_or(12).clamp(1, 50);
+    let site = trim_optional(query.site, 128);
+    let department = trim_optional(query.department, 128);
+    let business_service = trim_optional(query.business_service, 128);
+    let rows = fetch_business_topology_overview_rows(
+        &state.db,
+        site.as_deref(),
+        department.as_deref(),
+        business_service.as_deref(),
+        limit as i64,
+    )
+    .await?;
+    let mut items = rows
+        .into_iter()
+        .map(|row| BusinessTopologyOverviewItem {
+            business_service: row.business_service,
+            node_total: row.node_total,
+            edge_total: row.edge_total,
+            cross_site_edge_total: row.cross_site_edge_total,
+            critical_alert_total: row.critical_alert_total,
+            open_ticket_total: row.open_ticket_total,
+            escalation_ticket_total: row.escalation_ticket_total,
+            risk_score: compute_business_topology_risk_score(
+                row.cross_site_edge_total,
+                row.critical_alert_total,
+                row.escalation_ticket_total,
+                row.open_ticket_total,
+            ),
+        })
+        .collect::<Vec<_>>();
+    sort_business_topology_overview_items(&mut items);
+    let summary = summarize_business_topology_overview(items.as_slice());
+
+    Ok(Json(BusinessTopologyOverviewResponse {
         generated_at: Utc::now(),
         scope: BusinessOverviewScope {
             site,
@@ -2434,6 +2533,99 @@ async fn fetch_workflow_org_template_rows(
     Ok(rows)
 }
 
+async fn fetch_business_topology_overview_rows(
+    db: &sqlx::PgPool,
+    site: Option<&str>,
+    department: Option<&str>,
+    business_service: Option<&str>,
+    limit: i64,
+) -> AppResult<Vec<BusinessTopologyOverviewRow>> {
+    let rows: Vec<BusinessTopologyOverviewRow> = sqlx::query_as(
+        "WITH scoped_bindings AS (
+            SELECT b.business_service, b.asset_id
+            FROM asset_business_service_bindings b
+            INNER JOIN assets a ON a.id = b.asset_id
+            WHERE ($1::TEXT IS NULL OR a.site = $1)
+              AND ($2::TEXT IS NULL OR a.department = $2)
+              AND ($3::TEXT IS NULL OR b.business_service = $3)
+         ),
+         services AS (
+            SELECT DISTINCT business_service
+            FROM scoped_bindings
+         ),
+         topology_edges AS (
+            SELECT
+                sb.business_service,
+                COUNT(*)::bigint AS edge_total,
+                COUNT(*) FILTER (
+                    WHERE src.site IS DISTINCT FROM dst.site
+                )::bigint AS cross_site_edge_total
+            FROM scoped_bindings sb
+            INNER JOIN asset_relations r ON r.src_asset_id = sb.asset_id
+            INNER JOIN scoped_bindings sb2 ON sb2.asset_id = r.dst_asset_id
+               AND sb2.business_service = sb.business_service
+            INNER JOIN assets src ON src.id = r.src_asset_id
+            INNER JOIN assets dst ON dst.id = r.dst_asset_id
+            GROUP BY sb.business_service
+         ),
+         topology_nodes AS (
+            SELECT
+                sb.business_service,
+                COUNT(DISTINCT sb.asset_id)::bigint AS node_total
+            FROM scoped_bindings sb
+            GROUP BY sb.business_service
+         ),
+         alert_rollup AS (
+            SELECT
+                sb.business_service,
+                COUNT(DISTINCT ua.id) FILTER (
+                    WHERE ua.status IN ('open', 'acknowledged')
+                      AND ua.severity = 'critical'
+                )::bigint AS critical_alert_total
+            FROM scoped_bindings sb
+            LEFT JOIN unified_alerts ua ON ua.asset_id = sb.asset_id
+            GROUP BY sb.business_service
+         ),
+         ticket_rollup AS (
+            SELECT
+                sb.business_service,
+                COUNT(DISTINCT t.id) FILTER (
+                    WHERE t.status IN ('open', 'in_progress')
+                )::bigint AS open_ticket_total,
+                COUNT(DISTINCT t.id) FILTER (
+                    WHERE t.status IN ('open', 'in_progress')
+                      AND t.priority IN ('critical', 'high')
+                )::bigint AS escalation_ticket_total
+            FROM scoped_bindings sb
+            LEFT JOIN ticket_asset_links tal ON tal.asset_id = sb.asset_id
+            LEFT JOIN tickets t ON t.id = tal.ticket_id
+            GROUP BY sb.business_service
+         )
+         SELECT
+            s.business_service,
+            COALESCE(n.node_total, 0) AS node_total,
+            COALESCE(e.edge_total, 0) AS edge_total,
+            COALESCE(e.cross_site_edge_total, 0) AS cross_site_edge_total,
+            COALESCE(a.critical_alert_total, 0) AS critical_alert_total,
+            COALESCE(t.open_ticket_total, 0) AS open_ticket_total,
+            COALESCE(t.escalation_ticket_total, 0) AS escalation_ticket_total
+         FROM services s
+         LEFT JOIN topology_nodes n ON n.business_service = s.business_service
+         LEFT JOIN topology_edges e ON e.business_service = s.business_service
+         LEFT JOIN alert_rollup a ON a.business_service = s.business_service
+         LEFT JOIN ticket_rollup t ON t.business_service = s.business_service
+         ORDER BY s.business_service ASC
+         LIMIT $4",
+    )
+    .bind(site)
+    .bind(department)
+    .bind(business_service)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
 async fn fetch_workflow_org_department_rows(
     db: &sqlx::PgPool,
     lookback_days: u32,
@@ -3682,6 +3874,48 @@ fn summarize_business_overview(items: &[BusinessOverviewItem]) -> BusinessOvervi
         summary.open_alert_total += item.open_alert_total;
         summary.critical_alert_total += item.critical_alert_total;
         summary.open_ticket_total += item.open_ticket_total;
+        summary.escalation_ticket_total += item.escalation_ticket_total;
+    }
+    summary
+}
+
+fn compute_business_topology_risk_score(
+    cross_site_edge_total: i64,
+    critical_alert_total: i64,
+    escalation_ticket_total: i64,
+    open_ticket_total: i64,
+) -> i32 {
+    let score = cross_site_edge_total * 5
+        + critical_alert_total * 100
+        + escalation_ticket_total * 12
+        + open_ticket_total * 4;
+    score.clamp(0, 9999) as i32
+}
+
+fn sort_business_topology_overview_items(items: &mut [BusinessTopologyOverviewItem]) {
+    items.sort_by(|left, right| {
+        right
+            .risk_score
+            .cmp(&left.risk_score)
+            .then_with(|| right.critical_alert_total.cmp(&left.critical_alert_total))
+            .then_with(|| right.escalation_ticket_total.cmp(&left.escalation_ticket_total))
+            .then_with(|| right.cross_site_edge_total.cmp(&left.cross_site_edge_total))
+            .then_with(|| left.business_service.cmp(&right.business_service))
+    });
+}
+
+fn summarize_business_topology_overview(
+    items: &[BusinessTopologyOverviewItem],
+) -> BusinessTopologyOverviewSummary {
+    let mut summary = BusinessTopologyOverviewSummary {
+        business_service_total: items.len(),
+        ..BusinessTopologyOverviewSummary::default()
+    };
+    for item in items {
+        summary.node_total += item.node_total;
+        summary.edge_total += item.edge_total;
+        summary.cross_site_edge_total += item.cross_site_edge_total;
+        summary.critical_alert_total += item.critical_alert_total;
         summary.escalation_ticket_total += item.escalation_ticket_total;
     }
     summary
@@ -5326,9 +5560,11 @@ mod tests {
         normalize_optional_note, parse_optional_date, score_alert_item, score_ticket_item,
         select_next_go_live_domain, collect_template_approver_groups,
         ensure_ai_evidence_completeness, AiEvidenceAnswer, AiEvidenceItem,
-        sort_business_overview_items, sort_daily_ops_items, sort_daily_queue_items,
-        sort_next_best_actions, summarize_business_overview, summarize_daily_ops_closure_continuity,
-        summarize_daily_ops_items, summarize_go_live_readiness,
+        sort_business_overview_items, sort_business_topology_overview_items, sort_daily_ops_items,
+        sort_daily_queue_items, sort_next_best_actions, summarize_business_overview,
+        summarize_business_topology_overview, summarize_daily_ops_closure_continuity,
+        summarize_daily_ops_items, summarize_go_live_readiness, BusinessTopologyOverviewItem,
+        compute_business_topology_risk_score,
     };
 
     fn test_item(key: &str, score: i32, observed_at_offset_minutes: i64) -> DailyCockpitQueueItem {
@@ -5622,6 +5858,79 @@ mod tests {
             }],
         };
         assert!(ensure_ai_evidence_completeness(&incomplete).is_err());
+    }
+
+    #[test]
+    fn business_topology_overview_sort_is_deterministic() {
+        let mut items = vec![
+            BusinessTopologyOverviewItem {
+                business_service: "billing".to_string(),
+                node_total: 10,
+                edge_total: 9,
+                cross_site_edge_total: 1,
+                critical_alert_total: 0,
+                open_ticket_total: 2,
+                escalation_ticket_total: 0,
+                risk_score: 20,
+            },
+            BusinessTopologyOverviewItem {
+                business_service: "crm".to_string(),
+                node_total: 12,
+                edge_total: 14,
+                cross_site_edge_total: 3,
+                critical_alert_total: 2,
+                open_ticket_total: 3,
+                escalation_ticket_total: 1,
+                risk_score: 245,
+            },
+            BusinessTopologyOverviewItem {
+                business_service: "auth".to_string(),
+                node_total: 12,
+                edge_total: 14,
+                cross_site_edge_total: 3,
+                critical_alert_total: 2,
+                open_ticket_total: 3,
+                escalation_ticket_total: 1,
+                risk_score: 245,
+            },
+        ];
+        sort_business_topology_overview_items(&mut items);
+        assert_eq!(items[0].business_service, "auth");
+        assert_eq!(items[1].business_service, "crm");
+        assert_eq!(items[2].business_service, "billing");
+    }
+
+    #[test]
+    fn business_topology_summary_and_score_are_stable() {
+        let items = vec![
+            BusinessTopologyOverviewItem {
+                business_service: "svc-a".to_string(),
+                node_total: 8,
+                edge_total: 6,
+                cross_site_edge_total: 2,
+                critical_alert_total: 1,
+                open_ticket_total: 2,
+                escalation_ticket_total: 1,
+                risk_score: compute_business_topology_risk_score(2, 1, 1, 2),
+            },
+            BusinessTopologyOverviewItem {
+                business_service: "svc-b".to_string(),
+                node_total: 5,
+                edge_total: 3,
+                cross_site_edge_total: 1,
+                critical_alert_total: 0,
+                open_ticket_total: 1,
+                escalation_ticket_total: 0,
+                risk_score: compute_business_topology_risk_score(1, 0, 0, 1),
+            },
+        ];
+        let summary = summarize_business_topology_overview(items.as_slice());
+        assert_eq!(summary.business_service_total, 2);
+        assert_eq!(summary.node_total, 13);
+        assert_eq!(summary.edge_total, 9);
+        assert_eq!(summary.cross_site_edge_total, 3);
+        assert_eq!(summary.critical_alert_total, 1);
+        assert_eq!(summary.escalation_ticket_total, 1);
     }
 
     #[test]

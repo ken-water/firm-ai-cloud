@@ -506,6 +506,37 @@ type BusinessOverviewResponse = {
   items: BusinessOverviewItem[];
 };
 
+type BusinessTopologyOverviewSummary = {
+  business_service_total: number;
+  node_total: number;
+  edge_total: number;
+  cross_site_edge_total: number;
+  critical_alert_total: number;
+  escalation_ticket_total: number;
+};
+
+type BusinessTopologyOverviewItem = {
+  business_service: string;
+  node_total: number;
+  edge_total: number;
+  cross_site_edge_total: number;
+  critical_alert_total: number;
+  open_ticket_total: number;
+  escalation_ticket_total: number;
+  risk_score: number;
+};
+
+type BusinessTopologyOverviewResponse = {
+  generated_at: string;
+  scope: {
+    site: string | null;
+    department: string | null;
+    business_service: string | null;
+  };
+  summary: BusinessTopologyOverviewSummary;
+  items: BusinessTopologyOverviewItem[];
+};
+
 type WorkflowOrgBaselineSummary = {
   enabled_template_total: number;
   approval_step_total: number;
@@ -3430,6 +3461,8 @@ export function App() {
   const [loadingMonitoringOverview, setLoadingMonitoringOverview] = useState(false);
   const [businessOverview, setBusinessOverview] = useState<BusinessOverviewResponse | null>(null);
   const [loadingBusinessOverview, setLoadingBusinessOverview] = useState(false);
+  const [businessTopologyOverview, setBusinessTopologyOverview] = useState<BusinessTopologyOverviewResponse | null>(null);
+  const [loadingBusinessTopologyOverview, setLoadingBusinessTopologyOverview] = useState(false);
   const [workflowOrgBaseline, setWorkflowOrgBaseline] = useState<WorkflowOrgBaselineResponse | null>(null);
   const [loadingWorkflowOrgBaseline, setLoadingWorkflowOrgBaseline] = useState(false);
   const [aiEvidenceResponse, setAiEvidenceResponse] = useState<AiEvidenceQueryResponse | null>(null);
@@ -7702,6 +7735,37 @@ export function App() {
     }
   }, []);
 
+  const loadBusinessTopologyOverview = useCallback(async (filters?: { department?: string; business_service?: string }) => {
+    setLoadingBusinessTopologyOverview(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (filters?.department && filters.department !== "all") {
+        params.set("department", filters.department);
+      }
+      if (filters?.business_service && filters.business_service !== "all") {
+        params.set("business_service", filters.business_service);
+      }
+      params.set("limit", "20");
+      const query = params.toString();
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/business-topology-overview${query ? `?${query}` : ""}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: BusinessTopologyOverviewResponse = await response.json();
+      setBusinessTopologyOverview(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setBusinessTopologyOverview(null);
+      return null;
+    } finally {
+      setLoadingBusinessTopologyOverview(false);
+    }
+  }, []);
+
   const loadWorkflowOrgBaseline = useCallback(async (days = 30) => {
     setLoadingWorkflowOrgBaseline(true);
     setError(null);
@@ -10352,12 +10416,14 @@ export function App() {
       loadMonitoringSources(defaultMonitoringSourceFilters),
       loadMonitoringOverview(),
       loadBusinessOverview(),
+      loadBusinessTopologyOverview(),
       loadWorkflowOrgBaseline(30),
     ]);
   }, [
     loadAssetStats,
     loadAssets,
     loadBusinessOverview,
+    loadBusinessTopologyOverview,
     loadFieldDefinitions,
     loadMonitoringOverview,
     loadMonitoringSources,
@@ -10628,11 +10694,16 @@ export function App() {
       department: scopedDepartment,
       business_service: scopedBusinessService,
     });
+    void loadBusinessTopologyOverview({
+      department: scopedDepartment,
+      business_service: scopedBusinessService,
+    });
   }, [
     authIdentity,
     businessWorkspace,
     departmentWorkspace,
     loadBusinessOverview,
+    loadBusinessTopologyOverview,
     loadMonitoringOverview,
     menuAxis
   ]);
@@ -12324,6 +12395,7 @@ export function App() {
     functionWorkspace,
     loadDailyCockpitSnapshot,
     loadBusinessOverview,
+    loadBusinessTopologyOverview,
     loadWorkflowOrgBaseline,
     runAiEvidenceQuery,
     loadMonitoringOverview,
@@ -12397,6 +12469,8 @@ export function App() {
     loadingMonitoringOverview,
     businessOverview,
     loadingBusinessOverview,
+    businessTopologyOverview,
+    loadingBusinessTopologyOverview,
     workflowOrgBaseline,
     loadingWorkflowOrgBaseline,
     aiEvidenceResponse,
