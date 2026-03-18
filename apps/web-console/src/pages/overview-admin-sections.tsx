@@ -15,6 +15,8 @@ type DashboardWidgetLayout = {
   order: number;
 };
 
+type DashboardTemplateKey = "operator" | "admin" | "network" | "business";
+
 type DashboardLayoutPayload = {
   version: 1;
   widgets: DashboardWidgetLayout[];
@@ -49,12 +51,65 @@ const DASHBOARD_WIDGETS: Array<{ key: DashboardWidgetKey; title: string; descrip
   }
 ];
 
+const DASHBOARD_ROLE_TEMPLATES: Array<{
+  key: DashboardTemplateKey;
+  title: string;
+  description: string;
+  widgets: DashboardWidgetKey[];
+}> = [
+  {
+    key: "operator",
+    title: "Operator",
+    description: "Daily follow-up and incident pressure first.",
+    widgets: ["daily_ops_risk", "monitoring_health", "ticket_escalation", "topology_risk"]
+  },
+  {
+    key: "admin",
+    title: "Admin",
+    description: "Global health and governance-oriented view.",
+    widgets: ["monitoring_health", "cmdb_capacity", "ticket_escalation", "daily_ops_risk", "topology_risk"]
+  },
+  {
+    key: "network",
+    title: "Network",
+    description: "Topology and source reachability focused.",
+    widgets: ["topology_risk", "monitoring_health", "daily_ops_risk"]
+  },
+  {
+    key: "business",
+    title: "Business",
+    description: "Capacity and escalation impact focused.",
+    widgets: ["cmdb_capacity", "ticket_escalation", "daily_ops_risk", "monitoring_health"]
+  }
+];
+
 function buildDefaultDashboardLayout(): DashboardWidgetLayout[] {
   return DASHBOARD_WIDGETS.map((item, index) => ({
     key: item.key,
     enabled: true,
     order: index + 1
   }));
+}
+
+function buildDashboardTemplateLayout(templateKey: DashboardTemplateKey): DashboardWidgetLayout[] {
+  const template =
+    DASHBOARD_ROLE_TEMPLATES.find((item) => item.key === templateKey) ?? DASHBOARD_ROLE_TEMPLATES[0];
+  const enabledKeys = new Set<DashboardWidgetKey>(template.widgets);
+  const orderByKey = new Map<DashboardWidgetKey, number>();
+  template.widgets.forEach((key, index) => {
+    orderByKey.set(key, index + 1);
+  });
+  let fallbackOrder = template.widgets.length + 1;
+  return DASHBOARD_WIDGETS.map((item) => {
+    const enabled = enabledKeys.has(item.key);
+    const ordered = orderByKey.get(item.key);
+    const order = typeof ordered === "number" ? ordered : fallbackOrder++;
+    return {
+      key: item.key,
+      enabled,
+      order
+    };
+  });
 }
 
 function parseDashboardLayout(raw: string | null): DashboardWidgetLayout[] {
@@ -408,6 +463,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     }
     return parseDashboardLayout(window.localStorage.getItem(DASHBOARD_LAYOUT_STORAGE_KEY));
   });
+  const [selectedDashboardTemplate, setSelectedDashboardTemplate] = useState<DashboardTemplateKey>("operator");
   const dashboardWidgets = useMemo(() => {
     const detailByKey = new Map(DASHBOARD_WIDGETS.map((item) => [item.key, item]));
     return [...dashboardLayout]
@@ -508,6 +564,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     const next = buildDefaultDashboardLayout();
     persistDashboardLayout(next);
     setDashboardLayout(next);
+  };
+  const applyDashboardTemplate = (templateKey: DashboardTemplateKey) => {
+    const next = buildDashboardTemplateLayout(templateKey);
+    persistDashboardLayout(next);
+    setDashboardLayout(next);
+    setSelectedDashboardTemplate(templateKey);
   };
 
   return (
@@ -622,6 +684,46 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
               Refresh cockpit
             </button>
             <button onClick={resetDashboardLayout}>Reset widget layout</button>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: "0.45rem" }}>Dashboard studio v1 (role templates)</h3>
+            <p className="inline-note">
+              Deterministic role-template composition baseline. Template apply is local-browser only and read-only safe.
+            </p>
+            <div className="toolbar-row" style={{ marginBottom: "0.5rem", flexWrap: "wrap" }}>
+              {DASHBOARD_ROLE_TEMPLATES.map((template) => (
+                <button
+                  key={`dashboard-template-${template.key}`}
+                  onClick={() => applyDashboardTemplate(template.key)}
+                  style={selectedDashboardTemplate === template.key ? { fontWeight: 700 } : undefined}
+                >
+                  Apply {template.title}
+                </button>
+              ))}
+            </div>
+            <p className="inline-note">selected_template={selectedDashboardTemplate}</p>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "920px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Template</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Description</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Enabled widgets</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {DASHBOARD_ROLE_TEMPLATES.map((template) => (
+                    <tr key={`dashboard-template-row-${template.key}`}>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{template.title}</td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{template.description}</td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                        {template.widgets.join(", ")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.65rem", marginBottom: "0.85rem" }}>
             {moduleStatusCards.map((card) => {
