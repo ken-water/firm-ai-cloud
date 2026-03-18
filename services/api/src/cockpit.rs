@@ -326,6 +326,7 @@ struct AiEvidenceQueryResponse {
     query: AiEvidenceQueryEcho,
     answer: AiEvidenceAnswer,
     safety: AiEvidenceSafety,
+    guided_actions: Vec<AiGuidedAction>,
 }
 
 #[derive(Debug, Serialize)]
@@ -359,7 +360,27 @@ struct AiEvidenceItem {
 struct AiEvidenceSafety {
     evidence_required: bool,
     read_only: bool,
+    write_guard_required: bool,
     blocked_actions: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AiGuidedAction {
+    action_key: String,
+    label: String,
+    description: String,
+    action_type: String,
+    safety_boundary: String,
+    risk_level: String,
+    requires_approval: bool,
+    requires_write: bool,
+    evidence_refs: Vec<String>,
+    evidence_metrics: Vec<String>,
+    href: Option<String>,
+    api_path: Option<String>,
+    method: Option<String>,
+    body: Option<Value>,
+    blocked_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1242,12 +1263,13 @@ async fn query_ai_evidence_baseline(
     )
     .await?;
     ensure_ai_evidence_completeness(&answer)?;
+    let guided_actions = build_ai_guided_actions(module.as_str(), intent.as_str(), &answer);
 
     Ok(Json(AiEvidenceQueryResponse {
         generated_at: now,
         query: AiEvidenceQueryEcho {
-            module,
-            intent,
+            module: module.clone(),
+            intent: intent.clone(),
             question: trim_optional(payload.question, 1024),
             scope: BusinessOverviewScope {
                 site,
@@ -1260,12 +1282,14 @@ async fn query_ai_evidence_baseline(
         safety: AiEvidenceSafety {
             evidence_required: true,
             read_only: true,
+            write_guard_required: true,
             blocked_actions: vec![
                 "auto_write".to_string(),
                 "silent_mutation".to_string(),
                 "action_without_evidence".to_string(),
             ],
         },
+        guided_actions,
     }))
 }
 
@@ -2904,6 +2928,159 @@ fn ensure_ai_evidence_completeness(answer: &AiEvidenceAnswer) -> AppResult<()> {
         }
     }
     Ok(())
+}
+
+fn build_ai_guided_actions(module: &str, intent: &str, answer: &AiEvidenceAnswer) -> Vec<AiGuidedAction> {
+    let evidence_refs = collect_ai_evidence_refs(answer);
+    let evidence_metrics = collect_ai_evidence_metrics(answer);
+    match module {
+        "monitoring" => vec![
+            AiGuidedAction {
+                action_key: "monitoring.review_evidence".to_string(),
+                label: "Review monitoring evidence".to_string(),
+                description: format!(
+                    "Read-only review for monitoring intent `{intent}` with full evidence chain."
+                ),
+                action_type: "link".to_string(),
+                safety_boundary: "read_only".to_string(),
+                risk_level: "low".to_string(),
+                requires_approval: false,
+                requires_write: false,
+                evidence_refs: evidence_refs.clone(),
+                evidence_metrics: evidence_metrics.clone(),
+                href: Some("#/overview".to_string()),
+                api_path: None,
+                method: None,
+                body: None,
+                blocked_reason: None,
+            },
+            AiGuidedAction {
+                action_key: "monitoring.bulk_acknowledge_guarded".to_string(),
+                label: "Acknowledge critical alerts (guarded)".to_string(),
+                description:
+                    "Write-capable action candidate. Must pass operator confirmation, RBAC, and evidence review."
+                        .to_string(),
+                action_type: "api".to_string(),
+                safety_boundary: "write_guarded".to_string(),
+                risk_level: "high".to_string(),
+                requires_approval: true,
+                requires_write: true,
+                evidence_refs: evidence_refs.clone(),
+                evidence_metrics: evidence_metrics.clone(),
+                href: None,
+                api_path: Some("/api/v1/alerts/actions/bulk".to_string()),
+                method: Some("POST".to_string()),
+                body: Some(json!({
+                    "action": "acknowledge",
+                    "note": "guided from ai copilot"
+                })),
+                blocked_reason: Some(
+                    "Requires explicit operator confirmation and write permission.".to_string(),
+                ),
+            },
+        ],
+        "workflow" => vec![
+            AiGuidedAction {
+                action_key: "workflow.review_queue".to_string(),
+                label: "Review workflow queue".to_string(),
+                description: format!(
+                    "Read-only review for workflow intent `{intent}` and approval pressure."
+                ),
+                action_type: "link".to_string(),
+                safety_boundary: "read_only".to_string(),
+                risk_level: "medium".to_string(),
+                requires_approval: false,
+                requires_write: false,
+                evidence_refs: evidence_refs.clone(),
+                evidence_metrics: evidence_metrics.clone(),
+                href: Some("#/workflows".to_string()),
+                api_path: None,
+                method: None,
+                body: None,
+                blocked_reason: None,
+            },
+            AiGuidedAction {
+                action_key: "workflow.run_escalation_guarded".to_string(),
+                label: "Run escalation check (guarded)".to_string(),
+                description:
+                    "Write-capable action candidate. Execute only after owner and policy confirmation."
+                        .to_string(),
+                action_type: "api".to_string(),
+                safety_boundary: "write_guarded".to_string(),
+                risk_level: "high".to_string(),
+                requires_approval: true,
+                requires_write: true,
+                evidence_refs: evidence_refs.clone(),
+                evidence_metrics: evidence_metrics.clone(),
+                href: None,
+                api_path: Some("/api/v1/tickets/escalation/run".to_string()),
+                method: Some("POST".to_string()),
+                body: Some(json!({
+                    "dry_run": false,
+                    "note": "guided from ai copilot"
+                })),
+                blocked_reason: Some(
+                    "Requires approval policy pass and write permission.".to_string(),
+                ),
+            },
+        ],
+        "cmdb" | "assets" => vec![
+            AiGuidedAction {
+                action_key: "cmdb.review_capacity".to_string(),
+                label: "Review CMDB capacity evidence".to_string(),
+                description: format!(
+                    "Read-only review for CMDB intent `{intent}` with idle/binding metrics."
+                ),
+                action_type: "link".to_string(),
+                safety_boundary: "read_only".to_string(),
+                risk_level: "low".to_string(),
+                requires_approval: false,
+                requires_write: false,
+                evidence_refs: evidence_refs.clone(),
+                evidence_metrics,
+                href: Some("#/cmdb".to_string()),
+                api_path: None,
+                method: None,
+                body: None,
+                blocked_reason: None,
+            },
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn collect_ai_evidence_refs(answer: &AiEvidenceAnswer) -> Vec<String> {
+    dedup_non_empty(
+        answer
+            .evidence
+            .iter()
+            .map(|item| item.source_ref.clone())
+            .collect(),
+    )
+}
+
+fn collect_ai_evidence_metrics(answer: &AiEvidenceAnswer) -> Vec<String> {
+    dedup_non_empty(
+        answer
+            .evidence
+            .iter()
+            .map(|item| item.metric.clone())
+            .collect(),
+    )
+}
+
+fn dedup_non_empty(values: Vec<String>) -> Vec<String> {
+    let mut unique = Vec::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if unique.iter().all(|item: &String| item != trimmed) {
+            unique.push(trimmed.to_string());
+        }
+    }
+    unique
 }
 
 fn build_ai_intent_preset_items() -> Vec<AiIntentPresetItem> {
@@ -5661,7 +5838,7 @@ mod tests {
         normalize_optional_note, parse_optional_date, score_alert_item, score_ticket_item,
         select_next_go_live_domain, collect_template_approver_groups,
         ensure_ai_evidence_completeness, AiEvidenceAnswer, AiEvidenceItem,
-        build_ai_intent_preset_items,
+        build_ai_guided_actions, build_ai_intent_preset_items,
         sort_business_overview_items, sort_business_topology_overview_items, sort_daily_ops_items,
         sort_daily_queue_items, sort_next_best_actions, summarize_business_overview,
         summarize_business_topology_overview, summarize_daily_ops_closure_continuity,
@@ -6044,6 +6221,44 @@ mod tests {
         assert!(items.iter().all(|item| !item.intent.trim().is_empty()));
         assert!(items.iter().all(|item| item.default_time_window_hours > 0));
         assert!(items.iter().all(|item| !item.evidence_requirements.is_empty()));
+    }
+
+    #[test]
+    fn ai_guided_actions_have_safety_boundaries_and_evidence_links() {
+        let answer = AiEvidenceAnswer {
+            summary: "Monitoring health summary".to_string(),
+            confidence: 0.9,
+            evidence_total: 2,
+            evidence: vec![
+                AiEvidenceItem {
+                    source_kind: "sql".to_string(),
+                    source_ref: "unified_alerts.status".to_string(),
+                    observed_at: Utc::now().to_rfc3339(),
+                    metric: "open_alert_total".to_string(),
+                    value: json!(12),
+                    note: "open alerts".to_string(),
+                },
+                AiEvidenceItem {
+                    source_kind: "sql".to_string(),
+                    source_ref: "unified_alerts.severity=critical".to_string(),
+                    observed_at: Utc::now().to_rfc3339(),
+                    metric: "critical_alert_total".to_string(),
+                    value: json!(2),
+                    note: "critical alerts".to_string(),
+                },
+            ],
+        };
+        let actions = build_ai_guided_actions("monitoring", "health_summary", &answer);
+        assert!(!actions.is_empty());
+        assert!(actions.iter().all(|item| !item.action_type.trim().is_empty()));
+        assert!(actions.iter().all(|item| !item.risk_level.trim().is_empty()));
+        assert!(actions.iter().all(|item| !item.evidence_refs.is_empty()));
+        assert!(
+            actions
+                .iter()
+                .filter(|item| item.requires_write)
+                .all(|item| item.requires_approval && item.blocked_reason.is_some())
+        );
     }
 
     #[test]

@@ -611,8 +611,26 @@ type AiEvidenceQueryResponse = {
   safety: {
     evidence_required: boolean;
     read_only: boolean;
+    write_guard_required: boolean;
     blocked_actions: string[];
   };
+  guided_actions: Array<{
+    action_key: string;
+    label: string;
+    description: string;
+    action_type: string;
+    safety_boundary: "read_only" | "write_guarded" | string;
+    risk_level: string;
+    requires_approval: boolean;
+    requires_write: boolean;
+    evidence_refs: string[];
+    evidence_metrics: string[];
+    href: string | null;
+    api_path: string | null;
+    method: string | null;
+    body: Record<string, unknown> | null;
+    blocked_reason: string | null;
+  }>;
 };
 
 type AiIntentPresetItem = {

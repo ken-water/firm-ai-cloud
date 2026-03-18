@@ -1168,7 +1168,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
               <>
                 <p className="inline-note">
                   summary={aiEvidenceResponse.answer.summary} | confidence={Math.round(aiEvidenceResponse.answer.confidence * 100)}% |
-                  evidence_total={aiEvidenceResponse.answer.evidence_total} | read_only={String(aiEvidenceResponse.safety.read_only)}
+                  evidence_total={aiEvidenceResponse.answer.evidence_total} | read_only={String(aiEvidenceResponse.safety.read_only)} |
+                  write_guard_required={String(aiEvidenceResponse.safety.write_guard_required)}
                 </p>
                 <p className="inline-note">
                   evidence_source_refs={(aiEvidenceResponse.answer.evidence ?? [])
@@ -1176,6 +1177,69 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                     .filter((value: string, index: number, arr: string[]) => arr.indexOf(value) === index)
                     .join(", ")}
                 </p>
+                <div style={{ overflowX: "auto", marginBottom: "0.55rem" }}>
+                  <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Guided action</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Type</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Boundary</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Risk</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Approval</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Evidence refs</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Endpoint</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(aiEvidenceResponse.guided_actions ?? []).map((action: any) => {
+                        const blockedByPermission = action.requires_write && !canWriteCmdb;
+                        return (
+                          <tr key={`ai-guided-action-${action.action_key}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>{action.label}</div>
+                              <div className="inline-note">{action.description}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {action.action_type}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {action.safety_boundary}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {action.risk_level}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {action.requires_approval ? "required" : "not_required"}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {(action.evidence_refs ?? []).join(", ") || "-"}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {action.href || action.api_path || "-"}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {blockedByPermission ? (
+                                <span className="inline-note">blocked (read-only account)</span>
+                              ) : action.blocked_reason ? (
+                                <span className="inline-note">{action.blocked_reason}</span>
+                              ) : (
+                                <span className="inline-note">ready to review</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {(aiEvidenceResponse.guided_actions ?? []).length === 0 && (
+                        <tr>
+                          <td colSpan={8} style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                            No guided action is available for current module/intent.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
                     <thead>
