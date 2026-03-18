@@ -40,6 +40,8 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/cockpit/queue", get(get_daily_cockpit_queue))
         .route("/cockpit/business-overview", get(get_business_overview))
+        .route("/cockpit/workflow-org-baseline", get(get_workflow_org_baseline))
+        .route("/cockpit/ai/evidence-query", post(query_ai_evidence_baseline))
         .route("/cockpit/daily-ops/briefing", get(get_daily_ops_briefing))
         .route(
             "/cockpit/daily-ops/closure-continuity",
@@ -98,6 +100,23 @@ struct BusinessOverviewQuery {
     department: Option<String>,
     business_service: Option<String>,
     limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct WorkflowOrgBaselineQuery {
+    days: Option<u32>,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AiEvidenceQueryRequest {
+    module: String,
+    intent: String,
+    question: Option<String>,
+    site: Option<String>,
+    department: Option<String>,
+    business_service: Option<String>,
+    time_window_hours: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -204,6 +223,98 @@ struct BusinessOverviewItem {
     escalation_ticket_total: i64,
     top_departments: Vec<String>,
     top_sites: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowOrgBaselineResponse {
+    generated_at: DateTime<Utc>,
+    lookback_days: u32,
+    summary: WorkflowOrgBaselineSummary,
+    departments: Vec<WorkflowOrgDepartmentRoute>,
+    approval_semantics: WorkflowOrgApprovalSemantics,
+    guardrails: WorkflowOrgGuardrails,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowOrgBaselineSummary {
+    enabled_template_total: usize,
+    approval_step_total: usize,
+    approver_group_total: usize,
+    department_route_total: usize,
+    request_total: i64,
+    pending_approval_total: i64,
+    inflight_total: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowOrgDepartmentRoute {
+    department: String,
+    request_total: i64,
+    pending_approval_total: i64,
+    inflight_total: i64,
+    template_total: usize,
+    approver_groups: Vec<String>,
+    escalation_owner: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowOrgApprovalSemantics {
+    serial_supported: bool,
+    parallel_supported: bool,
+    default_mode: String,
+    serial_source: String,
+    parallel_strategy: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowOrgGuardrails {
+    default_timeout_seconds: u64,
+    max_timeout_seconds: u64,
+    delegation_enabled: bool,
+    delegation_mode: String,
+    read_only_audit_guard: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AiEvidenceQueryResponse {
+    generated_at: DateTime<Utc>,
+    query: AiEvidenceQueryEcho,
+    answer: AiEvidenceAnswer,
+    safety: AiEvidenceSafety,
+}
+
+#[derive(Debug, Serialize)]
+struct AiEvidenceQueryEcho {
+    module: String,
+    intent: String,
+    question: Option<String>,
+    scope: BusinessOverviewScope,
+    time_window_hours: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct AiEvidenceAnswer {
+    summary: String,
+    confidence: f64,
+    evidence_total: usize,
+    evidence: Vec<AiEvidenceItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct AiEvidenceItem {
+    source_kind: String,
+    source_ref: String,
+    observed_at: String,
+    metric: String,
+    value: Value,
+    note: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AiEvidenceSafety {
+    evidence_required: bool,
+    read_only: bool,
+    blocked_actions: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -729,6 +840,41 @@ struct BusinessOverviewRow {
     top_sites: Vec<String>,
 }
 
+#[derive(Debug, FromRow)]
+struct WorkflowOrgTemplateRow {
+    id: i64,
+    definition_json: Value,
+}
+
+#[derive(Debug, FromRow)]
+struct WorkflowOrgDepartmentRow {
+    department: String,
+    request_total: i64,
+    pending_approval_total: i64,
+    inflight_total: i64,
+    template_ids: Vec<i64>,
+}
+
+#[derive(Debug, FromRow)]
+struct AiMonitoringSummaryRow {
+    open_alert_total: i64,
+    critical_alert_total: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct AiCmdbSummaryRow {
+    asset_total: i64,
+    idle_asset_total: i64,
+    business_bound_asset_total: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct AiWorkflowSummaryRow {
+    pending_approval_total: i64,
+    running_total: i64,
+    waiting_manual_total: i64,
+}
+
 async fn get_daily_cockpit_queue(
     State(state): State<AppState>,
     Query(query): Query<DailyCockpitQuery>,
@@ -847,6 +993,156 @@ async fn get_business_overview(
         },
         summary,
         items,
+    }))
+}
+
+async fn get_workflow_org_baseline(
+    State(state): State<AppState>,
+    Query(query): Query<WorkflowOrgBaselineQuery>,
+) -> AppResult<Json<WorkflowOrgBaselineResponse>> {
+    let lookback_days = query.days.unwrap_or(30).clamp(1, 365);
+    let limit = query.limit.unwrap_or(12).clamp(1, 50);
+    let templates = fetch_workflow_org_template_rows(&state.db).await?;
+    let department_rows =
+        fetch_workflow_org_department_rows(&state.db, lookback_days, limit as i64).await?;
+    let escalation_owner = load_default_escalation_window(&state.db)
+        .await?
+        .escalate_to_assignee;
+
+    let mut template_groups: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut unique_approver_groups = std::collections::BTreeSet::new();
+    let mut approval_step_total = 0usize;
+    for template in templates {
+        let groups = collect_template_approver_groups(&template.definition_json);
+        approval_step_total += count_template_approval_steps(&template.definition_json);
+        for group in groups.iter() {
+            unique_approver_groups.insert(group.clone());
+        }
+        template_groups.insert(template.id, groups);
+    }
+
+    let mut departments = Vec::new();
+    let mut request_total = 0i64;
+    let mut pending_approval_total = 0i64;
+    let mut inflight_total = 0i64;
+    for row in department_rows {
+        request_total += row.request_total;
+        pending_approval_total += row.pending_approval_total;
+        inflight_total += row.inflight_total;
+        let mut approver_groups = std::collections::BTreeSet::new();
+        for template_id in row.template_ids.iter() {
+            if let Some(groups) = template_groups.get(template_id) {
+                for group in groups {
+                    approver_groups.insert(group.clone());
+                }
+            }
+        }
+
+        departments.push(WorkflowOrgDepartmentRoute {
+            department: row.department,
+            request_total: row.request_total,
+            pending_approval_total: row.pending_approval_total,
+            inflight_total: row.inflight_total,
+            template_total: row.template_ids.len(),
+            approver_groups: approver_groups.into_iter().collect(),
+            escalation_owner: escalation_owner.clone(),
+        });
+    }
+
+    departments.sort_by(|left, right| {
+        right
+            .pending_approval_total
+            .cmp(&left.pending_approval_total)
+            .then_with(|| right.inflight_total.cmp(&left.inflight_total))
+            .then_with(|| right.request_total.cmp(&left.request_total))
+            .then_with(|| left.department.cmp(&right.department))
+    });
+
+    Ok(Json(WorkflowOrgBaselineResponse {
+        generated_at: Utc::now(),
+        lookback_days,
+        summary: WorkflowOrgBaselineSummary {
+            enabled_template_total: template_groups.len(),
+            approval_step_total,
+            approver_group_total: unique_approver_groups.len(),
+            department_route_total: departments.len(),
+            request_total,
+            pending_approval_total,
+            inflight_total,
+        },
+        departments,
+        approval_semantics: WorkflowOrgApprovalSemantics {
+            serial_supported: true,
+            parallel_supported: true,
+            default_mode: "serial".to_string(),
+            serial_source: "workflow_templates.definition_json.steps order".to_string(),
+            parallel_strategy: "baseline_contract_only (fanout/join planned, serial emulation currently)".to_string(),
+        },
+        guardrails: WorkflowOrgGuardrails {
+            default_timeout_seconds: 300,
+            max_timeout_seconds: 3600,
+            delegation_enabled: false,
+            delegation_mode: "disabled_by_default".to_string(),
+            read_only_audit_guard: true,
+        },
+    }))
+}
+
+async fn query_ai_evidence_baseline(
+    State(state): State<AppState>,
+    Json(payload): Json<AiEvidenceQueryRequest>,
+) -> AppResult<Json<AiEvidenceQueryResponse>> {
+    let module = payload.module.trim().to_ascii_lowercase();
+    if module.is_empty() {
+        return Err(AppError::Validation("module is required".to_string()));
+    }
+    let intent = payload.intent.trim().to_ascii_lowercase();
+    if intent.is_empty() {
+        return Err(AppError::Validation("intent is required".to_string()));
+    }
+    let site = trim_optional(payload.site, 128);
+    let department = trim_optional(payload.department, 128);
+    let business_service = trim_optional(payload.business_service, 128);
+    let time_window_hours = payload.time_window_hours.unwrap_or(24).clamp(1, 24 * 30);
+    let now = Utc::now();
+    let start_at = now - chrono::Duration::hours(time_window_hours as i64);
+
+    let answer = build_ai_evidence_answer(
+        &state.db,
+        module.as_str(),
+        intent.as_str(),
+        site.as_deref(),
+        department.as_deref(),
+        business_service.as_deref(),
+        start_at,
+        now,
+    )
+    .await?;
+    ensure_ai_evidence_completeness(&answer)?;
+
+    Ok(Json(AiEvidenceQueryResponse {
+        generated_at: now,
+        query: AiEvidenceQueryEcho {
+            module,
+            intent,
+            question: trim_optional(payload.question, 1024),
+            scope: BusinessOverviewScope {
+                site,
+                department,
+                business_service,
+            },
+            time_window_hours,
+        },
+        answer,
+        safety: AiEvidenceSafety {
+            evidence_required: true,
+            read_only: true,
+            blocked_actions: vec![
+                "auto_write".to_string(),
+                "silent_mutation".to_string(),
+                "action_without_evidence".to_string(),
+            ],
+        },
     }))
 }
 
@@ -2124,6 +2420,260 @@ async fn fetch_business_overview_rows(
     Ok(rows)
 }
 
+async fn fetch_workflow_org_template_rows(
+    db: &sqlx::PgPool,
+) -> AppResult<Vec<WorkflowOrgTemplateRow>> {
+    let rows: Vec<WorkflowOrgTemplateRow> = sqlx::query_as(
+        "SELECT id, definition_json
+         FROM workflow_templates
+         WHERE is_enabled = TRUE
+         ORDER BY id ASC",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+async fn fetch_workflow_org_department_rows(
+    db: &sqlx::PgPool,
+    lookback_days: u32,
+    limit: i64,
+) -> AppResult<Vec<WorkflowOrgDepartmentRow>> {
+    let rows: Vec<WorkflowOrgDepartmentRow> = sqlx::query_as(
+        "WITH request_scope AS (
+            SELECT
+                r.id,
+                r.template_id,
+                r.status,
+                COALESCE(
+                    NULLIF(btrim(ticket_scope.department), ''),
+                    NULLIF(btrim(r.payload->>'department'), ''),
+                    'unassigned'
+                ) AS department
+            FROM workflow_requests r
+            LEFT JOIN LATERAL (
+                SELECT a.department
+                FROM tickets t
+                INNER JOIN ticket_asset_links l ON l.ticket_id = t.id
+                INNER JOIN assets a ON a.id = l.asset_id
+                WHERE t.workflow_request_id = r.id
+                ORDER BY a.id ASC
+                LIMIT 1
+            ) AS ticket_scope ON TRUE
+            WHERE r.created_at >= NOW() - ($1::INT * INTERVAL '1 day')
+         )
+         SELECT
+            department,
+            COUNT(*)::bigint AS request_total,
+            COUNT(*) FILTER (WHERE status = 'pending_approval')::bigint AS pending_approval_total,
+            COUNT(*) FILTER (WHERE status IN ('pending_approval', 'approved', 'running', 'waiting_manual'))::bigint AS inflight_total,
+            COALESCE(
+                ARRAY_AGG(DISTINCT template_id) FILTER (WHERE template_id IS NOT NULL),
+                ARRAY[]::BIGINT[]
+            ) AS template_ids
+         FROM request_scope
+         GROUP BY department
+         ORDER BY pending_approval_total DESC, inflight_total DESC, request_total DESC, department ASC
+         LIMIT $2",
+    )
+    .bind(lookback_days as i32)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+async fn build_ai_evidence_answer(
+    db: &sqlx::PgPool,
+    module: &str,
+    intent: &str,
+    site: Option<&str>,
+    department: Option<&str>,
+    business_service: Option<&str>,
+    start_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> AppResult<AiEvidenceAnswer> {
+    match module {
+        "monitoring" => {
+            let row: AiMonitoringSummaryRow = sqlx::query_as(
+                "SELECT
+                    COUNT(*) FILTER (WHERE ua.status IN ('open', 'acknowledged'))::bigint AS open_alert_total,
+                    COUNT(*) FILTER (WHERE ua.status IN ('open', 'acknowledged') AND ua.severity = 'critical')::bigint AS critical_alert_total
+                 FROM unified_alerts ua
+                 LEFT JOIN assets a ON a.id = ua.asset_id
+                 LEFT JOIN asset_business_service_bindings b ON b.asset_id = ua.asset_id
+                 WHERE ua.last_seen_at >= $1
+                   AND ($2::TEXT IS NULL OR COALESCE(ua.site, a.site) = $2)
+                   AND ($3::TEXT IS NULL OR COALESCE(ua.department, a.department) = $3)
+                   AND ($4::TEXT IS NULL OR b.business_service = $4)",
+            )
+            .bind(start_at)
+            .bind(site)
+            .bind(department)
+            .bind(business_service)
+            .fetch_one(db)
+            .await?;
+
+            let evidence = vec![
+                AiEvidenceItem {
+                    source_kind: "sql".to_string(),
+                    source_ref: "unified_alerts.status".to_string(),
+                    observed_at: now.to_rfc3339(),
+                    metric: "open_alert_total".to_string(),
+                    value: json!(row.open_alert_total),
+                    note: "Open or acknowledged alerts in selected scope/time window.".to_string(),
+                },
+                AiEvidenceItem {
+                    source_kind: "sql".to_string(),
+                    source_ref: "unified_alerts.severity=critical".to_string(),
+                    observed_at: now.to_rfc3339(),
+                    metric: "critical_alert_total".to_string(),
+                    value: json!(row.critical_alert_total),
+                    note: "Critical alerts in selected scope/time window.".to_string(),
+                },
+            ];
+            let confidence = if row.critical_alert_total > 0 {
+                0.91
+            } else if row.open_alert_total > 0 {
+                0.86
+            } else {
+                0.8
+            };
+            Ok(AiEvidenceAnswer {
+                summary: format!(
+                    "Monitoring {}: open alerts={}, critical alerts={}.",
+                    intent, row.open_alert_total, row.critical_alert_total
+                ),
+                confidence,
+                evidence_total: evidence.len(),
+                evidence,
+            })
+        }
+        "workflow" => {
+            let row: AiWorkflowSummaryRow = sqlx::query_as(
+                "SELECT
+                    COUNT(*) FILTER (WHERE status = 'pending_approval')::bigint AS pending_approval_total,
+                    COUNT(*) FILTER (WHERE status = 'running')::bigint AS running_total,
+                    COUNT(*) FILTER (WHERE status = 'waiting_manual')::bigint AS waiting_manual_total
+                 FROM workflow_requests
+                 WHERE created_at >= $1",
+            )
+            .bind(start_at)
+            .fetch_one(db)
+            .await?;
+
+            let evidence = vec![
+                AiEvidenceItem {
+                    source_kind: "sql".to_string(),
+                    source_ref: "workflow_requests.status=pending_approval".to_string(),
+                    observed_at: now.to_rfc3339(),
+                    metric: "pending_approval_total".to_string(),
+                    value: json!(row.pending_approval_total),
+                    note: "Pending approvals in selected time window.".to_string(),
+                },
+                AiEvidenceItem {
+                    source_kind: "sql".to_string(),
+                    source_ref: "workflow_requests.status in (running, waiting_manual)".to_string(),
+                    observed_at: now.to_rfc3339(),
+                    metric: "active_execution_total".to_string(),
+                    value: json!(row.running_total + row.waiting_manual_total),
+                    note: "Active workflow executions in selected time window.".to_string(),
+                },
+            ];
+            Ok(AiEvidenceAnswer {
+                summary: format!(
+                    "Workflow {}: pending approvals={}, active executions={}.",
+                    intent,
+                    row.pending_approval_total,
+                    row.running_total + row.waiting_manual_total
+                ),
+                confidence: 0.84,
+                evidence_total: evidence.len(),
+                evidence,
+            })
+        }
+        "cmdb" | "assets" => {
+            let row: AiCmdbSummaryRow = sqlx::query_as(
+                "SELECT
+                    COUNT(DISTINCT a.id)::bigint AS asset_total,
+                    COUNT(DISTINCT a.id) FILTER (
+                        WHERE lower(COALESCE(a.status, '')) IN ('idle', 'retired', 'decommissioned')
+                    )::bigint AS idle_asset_total,
+                    COUNT(DISTINCT a.id) FILTER (WHERE b.id IS NOT NULL)::bigint AS business_bound_asset_total
+                 FROM assets a
+                 LEFT JOIN asset_business_service_bindings b ON b.asset_id = a.id
+                 WHERE ($1::TEXT IS NULL OR a.site = $1)
+                   AND ($2::TEXT IS NULL OR a.department = $2)
+                   AND ($3::TEXT IS NULL OR b.business_service = $3)",
+            )
+            .bind(site)
+            .bind(department)
+            .bind(business_service)
+            .fetch_one(db)
+            .await?;
+            let evidence = vec![
+                AiEvidenceItem {
+                    source_kind: "sql".to_string(),
+                    source_ref: "assets".to_string(),
+                    observed_at: now.to_rfc3339(),
+                    metric: "asset_total".to_string(),
+                    value: json!(row.asset_total),
+                    note: "Assets in selected scope.".to_string(),
+                },
+                AiEvidenceItem {
+                    source_kind: "sql".to_string(),
+                    source_ref: "assets.status".to_string(),
+                    observed_at: now.to_rfc3339(),
+                    metric: "idle_asset_total".to_string(),
+                    value: json!(row.idle_asset_total),
+                    note: "Idle/retired/decommissioned assets in selected scope.".to_string(),
+                },
+                AiEvidenceItem {
+                    source_kind: "sql".to_string(),
+                    source_ref: "asset_business_service_bindings".to_string(),
+                    observed_at: now.to_rfc3339(),
+                    metric: "business_bound_asset_total".to_string(),
+                    value: json!(row.business_bound_asset_total),
+                    note: "Assets with business-service bindings in selected scope.".to_string(),
+                },
+            ];
+            Ok(AiEvidenceAnswer {
+                summary: format!(
+                    "CMDB {}: assets={}, idle={}, business_bound={}.",
+                    intent, row.asset_total, row.idle_asset_total, row.business_bound_asset_total
+                ),
+                confidence: 0.88,
+                evidence_total: evidence.len(),
+                evidence,
+            })
+        }
+        _ => Err(AppError::Validation(
+            "module must be one of: monitoring, cmdb, assets, workflow".to_string(),
+        )),
+    }
+}
+
+fn ensure_ai_evidence_completeness(answer: &AiEvidenceAnswer) -> AppResult<()> {
+    if answer.evidence.is_empty() {
+        return Err(AppError::Validation(
+            "ai evidence answer must include at least one evidence item".to_string(),
+        ));
+    }
+    for (index, item) in answer.evidence.iter().enumerate() {
+        if item.source_kind.trim().is_empty()
+            || item.source_ref.trim().is_empty()
+            || item.metric.trim().is_empty()
+            || item.observed_at.trim().is_empty()
+            || item.note.trim().is_empty()
+        {
+            return Err(AppError::Validation(format!(
+                "ai evidence item #{index} is incomplete"
+            )));
+        }
+    }
+    Ok(())
+}
+
 async fn load_default_escalation_window(db: &sqlx::PgPool) -> AppResult<EscalationWindowRow> {
     let row: Option<EscalationWindowRow> = sqlx::query_as(
         "SELECT
@@ -3047,6 +3597,50 @@ fn infer_go_live_notification_channel_type(target: &str) -> String {
     } else {
         "email".to_string()
     }
+}
+
+fn collect_template_approver_groups(definition_json: &Value) -> Vec<String> {
+    let mut groups = std::collections::BTreeSet::new();
+    let Some(steps) = definition_json.get("steps").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    for step in steps {
+        let kind = step
+            .get("kind")
+            .and_then(Value::as_str)
+            .map(|value| value.trim().to_ascii_lowercase())
+            .unwrap_or_default();
+        if kind != "approval" {
+            continue;
+        }
+        if let Some(group) = step
+            .get("approver_group")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            groups.insert(group.to_string());
+        }
+    }
+    groups.into_iter().collect()
+}
+
+fn count_template_approval_steps(definition_json: &Value) -> usize {
+    definition_json
+        .get("steps")
+        .and_then(Value::as_array)
+        .map(|steps| {
+            steps
+                .iter()
+                .filter(|step| {
+                    step.get("kind")
+                        .and_then(Value::as_str)
+                        .map(|value| value.trim().eq_ignore_ascii_case("approval"))
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 fn compute_business_risk_score(
@@ -4727,9 +5321,11 @@ mod tests {
         MAX_CHECKLIST_NOTE_LEN, NextBestActionItem, OpsChecklistEntryRow, OpsChecklistTemplateRow,
         build_ops_checklist_response, collect_daily_ops_carryover_items,
         collect_daily_ops_escalation_candidates, compute_business_risk_score,
-        derive_daily_ops_owner_override, derive_daily_ops_status, derive_go_live_overall_status,
-        normalize_daily_ops_action, normalize_daily_ops_owner_ref, normalize_optional_note,
-        parse_optional_date, score_alert_item, score_ticket_item, select_next_go_live_domain,
+        count_template_approval_steps, derive_daily_ops_owner_override, derive_daily_ops_status,
+        derive_go_live_overall_status, normalize_daily_ops_action, normalize_daily_ops_owner_ref,
+        normalize_optional_note, parse_optional_date, score_alert_item, score_ticket_item,
+        select_next_go_live_domain, collect_template_approver_groups,
+        ensure_ai_evidence_completeness, AiEvidenceAnswer, AiEvidenceItem,
         sort_business_overview_items, sort_daily_ops_items, sort_daily_queue_items,
         sort_next_best_actions, summarize_business_overview, summarize_daily_ops_closure_continuity,
         summarize_daily_ops_items, summarize_go_live_readiness,
@@ -4966,6 +5562,66 @@ mod tests {
         assert_eq!(summary.critical_alert_total, 1);
         assert_eq!(summary.open_ticket_total, 3);
         assert_eq!(summary.escalation_ticket_total, 1);
+    }
+
+    #[test]
+    fn workflow_template_approver_groups_are_deduplicated() {
+        let groups = collect_template_approver_groups(&json!({
+            "steps": [
+                {"kind": "approval", "approver_group": "ops"},
+                {"kind": "script", "id": "deploy"},
+                {"kind": "approval", "approver_group": "platform"},
+                {"kind": "approval", "approver_group": "ops"},
+                {"kind": "approval", "approver_group": "  "}
+            ]
+        }));
+        assert_eq!(groups, vec!["ops".to_string(), "platform".to_string()]);
+    }
+
+    #[test]
+    fn workflow_template_approval_step_count_is_stable() {
+        let total = count_template_approval_steps(&json!({
+            "steps": [
+                {"kind": "approval"},
+                {"kind": "script"},
+                {"kind": "manual"},
+                {"kind": "APPROVAL"}
+            ]
+        }));
+        assert_eq!(total, 2);
+    }
+
+    #[test]
+    fn ai_evidence_completeness_requires_required_fields() {
+        let complete = AiEvidenceAnswer {
+            summary: "ok".to_string(),
+            confidence: 0.9,
+            evidence_total: 1,
+            evidence: vec![AiEvidenceItem {
+                source_kind: "sql".to_string(),
+                source_ref: "unified_alerts".to_string(),
+                observed_at: Utc::now().to_rfc3339(),
+                metric: "open_alert_total".to_string(),
+                value: json!(3),
+                note: "test".to_string(),
+            }],
+        };
+        assert!(ensure_ai_evidence_completeness(&complete).is_ok());
+
+        let incomplete = AiEvidenceAnswer {
+            summary: "bad".to_string(),
+            confidence: 0.3,
+            evidence_total: 1,
+            evidence: vec![AiEvidenceItem {
+                source_kind: "".to_string(),
+                source_ref: "unified_alerts".to_string(),
+                observed_at: "".to_string(),
+                metric: "".to_string(),
+                value: json!(null),
+                note: "".to_string(),
+            }],
+        };
+        assert!(ensure_ai_evidence_completeness(&incomplete).is_err());
     }
 
     #[test]

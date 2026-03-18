@@ -506,6 +506,84 @@ type BusinessOverviewResponse = {
   items: BusinessOverviewItem[];
 };
 
+type WorkflowOrgBaselineSummary = {
+  enabled_template_total: number;
+  approval_step_total: number;
+  approver_group_total: number;
+  department_route_total: number;
+  request_total: number;
+  pending_approval_total: number;
+  inflight_total: number;
+};
+
+type WorkflowOrgDepartmentRoute = {
+  department: string;
+  request_total: number;
+  pending_approval_total: number;
+  inflight_total: number;
+  template_total: number;
+  approver_groups: string[];
+  escalation_owner: string;
+};
+
+type WorkflowOrgApprovalSemantics = {
+  serial_supported: boolean;
+  parallel_supported: boolean;
+  default_mode: string;
+  serial_source: string;
+  parallel_strategy: string;
+};
+
+type WorkflowOrgGuardrails = {
+  default_timeout_seconds: number;
+  max_timeout_seconds: number;
+  delegation_enabled: boolean;
+  delegation_mode: string;
+  read_only_audit_guard: boolean;
+};
+
+type WorkflowOrgBaselineResponse = {
+  generated_at: string;
+  lookback_days: number;
+  summary: WorkflowOrgBaselineSummary;
+  departments: WorkflowOrgDepartmentRoute[];
+  approval_semantics: WorkflowOrgApprovalSemantics;
+  guardrails: WorkflowOrgGuardrails;
+};
+
+type AiEvidenceQueryResponse = {
+  generated_at: string;
+  query: {
+    module: string;
+    intent: string;
+    question: string | null;
+    scope: {
+      site: string | null;
+      department: string | null;
+      business_service: string | null;
+    };
+    time_window_hours: number;
+  };
+  answer: {
+    summary: string;
+    confidence: number;
+    evidence_total: number;
+    evidence: Array<{
+      source_kind: string;
+      source_ref: string;
+      observed_at: string;
+      metric: string;
+      value: unknown;
+      note: string;
+    }>;
+  };
+  safety: {
+    evidence_required: boolean;
+    read_only: boolean;
+    blocked_actions: string[];
+  };
+};
+
 type MonitoringMetricPoint = {
   timestamp: string;
   value: number;
@@ -3352,6 +3430,14 @@ export function App() {
   const [loadingMonitoringOverview, setLoadingMonitoringOverview] = useState(false);
   const [businessOverview, setBusinessOverview] = useState<BusinessOverviewResponse | null>(null);
   const [loadingBusinessOverview, setLoadingBusinessOverview] = useState(false);
+  const [workflowOrgBaseline, setWorkflowOrgBaseline] = useState<WorkflowOrgBaselineResponse | null>(null);
+  const [loadingWorkflowOrgBaseline, setLoadingWorkflowOrgBaseline] = useState(false);
+  const [aiEvidenceResponse, setAiEvidenceResponse] = useState<AiEvidenceQueryResponse | null>(null);
+  const [runningAiEvidenceQuery, setRunningAiEvidenceQuery] = useState(false);
+  const [aiModuleDraft, setAiModuleDraft] = useState("monitoring");
+  const [aiIntentDraft, setAiIntentDraft] = useState("health_summary");
+  const [aiQuestionDraft, setAiQuestionDraft] = useState("");
+  const [aiTimeWindowHoursDraft, setAiTimeWindowHoursDraft] = useState("24");
   const [setupPreflight, setSetupPreflight] = useState<SetupChecklistResponse | null>(null);
   const [setupChecklist, setSetupChecklist] = useState<SetupChecklistResponse | null>(null);
   const [setupActivation, setSetupActivation] = useState<SetupActivationResponse | null>(null);
@@ -7616,6 +7702,75 @@ export function App() {
     }
   }, []);
 
+  const loadWorkflowOrgBaseline = useCallback(async (days = 30) => {
+    setLoadingWorkflowOrgBaseline(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("days", String(days));
+      params.set("limit", "20");
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/workflow-org-baseline?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: WorkflowOrgBaselineResponse = await response.json();
+      setWorkflowOrgBaseline(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setWorkflowOrgBaseline(null);
+      return null;
+    } finally {
+      setLoadingWorkflowOrgBaseline(false);
+    }
+  }, []);
+
+  const runAiEvidenceQuery = useCallback(async () => {
+    const hours = Number.parseInt(aiTimeWindowHoursDraft.trim(), 10);
+    if (!Number.isFinite(hours) || hours <= 0 || hours > 720) {
+      setError("AI time window hours must be an integer between 1 and 720.");
+      return null;
+    }
+    setRunningAiEvidenceQuery(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/ai/evidence-query`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          module: aiModuleDraft,
+          intent: aiIntentDraft,
+          question: trimToNull(aiQuestionDraft),
+          department: menuAxis === "department" ? trimToNull(departmentWorkspace) : null,
+          business_service: menuAxis === "business" ? trimToNull(businessWorkspace) : null,
+          time_window_hours: hours
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AiEvidenceQueryResponse = await response.json();
+      setAiEvidenceResponse(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setAiEvidenceResponse(null);
+      return null;
+    } finally {
+      setRunningAiEvidenceQuery(false);
+    }
+  }, [
+    aiIntentDraft,
+    aiModuleDraft,
+    aiQuestionDraft,
+    aiTimeWindowHoursDraft,
+    businessWorkspace,
+    departmentWorkspace,
+    menuAxis
+  ]);
+
   const buildSetupTemplateDraft = useCallback((template: SetupTemplateCatalogItem | null) => {
     if (!template) {
       return {};
@@ -10197,6 +10352,7 @@ export function App() {
       loadMonitoringSources(defaultMonitoringSourceFilters),
       loadMonitoringOverview(),
       loadBusinessOverview(),
+      loadWorkflowOrgBaseline(30),
     ]);
   }, [
     loadAssetStats,
@@ -10205,6 +10361,7 @@ export function App() {
     loadFieldDefinitions,
     loadMonitoringOverview,
     loadMonitoringSources,
+    loadWorkflowOrgBaseline,
     authIdentity
   ]);
 
@@ -12167,6 +12324,8 @@ export function App() {
     functionWorkspace,
     loadDailyCockpitSnapshot,
     loadBusinessOverview,
+    loadWorkflowOrgBaseline,
+    runAiEvidenceQuery,
     loadMonitoringOverview,
     loadOpsChecklist,
     loadAssets,
@@ -12238,6 +12397,14 @@ export function App() {
     loadingMonitoringOverview,
     businessOverview,
     loadingBusinessOverview,
+    workflowOrgBaseline,
+    loadingWorkflowOrgBaseline,
+    aiEvidenceResponse,
+    runningAiEvidenceQuery,
+    aiModuleDraft,
+    aiIntentDraft,
+    aiQuestionDraft,
+    aiTimeWindowHoursDraft,
     menuAxis,
     monitoringOverview,
     monitoringSources,
@@ -12261,6 +12428,10 @@ export function App() {
     saveBackupRestoreEvidence,
     savingBackupRestoreEvidence,
     setBusinessWorkspace,
+    setAiModuleDraft,
+    setAiIntentDraft,
+    setAiQuestionDraft,
+    setAiTimeWindowHoursDraft,
     setBackupEvidenceCompliancePolicyDraft,
     setBackupEvidenceComplianceWeekStart,
     setBackupPolicyDraft,

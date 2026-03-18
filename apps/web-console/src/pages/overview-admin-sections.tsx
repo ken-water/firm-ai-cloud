@@ -244,6 +244,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     applyDailyOpsEscalationAction,
     loadDailyCockpitSnapshot,
     loadBusinessOverview,
+    loadWorkflowOrgBaseline,
+    runAiEvidenceQuery,
     loadMonitoringOverview,
     loadOpsChecklist,
     loadAssets,
@@ -314,6 +316,14 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingMonitoringOverview,
     businessOverview,
     loadingBusinessOverview,
+    workflowOrgBaseline,
+    loadingWorkflowOrgBaseline,
+    aiEvidenceResponse,
+    runningAiEvidenceQuery,
+    aiModuleDraft,
+    aiIntentDraft,
+    aiQuestionDraft,
+    aiTimeWindowHoursDraft,
     menuAxis,
     monitoringOverview,
     monitoringSources,
@@ -337,6 +347,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     saveBackupRestoreEvidence,
     savingBackupRestoreEvidence,
     setBusinessWorkspace,
+    setAiModuleDraft,
+    setAiIntentDraft,
+    setAiQuestionDraft,
+    setAiTimeWindowHoursDraft,
     setBackupEvidenceCompliancePolicyDraft,
     setBackupEvidenceComplianceWeekStart,
     setBackupPolicyDraft,
@@ -599,6 +613,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   department: menuAxis === "department" ? departmentWorkspace : undefined,
                   business_service: menuAxis === "business" ? businessWorkspace : undefined
                 }),
+                loadWorkflowOrgBaseline(30),
                 loadDailyCockpitSnapshot(),
                 loadAssets(),
                 loadAssetStats()
@@ -712,6 +727,144 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                     </table>
                   </div>
                 )}
+              </>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Organization workflow baseline</h3>
+              <button onClick={() => void loadWorkflowOrgBaseline(30)} disabled={loadingWorkflowOrgBaseline}>
+                {loadingWorkflowOrgBaseline ? "Loading..." : "Refresh org baseline"}
+              </button>
+            </div>
+            {!workflowOrgBaseline ? (
+              <p className="inline-note">
+                {loadingWorkflowOrgBaseline ? "Loading cross-department workflow baseline..." : "Workflow org baseline is not loaded yet."}
+              </p>
+            ) : (
+              <>
+                <div className="toolbar-row" style={{ flexWrap: "wrap", marginBottom: "0.6rem" }}>
+                  <span className="status-chip">templates={workflowOrgBaseline.summary.enabled_template_total}</span>
+                  <span className="status-chip">approval_steps={workflowOrgBaseline.summary.approval_step_total}</span>
+                  <span className="status-chip">approver_groups={workflowOrgBaseline.summary.approver_group_total}</span>
+                  <span className="status-chip">pending={workflowOrgBaseline.summary.pending_approval_total}</span>
+                  <span className="status-chip status-chip-warn">inflight={workflowOrgBaseline.summary.inflight_total}</span>
+                  <span className="inline-note">lookback_days={workflowOrgBaseline.lookback_days}</span>
+                </div>
+                <p className="inline-note">
+                  serial={workflowOrgBaseline.approval_semantics.serial_supported ? "on" : "off"} |
+                  parallel={workflowOrgBaseline.approval_semantics.parallel_supported ? "on" : "off"} |
+                  default_mode={workflowOrgBaseline.approval_semantics.default_mode} |
+                  timeout={workflowOrgBaseline.guardrails.default_timeout_seconds}s/{workflowOrgBaseline.guardrails.max_timeout_seconds}s |
+                  delegation={workflowOrgBaseline.guardrails.delegation_mode}
+                </p>
+                {workflowOrgBaseline.departments.length === 0 ? (
+                  <p className="inline-note">No cross-department workflow route found in current lookback window.</p>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ borderCollapse: "collapse", minWidth: "1020px", width: "100%" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Department</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Requests</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Template / Approver groups</th>
+                          <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Escalation owner</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {workflowOrgBaseline.departments.map((item: any) => (
+                          <tr key={`workflow-org-baseline-${item.department}`}>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.department}
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>total={item.request_total}</div>
+                              <div className="inline-note">pending={item.pending_approval_total} / inflight={item.inflight_total}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              <div>templates={item.template_total}</div>
+                              <div className="inline-note">{(item.approver_groups ?? []).join(", ") || "-"}</div>
+                            </td>
+                            <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                              {item.escalation_owner}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>AI evidence query entry</h3>
+              <button onClick={() => void runAiEvidenceQuery()} disabled={runningAiEvidenceQuery}>
+                {runningAiEvidenceQuery ? "Querying..." : "Run AI evidence query"}
+              </button>
+            </div>
+            <div className="filter-grid" style={{ marginBottom: "0.6rem" }}>
+              <label className="control-field">
+                <span>Module</span>
+                <select value={aiModuleDraft} onChange={(event) => setAiModuleDraft(event.target.value)}>
+                  <option value="monitoring">monitoring</option>
+                  <option value="cmdb">cmdb</option>
+                  <option value="workflow">workflow</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Intent</span>
+                <input value={aiIntentDraft} onChange={(event) => setAiIntentDraft(event.target.value)} />
+              </label>
+              <label className="control-field">
+                <span>Time window (hours)</span>
+                <input value={aiTimeWindowHoursDraft} onChange={(event) => setAiTimeWindowHoursDraft(event.target.value)} />
+              </label>
+            </div>
+            <label className="control-field" style={{ marginBottom: "0.6rem" }}>
+              <span>Question (optional)</span>
+              <input value={aiQuestionDraft} onChange={(event) => setAiQuestionDraft(event.target.value)} />
+            </label>
+            {!aiEvidenceResponse ? (
+              <p className="inline-note">No AI evidence answer yet.</p>
+            ) : (
+              <>
+                <p className="inline-note">
+                  summary={aiEvidenceResponse.answer.summary} | confidence={Math.round(aiEvidenceResponse.answer.confidence * 100)}% |
+                  evidence_total={aiEvidenceResponse.answer.evidence_total} | read_only={String(aiEvidenceResponse.safety.read_only)}
+                </p>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Metric</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Value</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Source</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Observed</th>
+                        <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(aiEvidenceResponse.answer.evidence ?? []).map((item: any, index: number) => (
+                        <tr key={`ai-evidence-item-${index}`}>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>{item.metric}</td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>{JSON.stringify(item.value)}</td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            <div>{item.source_kind}</div>
+                            <div className="inline-note">{item.source_ref}</div>
+                          </td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                            {new Date(item.observed_at).toLocaleString()}
+                          </td>
+                          <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>{item.note}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </>
             )}
           </div>
