@@ -947,6 +947,60 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           </div>
 
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between", marginBottom: "0.45rem" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Copilot to topology to handoff flow</h3>
+              <button
+                onClick={() => {
+                  const filters = {
+                    department: menuAxis === "department" ? departmentWorkspace : undefined,
+                    business_service: menuAxis === "business" ? businessWorkspace : undefined
+                  };
+                  void Promise.all([
+                    loadBusinessTopologyOverview(filters),
+                    loadTopologyBoard(filters),
+                    loadHandoverReadiness(),
+                    runAiEvidenceQuery()
+                  ]);
+                }}
+                disabled={runningAiEvidenceQuery || loadingBusinessTopologyOverview || loadingTopologyBoard || loadingHandoverReadiness}
+              >
+                {runningAiEvidenceQuery || loadingBusinessTopologyOverview || loadingTopologyBoard || loadingHandoverReadiness
+                  ? "Syncing..."
+                  : "Sync integrated flow"}
+              </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.55rem" }}>
+              <div className="detail-panel" style={{ marginBottom: 0 }}>
+                <strong>1. Copilot evidence</strong>
+                <p className="inline-note" style={{ marginBottom: "0.35rem" }}>
+                  summary={aiEvidenceResponse?.answer?.summary ?? "-"}
+                </p>
+                <p className="inline-note">
+                  guided_actions={(aiEvidenceResponse?.guided_actions ?? []).length} | write_guard={String(aiEvidenceResponse?.safety?.write_guard_required ?? false)}
+                </p>
+              </div>
+              <div className="detail-panel" style={{ marginBottom: 0 }}>
+                <strong>2. Topology board</strong>
+                <p className="inline-note" style={{ marginBottom: "0.35rem" }}>
+                  services={topologyBoard?.summary?.service_total ?? 0} | critical={topologyBoard?.summary?.critical_total ?? 0}
+                </p>
+                <p className="inline-note">
+                  owner_unassigned={topologyBoard?.summary?.unassigned_owner_total ?? 0}
+                </p>
+              </div>
+              <div className="detail-panel" style={{ marginBottom: 0 }}>
+                <strong>3. Handoff readiness</strong>
+                <p className="inline-note" style={{ marginBottom: "0.35rem" }}>
+                  state={handoverReadiness?.readiness_state ?? "-"} | blocking={handoverReadiness?.summary?.blocking ?? 0}
+                </p>
+                <p className="inline-note">
+                  open={handoverReadiness?.summary?.open_items ?? 0} | reasons={(handoverReadiness?.reasons ?? []).join(", ") || "-"}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
             <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
               <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Business risk and resource baseline</h3>
               <button
