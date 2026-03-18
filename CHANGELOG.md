@@ -18,6 +18,32 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.21] - 2026-03-18
+
+### Added
+
+- v0.1.21 planning and release-gate documentation:
+  - `docs/63-v0.1.21-dashboard-business-org-ai-plan.md`
+  - `docs/64-v0.1.21-release-gate-checklist.md`
+- v0.1.21 issue baseline and closure track: GitHub issues `#229` to `#234`.
+- Cockpit business/org/AI baseline APIs:
+  - `GET /api/v1/ops/cockpit/business-overview`
+  - `GET /api/v1/ops/cockpit/workflow-org-baseline`
+  - `POST /api/v1/ops/cockpit/ai/evidence-query`
+
+### Changed
+
+- Overview module cockpit now includes:
+  - business service risk/resource baseline panel,
+  - organization workflow baseline panel,
+  - unified AI evidence query entry and evidence table.
+- Dashboard module-first cockpit foundation now integrates business/org/AI baselines into one operator entry surface.
+
+### Fixed
+
+- v0.1.21 strategy items for business-centric operations, org-aware workflow baseline, and evidence-backed AI are now implemented as product contracts rather than docs-only plans.
+- AI answer payload completeness is now validated server-side before response return.
+
 ## [0.1.20] - 2026-03-17
 
 ### Added
