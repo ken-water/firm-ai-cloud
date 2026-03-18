@@ -615,6 +615,22 @@ type AiEvidenceQueryResponse = {
   };
 };
 
+type AiIntentPresetItem = {
+  preset_key: string;
+  module: string;
+  intent: string;
+  label: string;
+  default_question: string;
+  default_time_window_hours: number;
+  evidence_requirements: string[];
+};
+
+type AiIntentPresetListResponse = {
+  generated_at: string;
+  total: number;
+  items: AiIntentPresetItem[];
+};
+
 type MonitoringMetricPoint = {
   timestamp: string;
   value: number;
@@ -3467,6 +3483,9 @@ export function App() {
   const [loadingWorkflowOrgBaseline, setLoadingWorkflowOrgBaseline] = useState(false);
   const [aiEvidenceResponse, setAiEvidenceResponse] = useState<AiEvidenceQueryResponse | null>(null);
   const [runningAiEvidenceQuery, setRunningAiEvidenceQuery] = useState(false);
+  const [aiIntentPresets, setAiIntentPresets] = useState<AiIntentPresetItem[]>([]);
+  const [loadingAiIntentPresets, setLoadingAiIntentPresets] = useState(false);
+  const [selectedAiPresetKey, setSelectedAiPresetKey] = useState("");
   const [aiModuleDraft, setAiModuleDraft] = useState("monitoring");
   const [aiIntentDraft, setAiIntentDraft] = useState("health_summary");
   const [aiQuestionDraft, setAiQuestionDraft] = useState("");
@@ -7789,6 +7808,45 @@ export function App() {
     }
   }, []);
 
+  const loadAiIntentPresets = useCallback(async (module?: string) => {
+    setLoadingAiIntentPresets(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (module && module.trim().length > 0) {
+        params.set("module", module.trim());
+      }
+      const query = params.toString();
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/v1/ops/cockpit/ai/intent-presets${query ? `?${query}` : ""}`
+      );
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: AiIntentPresetListResponse = await response.json();
+      setAiIntentPresets(payload.items ?? []);
+      return payload.items ?? [];
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setAiIntentPresets([]);
+      return [];
+    } finally {
+      setLoadingAiIntentPresets(false);
+    }
+  }, []);
+
+  const applyAiIntentPreset = useCallback((presetKey: string) => {
+    const preset = aiIntentPresets.find((item) => item.preset_key === presetKey);
+    if (!preset) {
+      return;
+    }
+    setSelectedAiPresetKey(presetKey);
+    setAiModuleDraft(preset.module);
+    setAiIntentDraft(preset.intent);
+    setAiQuestionDraft(preset.default_question);
+    setAiTimeWindowHoursDraft(String(preset.default_time_window_hours));
+  }, [aiIntentPresets]);
+
   const runAiEvidenceQuery = useCallback(async () => {
     const hours = Number.parseInt(aiTimeWindowHoursDraft.trim(), 10);
     if (!Number.isFinite(hours) || hours <= 0 || hours > 720) {
@@ -10418,18 +10476,34 @@ export function App() {
       loadBusinessOverview(),
       loadBusinessTopologyOverview(),
       loadWorkflowOrgBaseline(30),
+      loadAiIntentPresets(),
     ]);
   }, [
     loadAssetStats,
     loadAssets,
     loadBusinessOverview,
     loadBusinessTopologyOverview,
+    loadAiIntentPresets,
     loadFieldDefinitions,
     loadMonitoringOverview,
     loadMonitoringSources,
     loadWorkflowOrgBaseline,
     authIdentity
   ]);
+
+  useEffect(() => {
+    if (aiIntentPresets.length === 0) {
+      return;
+    }
+    if (!selectedAiPresetKey) {
+      const first = aiIntentPresets[0];
+      setSelectedAiPresetKey(first.preset_key);
+      setAiModuleDraft(first.module);
+      setAiIntentDraft(first.intent);
+      setAiQuestionDraft(first.default_question);
+      setAiTimeWindowHoursDraft(String(first.default_time_window_hours));
+    }
+  }, [aiIntentPresets, selectedAiPresetKey]);
 
   useEffect(() => {
     if (assets.length === 0 || selectedAssetId) {
@@ -12397,6 +12471,8 @@ export function App() {
     loadBusinessOverview,
     loadBusinessTopologyOverview,
     loadWorkflowOrgBaseline,
+    loadAiIntentPresets,
+    applyAiIntentPreset,
     runAiEvidenceQuery,
     loadMonitoringOverview,
     loadOpsChecklist,
@@ -12475,6 +12551,9 @@ export function App() {
     loadingWorkflowOrgBaseline,
     aiEvidenceResponse,
     runningAiEvidenceQuery,
+    aiIntentPresets,
+    loadingAiIntentPresets,
+    selectedAiPresetKey,
     aiModuleDraft,
     aiIntentDraft,
     aiQuestionDraft,
@@ -12506,6 +12585,7 @@ export function App() {
     setAiIntentDraft,
     setAiQuestionDraft,
     setAiTimeWindowHoursDraft,
+    setSelectedAiPresetKey,
     setBackupEvidenceCompliancePolicyDraft,
     setBackupEvidenceComplianceWeekStart,
     setBackupPolicyDraft,

@@ -42,6 +42,7 @@ pub fn routes() -> Router<AppState> {
         .route("/cockpit/business-overview", get(get_business_overview))
         .route("/cockpit/business-topology-overview", get(get_business_topology_overview))
         .route("/cockpit/workflow-org-baseline", get(get_workflow_org_baseline))
+        .route("/cockpit/ai/intent-presets", get(list_ai_intent_presets))
         .route("/cockpit/ai/evidence-query", post(query_ai_evidence_baseline))
         .route("/cockpit/daily-ops/briefing", get(get_daily_ops_briefing))
         .route(
@@ -126,6 +127,11 @@ struct AiEvidenceQueryRequest {
     department: Option<String>,
     business_service: Option<String>,
     time_window_hours: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct AiIntentPresetQuery {
+    module: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -354,6 +360,24 @@ struct AiEvidenceSafety {
     evidence_required: bool,
     read_only: bool,
     blocked_actions: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AiIntentPresetListResponse {
+    generated_at: DateTime<Utc>,
+    total: usize,
+    items: Vec<AiIntentPresetItem>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct AiIntentPresetItem {
+    preset_key: String,
+    module: String,
+    intent: String,
+    label: String,
+    default_question: String,
+    default_time_window_hours: u32,
+    evidence_requirements: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -1242,6 +1266,22 @@ async fn query_ai_evidence_baseline(
                 "action_without_evidence".to_string(),
             ],
         },
+    }))
+}
+
+async fn list_ai_intent_presets(
+    Query(query): Query<AiIntentPresetQuery>,
+) -> AppResult<Json<AiIntentPresetListResponse>> {
+    let module_filter = trim_optional(query.module, 64)
+        .map(|value| value.to_ascii_lowercase());
+    let mut items = build_ai_intent_preset_items();
+    if let Some(module) = module_filter {
+        items.retain(|item| item.module == module);
+    }
+    Ok(Json(AiIntentPresetListResponse {
+        generated_at: Utc::now(),
+        total: items.len(),
+        items,
     }))
 }
 
@@ -2864,6 +2904,67 @@ fn ensure_ai_evidence_completeness(answer: &AiEvidenceAnswer) -> AppResult<()> {
         }
     }
     Ok(())
+}
+
+fn build_ai_intent_preset_items() -> Vec<AiIntentPresetItem> {
+    vec![
+        AiIntentPresetItem {
+            preset_key: "monitoring_health_summary".to_string(),
+            module: "monitoring".to_string(),
+            intent: "health_summary".to_string(),
+            label: "Monitoring health summary".to_string(),
+            default_question: "Current monitoring health and critical risk overview.".to_string(),
+            default_time_window_hours: 24,
+            evidence_requirements: vec![
+                "source_ref".to_string(),
+                "observed_at".to_string(),
+                "metric".to_string(),
+                "value".to_string(),
+            ],
+        },
+        AiIntentPresetItem {
+            preset_key: "cmdb_capacity_risk".to_string(),
+            module: "cmdb".to_string(),
+            intent: "capacity_risk".to_string(),
+            label: "CMDB capacity and idle risk".to_string(),
+            default_question: "Asset capacity, idle pressure, and binding completeness.".to_string(),
+            default_time_window_hours: 168,
+            evidence_requirements: vec![
+                "source_ref".to_string(),
+                "observed_at".to_string(),
+                "metric".to_string(),
+                "value".to_string(),
+            ],
+        },
+        AiIntentPresetItem {
+            preset_key: "workflow_approval_queue".to_string(),
+            module: "workflow".to_string(),
+            intent: "approval_queue".to_string(),
+            label: "Workflow approval pressure".to_string(),
+            default_question: "Pending approvals and active execution pressure.".to_string(),
+            default_time_window_hours: 72,
+            evidence_requirements: vec![
+                "source_ref".to_string(),
+                "observed_at".to_string(),
+                "metric".to_string(),
+                "value".to_string(),
+            ],
+        },
+        AiIntentPresetItem {
+            preset_key: "monitoring_incident_watch".to_string(),
+            module: "monitoring".to_string(),
+            intent: "incident_watch".to_string(),
+            label: "Monitoring incident watch".to_string(),
+            default_question: "Critical incident watch for current monitoring scope.".to_string(),
+            default_time_window_hours: 6,
+            evidence_requirements: vec![
+                "source_ref".to_string(),
+                "observed_at".to_string(),
+                "metric".to_string(),
+                "value".to_string(),
+            ],
+        },
+    ]
 }
 
 async fn load_default_escalation_window(db: &sqlx::PgPool) -> AppResult<EscalationWindowRow> {
@@ -5560,6 +5661,7 @@ mod tests {
         normalize_optional_note, parse_optional_date, score_alert_item, score_ticket_item,
         select_next_go_live_domain, collect_template_approver_groups,
         ensure_ai_evidence_completeness, AiEvidenceAnswer, AiEvidenceItem,
+        build_ai_intent_preset_items,
         sort_business_overview_items, sort_business_topology_overview_items, sort_daily_ops_items,
         sort_daily_queue_items, sort_next_best_actions, summarize_business_overview,
         summarize_business_topology_overview, summarize_daily_ops_closure_continuity,
@@ -5931,6 +6033,17 @@ mod tests {
         assert_eq!(summary.cross_site_edge_total, 3);
         assert_eq!(summary.critical_alert_total, 1);
         assert_eq!(summary.escalation_ticket_total, 1);
+    }
+
+    #[test]
+    fn ai_intent_presets_have_required_fields() {
+        let items = build_ai_intent_preset_items();
+        assert!(!items.is_empty());
+        assert!(items.iter().all(|item| !item.preset_key.trim().is_empty()));
+        assert!(items.iter().all(|item| !item.module.trim().is_empty()));
+        assert!(items.iter().all(|item| !item.intent.trim().is_empty()));
+        assert!(items.iter().all(|item| item.default_time_window_hours > 0));
+        assert!(items.iter().all(|item| !item.evidence_requirements.is_empty()));
     }
 
     #[test]

@@ -301,6 +301,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadBusinessOverview,
     loadBusinessTopologyOverview,
     loadWorkflowOrgBaseline,
+    loadAiIntentPresets,
+    applyAiIntentPreset,
     runAiEvidenceQuery,
     loadMonitoringOverview,
     loadOpsChecklist,
@@ -378,6 +380,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingWorkflowOrgBaseline,
     aiEvidenceResponse,
     runningAiEvidenceQuery,
+    aiIntentPresets,
+    loadingAiIntentPresets,
+    selectedAiPresetKey,
     aiModuleDraft,
     aiIntentDraft,
     aiQuestionDraft,
@@ -409,6 +414,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setAiIntentDraft,
     setAiQuestionDraft,
     setAiTimeWindowHoursDraft,
+    setSelectedAiPresetKey,
     setBackupEvidenceCompliancePolicyDraft,
     setBackupEvidenceComplianceWeekStart,
     setBackupPolicyDraft,
@@ -992,11 +998,36 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
             <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
               <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>AI evidence query entry</h3>
-              <button onClick={() => void runAiEvidenceQuery()} disabled={runningAiEvidenceQuery}>
-                {runningAiEvidenceQuery ? "Querying..." : "Run AI evidence query"}
-              </button>
+              <div className="toolbar-row" style={{ flexWrap: "wrap" }}>
+                <button onClick={() => void loadAiIntentPresets(aiModuleDraft)} disabled={loadingAiIntentPresets}>
+                  {loadingAiIntentPresets ? "Loading presets..." : "Refresh presets"}
+                </button>
+                <button onClick={() => void runAiEvidenceQuery()} disabled={runningAiEvidenceQuery}>
+                  {runningAiEvidenceQuery ? "Querying..." : "Run AI evidence query"}
+                </button>
+              </div>
             </div>
             <div className="filter-grid" style={{ marginBottom: "0.6rem" }}>
+              <label className="control-field">
+                <span>Intent preset</span>
+                <select
+                  value={selectedAiPresetKey}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setSelectedAiPresetKey(value);
+                    if (value) {
+                      applyAiIntentPreset(value);
+                    }
+                  }}
+                >
+                  <option value="">(none)</option>
+                  {aiIntentPresets.map((item: any) => (
+                    <option key={`ai-preset-${item.preset_key}`} value={item.preset_key}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="control-field">
                 <span>Module</span>
                 <select value={aiModuleDraft} onChange={(event) => setAiModuleDraft(event.target.value)}>
@@ -1014,6 +1045,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <input value={aiTimeWindowHoursDraft} onChange={(event) => setAiTimeWindowHoursDraft(event.target.value)} />
               </label>
             </div>
+            {selectedAiPresetKey && (
+              <p className="inline-note">
+                preset={selectedAiPresetKey} |
+                evidence_requirements={(aiIntentPresets.find((item: any) => item.preset_key === selectedAiPresetKey)?.evidence_requirements ?? []).join(", ") || "-"}
+              </p>
+            )}
             <label className="control-field" style={{ marginBottom: "0.6rem" }}>
               <span>Question (optional)</span>
               <input value={aiQuestionDraft} onChange={(event) => setAiQuestionDraft(event.target.value)} />
@@ -1025,6 +1062,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <p className="inline-note">
                   summary={aiEvidenceResponse.answer.summary} | confidence={Math.round(aiEvidenceResponse.answer.confidence * 100)}% |
                   evidence_total={aiEvidenceResponse.answer.evidence_total} | read_only={String(aiEvidenceResponse.safety.read_only)}
+                </p>
+                <p className="inline-note">
+                  evidence_source_refs={(aiEvidenceResponse.answer.evidence ?? [])
+                    .map((item: any) => item.source_ref)
+                    .filter((value: string, index: number, arr: string[]) => arr.indexOf(value) === index)
+                    .join(", ")}
                 </p>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
