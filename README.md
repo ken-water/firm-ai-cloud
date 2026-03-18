@@ -165,6 +165,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [SMB intelligent cloud product strategy baseline](docs/62-smb-intelligent-cloud-product-strategy-baseline.md)
 - [v0.1.21 dashboard + business/org/AI baseline plan](docs/63-v0.1.21-dashboard-business-org-ai-plan.md)
 - [v0.1.21 release gate checklist](docs/64-v0.1.21-release-gate-checklist.md)
+- [v0.1.22 dashboard studio + topology/AI copilot baseline plan](docs/65-v0.1.22-dashboard-studio-topology-ai-plan.md)
+- [v0.1.22 release gate checklist](docs/66-v0.1.22-release-gate-checklist.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
