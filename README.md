@@ -163,6 +163,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.20 owner assignment and escalation action loop plan](docs/60-v0.1.20-owner-assignment-escalation-loop-plan.md)
 - [v0.1.20 release gate checklist](docs/61-v0.1.20-release-gate-checklist.md)
 - [SMB intelligent cloud product strategy baseline](docs/62-smb-intelligent-cloud-product-strategy-baseline.md)
+- [v0.1.21 dashboard + business/org/AI baseline plan](docs/63-v0.1.21-dashboard-business-org-ai-plan.md)
+- [v0.1.21 release gate checklist](docs/64-v0.1.21-release-gate-checklist.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
