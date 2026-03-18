@@ -41,6 +41,7 @@ pub fn routes() -> Router<AppState> {
         .route("/cockpit/queue", get(get_daily_cockpit_queue))
         .route("/cockpit/business-overview", get(get_business_overview))
         .route("/cockpit/business-topology-overview", get(get_business_topology_overview))
+        .route("/cockpit/topology-board", get(get_topology_board))
         .route("/cockpit/workflow-org-baseline", get(get_workflow_org_baseline))
         .route("/cockpit/ai/intent-presets", get(list_ai_intent_presets))
         .route("/cockpit/ai/evidence-query", post(query_ai_evidence_baseline))
@@ -268,6 +269,41 @@ struct BusinessTopologyOverviewItem {
     open_ticket_total: i64,
     escalation_ticket_total: i64,
     risk_score: i32,
+}
+
+#[derive(Debug, Serialize)]
+struct TopologyBoardResponse {
+    generated_at: DateTime<Utc>,
+    scope: BusinessOverviewScope,
+    summary: TopologyBoardSummary,
+    items: Vec<TopologyBoardItem>,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct TopologyBoardSummary {
+    service_total: usize,
+    healthy_total: usize,
+    warning_total: usize,
+    critical_total: usize,
+    unassigned_owner_total: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct TopologyBoardItem {
+    board_key: String,
+    business_service: String,
+    owner_ref: String,
+    owner_state: String,
+    risk_level: String,
+    risk_score: i32,
+    node_total: i64,
+    edge_total: i64,
+    cross_site_edge_total: i64,
+    critical_alert_total: i64,
+    open_ticket_total: i64,
+    escalation_ticket_total: i64,
+    last_alert_at: Option<String>,
+    recommended_action: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -970,6 +1006,19 @@ struct BusinessTopologyOverviewRow {
     escalation_ticket_total: i64,
 }
 
+#[derive(Debug, FromRow)]
+struct TopologyBoardRow {
+    business_service: String,
+    owner_department: Option<String>,
+    node_total: i64,
+    edge_total: i64,
+    cross_site_edge_total: i64,
+    critical_alert_total: i64,
+    open_ticket_total: i64,
+    escalation_ticket_total: i64,
+    last_alert_at: Option<DateTime<Utc>>,
+}
+
 async fn get_daily_cockpit_queue(
     State(state): State<AppState>,
     Query(query): Query<DailyCockpitQuery>,
@@ -1129,6 +1178,76 @@ async fn get_business_topology_overview(
     let summary = summarize_business_topology_overview(items.as_slice());
 
     Ok(Json(BusinessTopologyOverviewResponse {
+        generated_at: Utc::now(),
+        scope: BusinessOverviewScope {
+            site,
+            department,
+            business_service,
+        },
+        summary,
+        items,
+    }))
+}
+
+async fn get_topology_board(
+    State(state): State<AppState>,
+    Query(query): Query<BusinessTopologyOverviewQuery>,
+) -> AppResult<Json<TopologyBoardResponse>> {
+    let limit = query.limit.unwrap_or(20).clamp(1, 80);
+    let site = trim_optional(query.site, 128);
+    let department = trim_optional(query.department, 128);
+    let business_service = trim_optional(query.business_service, 128);
+    let rows = fetch_topology_board_rows(
+        &state.db,
+        site.as_deref(),
+        department.as_deref(),
+        business_service.as_deref(),
+        limit as i64,
+    )
+    .await?;
+
+    let mut items = rows
+        .into_iter()
+        .map(|row| {
+            let risk_score = compute_business_topology_risk_score(
+                row.cross_site_edge_total,
+                row.critical_alert_total,
+                row.escalation_ticket_total,
+                row.open_ticket_total,
+            );
+            let risk_level = topology_board_risk_level(risk_score);
+            let owner_ref = topology_board_owner_ref(row.owner_department.as_deref());
+            let owner_state = if owner_ref == "ops-unassigned" {
+                "unassigned"
+            } else {
+                "assigned"
+            };
+            TopologyBoardItem {
+                board_key: format!("{}::{}", row.business_service, owner_ref),
+                business_service: row.business_service,
+                owner_ref,
+                owner_state: owner_state.to_string(),
+                risk_level: risk_level.to_string(),
+                risk_score,
+                node_total: row.node_total,
+                edge_total: row.edge_total,
+                cross_site_edge_total: row.cross_site_edge_total,
+                critical_alert_total: row.critical_alert_total,
+                open_ticket_total: row.open_ticket_total,
+                escalation_ticket_total: row.escalation_ticket_total,
+                last_alert_at: row.last_alert_at.map(|value| value.to_rfc3339()),
+                recommended_action: topology_board_recommended_action(
+                    risk_level,
+                    row.critical_alert_total,
+                    row.escalation_ticket_total,
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+    sort_topology_board_items(&mut items);
+    let summary = summarize_topology_board(items.as_slice());
+
+    Ok(Json(TopologyBoardResponse {
         generated_at: Utc::now(),
         scope: BusinessOverviewScope {
             site,
@@ -2690,6 +2809,125 @@ async fn fetch_business_topology_overview_rows(
     Ok(rows)
 }
 
+async fn fetch_topology_board_rows(
+    db: &sqlx::PgPool,
+    site: Option<&str>,
+    department: Option<&str>,
+    business_service: Option<&str>,
+    limit: i64,
+) -> AppResult<Vec<TopologyBoardRow>> {
+    let rows: Vec<TopologyBoardRow> = sqlx::query_as(
+        "WITH scoped_bindings AS (
+            SELECT b.business_service, b.asset_id
+            FROM asset_business_service_bindings b
+            INNER JOIN assets a ON a.id = b.asset_id
+            WHERE ($1::TEXT IS NULL OR a.site = $1)
+              AND ($2::TEXT IS NULL OR a.department = $2)
+              AND ($3::TEXT IS NULL OR b.business_service = $3)
+         ),
+         services AS (
+            SELECT DISTINCT business_service
+            FROM scoped_bindings
+         ),
+         topology_edges AS (
+            SELECT
+                sb.business_service,
+                COUNT(*)::bigint AS edge_total,
+                COUNT(*) FILTER (
+                    WHERE src.site IS DISTINCT FROM dst.site
+                )::bigint AS cross_site_edge_total
+            FROM scoped_bindings sb
+            INNER JOIN asset_relations r ON r.src_asset_id = sb.asset_id
+            INNER JOIN scoped_bindings sb2 ON sb2.asset_id = r.dst_asset_id
+               AND sb2.business_service = sb.business_service
+            INNER JOIN assets src ON src.id = r.src_asset_id
+            INNER JOIN assets dst ON dst.id = r.dst_asset_id
+            GROUP BY sb.business_service
+         ),
+         topology_nodes AS (
+            SELECT
+                sb.business_service,
+                COUNT(DISTINCT sb.asset_id)::bigint AS node_total
+            FROM scoped_bindings sb
+            GROUP BY sb.business_service
+         ),
+         alert_rollup AS (
+            SELECT
+                sb.business_service,
+                COUNT(DISTINCT ua.id) FILTER (
+                    WHERE ua.status IN ('open', 'acknowledged')
+                      AND ua.severity = 'critical'
+                )::bigint AS critical_alert_total,
+                MAX(ua.last_seen_at) FILTER (
+                    WHERE ua.status IN ('open', 'acknowledged')
+                ) AS last_alert_at
+            FROM scoped_bindings sb
+            LEFT JOIN unified_alerts ua ON ua.asset_id = sb.asset_id
+            GROUP BY sb.business_service
+         ),
+         ticket_rollup AS (
+            SELECT
+                sb.business_service,
+                COUNT(DISTINCT t.id) FILTER (
+                    WHERE t.status IN ('open', 'in_progress')
+                )::bigint AS open_ticket_total,
+                COUNT(DISTINCT t.id) FILTER (
+                    WHERE t.status IN ('open', 'in_progress')
+                      AND t.priority IN ('critical', 'high')
+                )::bigint AS escalation_ticket_total
+            FROM scoped_bindings sb
+            LEFT JOIN ticket_asset_links tal ON tal.asset_id = sb.asset_id
+            LEFT JOIN tickets t ON t.id = tal.ticket_id
+            GROUP BY sb.business_service
+         ),
+         owner_ranked AS (
+            SELECT
+                sb.business_service,
+                a.department,
+                COUNT(*) AS department_assets,
+                ROW_NUMBER() OVER (
+                    PARTITION BY sb.business_service
+                    ORDER BY COUNT(*) DESC, a.department ASC
+                ) AS rn
+            FROM scoped_bindings sb
+            INNER JOIN assets a ON a.id = sb.asset_id
+            WHERE a.department IS NOT NULL
+              AND btrim(a.department) <> ''
+            GROUP BY sb.business_service, a.department
+         ),
+         owner_rollup AS (
+            SELECT business_service, department AS owner_department
+            FROM owner_ranked
+            WHERE rn = 1
+         )
+         SELECT
+            s.business_service,
+            o.owner_department,
+            COALESCE(n.node_total, 0) AS node_total,
+            COALESCE(e.edge_total, 0) AS edge_total,
+            COALESCE(e.cross_site_edge_total, 0) AS cross_site_edge_total,
+            COALESCE(a.critical_alert_total, 0) AS critical_alert_total,
+            COALESCE(t.open_ticket_total, 0) AS open_ticket_total,
+            COALESCE(t.escalation_ticket_total, 0) AS escalation_ticket_total,
+            a.last_alert_at
+         FROM services s
+         LEFT JOIN owner_rollup o ON o.business_service = s.business_service
+         LEFT JOIN topology_nodes n ON n.business_service = s.business_service
+         LEFT JOIN topology_edges e ON e.business_service = s.business_service
+         LEFT JOIN alert_rollup a ON a.business_service = s.business_service
+         LEFT JOIN ticket_rollup t ON t.business_service = s.business_service
+         ORDER BY s.business_service ASC
+         LIMIT $4",
+    )
+    .bind(site)
+    .bind(department)
+    .bind(business_service)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
 async fn fetch_workflow_org_department_rows(
     db: &sqlx::PgPool,
     lookback_days: u32,
@@ -4195,6 +4433,74 @@ fn summarize_business_topology_overview(
         summary.cross_site_edge_total += item.cross_site_edge_total;
         summary.critical_alert_total += item.critical_alert_total;
         summary.escalation_ticket_total += item.escalation_ticket_total;
+    }
+    summary
+}
+
+fn topology_board_risk_level(risk_score: i32) -> &'static str {
+    if risk_score >= 180 {
+        "critical"
+    } else if risk_score >= 80 {
+        "warning"
+    } else {
+        "healthy"
+    }
+}
+
+fn topology_board_owner_ref(owner_department: Option<&str>) -> String {
+    let department = owner_department
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unassigned")
+        .to_ascii_lowercase()
+        .replace(' ', "-");
+    if department == "unassigned" {
+        "ops-unassigned".to_string()
+    } else {
+        format!("{department}-ops")
+    }
+}
+
+fn topology_board_recommended_action(
+    risk_level: &str,
+    critical_alert_total: i64,
+    escalation_ticket_total: i64,
+) -> String {
+    match risk_level {
+        "critical" if critical_alert_total > 0 => "triage_critical_alerts".to_string(),
+        "critical" => "review_escalation_tickets".to_string(),
+        "warning" if escalation_ticket_total > 0 => "review_escalation_queue".to_string(),
+        "warning" => "review_cross_site_dependencies".to_string(),
+        _ => "monitor_baseline".to_string(),
+    }
+}
+
+fn sort_topology_board_items(items: &mut [TopologyBoardItem]) {
+    items.sort_by(|left, right| {
+        right
+            .risk_score
+            .cmp(&left.risk_score)
+            .then_with(|| right.critical_alert_total.cmp(&left.critical_alert_total))
+            .then_with(|| right.escalation_ticket_total.cmp(&left.escalation_ticket_total))
+            .then_with(|| right.last_alert_at.cmp(&left.last_alert_at))
+            .then_with(|| left.business_service.cmp(&right.business_service))
+    });
+}
+
+fn summarize_topology_board(items: &[TopologyBoardItem]) -> TopologyBoardSummary {
+    let mut summary = TopologyBoardSummary {
+        service_total: items.len(),
+        ..TopologyBoardSummary::default()
+    };
+    for item in items {
+        match item.risk_level.as_str() {
+            "critical" => summary.critical_total += 1,
+            "warning" => summary.warning_total += 1,
+            _ => summary.healthy_total += 1,
+        }
+        if item.owner_state == "unassigned" {
+            summary.unassigned_owner_total += 1;
+        }
     }
     summary
 }
@@ -5843,7 +6149,8 @@ mod tests {
         sort_daily_queue_items, sort_next_best_actions, summarize_business_overview,
         summarize_business_topology_overview, summarize_daily_ops_closure_continuity,
         summarize_daily_ops_items, summarize_go_live_readiness, BusinessTopologyOverviewItem,
-        compute_business_topology_risk_score,
+        compute_business_topology_risk_score, sort_topology_board_items,
+        summarize_topology_board, TopologyBoardItem,
     };
 
     fn test_item(key: &str, score: i32, observed_at_offset_minutes: i64) -> DailyCockpitQueueItem {
@@ -6210,6 +6517,72 @@ mod tests {
         assert_eq!(summary.cross_site_edge_total, 3);
         assert_eq!(summary.critical_alert_total, 1);
         assert_eq!(summary.escalation_ticket_total, 1);
+    }
+
+    #[test]
+    fn topology_board_sort_and_summary_are_deterministic() {
+        let mut items = vec![
+            TopologyBoardItem {
+                board_key: "billing::finance-ops".to_string(),
+                business_service: "billing".to_string(),
+                owner_ref: "finance-ops".to_string(),
+                owner_state: "assigned".to_string(),
+                risk_level: "warning".to_string(),
+                risk_score: 120,
+                node_total: 8,
+                edge_total: 7,
+                cross_site_edge_total: 2,
+                critical_alert_total: 0,
+                open_ticket_total: 3,
+                escalation_ticket_total: 1,
+                last_alert_at: Some("2026-03-18T04:10:00+00:00".to_string()),
+                recommended_action: "review_escalation_queue".to_string(),
+            },
+            TopologyBoardItem {
+                board_key: "auth::ops-unassigned".to_string(),
+                business_service: "auth".to_string(),
+                owner_ref: "ops-unassigned".to_string(),
+                owner_state: "unassigned".to_string(),
+                risk_level: "critical".to_string(),
+                risk_score: 250,
+                node_total: 12,
+                edge_total: 14,
+                cross_site_edge_total: 4,
+                critical_alert_total: 2,
+                open_ticket_total: 5,
+                escalation_ticket_total: 2,
+                last_alert_at: Some("2026-03-18T05:00:00+00:00".to_string()),
+                recommended_action: "triage_critical_alerts".to_string(),
+            },
+            TopologyBoardItem {
+                board_key: "search::platform-ops".to_string(),
+                business_service: "search".to_string(),
+                owner_ref: "platform-ops".to_string(),
+                owner_state: "assigned".to_string(),
+                risk_level: "healthy".to_string(),
+                risk_score: 30,
+                node_total: 6,
+                edge_total: 5,
+                cross_site_edge_total: 1,
+                critical_alert_total: 0,
+                open_ticket_total: 0,
+                escalation_ticket_total: 0,
+                last_alert_at: None,
+                recommended_action: "monitor_baseline".to_string(),
+            },
+        ];
+
+        sort_topology_board_items(&mut items);
+        assert_eq!(items[0].business_service, "auth");
+        assert_eq!(items[1].business_service, "billing");
+        assert_eq!(items[2].business_service, "search");
+
+        let summary = summarize_topology_board(items.as_slice());
+        assert_eq!(summary.service_total, 3);
+        assert_eq!(summary.critical_total, 1);
+        assert_eq!(summary.warning_total, 1);
+        assert_eq!(summary.healthy_total, 1);
+        assert_eq!(summary.unassigned_owner_total, 1);
     }
 
     #[test]

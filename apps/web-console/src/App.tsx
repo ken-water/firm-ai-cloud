@@ -537,6 +537,42 @@ type BusinessTopologyOverviewResponse = {
   items: BusinessTopologyOverviewItem[];
 };
 
+type TopologyBoardSummary = {
+  service_total: number;
+  healthy_total: number;
+  warning_total: number;
+  critical_total: number;
+  unassigned_owner_total: number;
+};
+
+type TopologyBoardItem = {
+  board_key: string;
+  business_service: string;
+  owner_ref: string;
+  owner_state: string;
+  risk_level: "healthy" | "warning" | "critical" | string;
+  risk_score: number;
+  node_total: number;
+  edge_total: number;
+  cross_site_edge_total: number;
+  critical_alert_total: number;
+  open_ticket_total: number;
+  escalation_ticket_total: number;
+  last_alert_at: string | null;
+  recommended_action: string;
+};
+
+type TopologyBoardResponse = {
+  generated_at: string;
+  scope: {
+    site: string | null;
+    department: string | null;
+    business_service: string | null;
+  };
+  summary: TopologyBoardSummary;
+  items: TopologyBoardItem[];
+};
+
 type WorkflowOrgBaselineSummary = {
   enabled_template_total: number;
   approval_step_total: number;
@@ -3497,6 +3533,8 @@ export function App() {
   const [loadingBusinessOverview, setLoadingBusinessOverview] = useState(false);
   const [businessTopologyOverview, setBusinessTopologyOverview] = useState<BusinessTopologyOverviewResponse | null>(null);
   const [loadingBusinessTopologyOverview, setLoadingBusinessTopologyOverview] = useState(false);
+  const [topologyBoard, setTopologyBoard] = useState<TopologyBoardResponse | null>(null);
+  const [loadingTopologyBoard, setLoadingTopologyBoard] = useState(false);
   const [workflowOrgBaseline, setWorkflowOrgBaseline] = useState<WorkflowOrgBaselineResponse | null>(null);
   const [loadingWorkflowOrgBaseline, setLoadingWorkflowOrgBaseline] = useState(false);
   const [aiEvidenceResponse, setAiEvidenceResponse] = useState<AiEvidenceQueryResponse | null>(null);
@@ -7803,6 +7841,35 @@ export function App() {
     }
   }, []);
 
+  const loadTopologyBoard = useCallback(async (filters?: { department?: string; business_service?: string }) => {
+    setLoadingTopologyBoard(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (filters?.department && filters.department !== "all") {
+        params.set("department", filters.department);
+      }
+      if (filters?.business_service && filters.business_service !== "all") {
+        params.set("business_service", filters.business_service);
+      }
+      params.set("limit", "30");
+      const query = params.toString();
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/ops/cockpit/topology-board${query ? `?${query}` : ""}`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: TopologyBoardResponse = await response.json();
+      setTopologyBoard(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setTopologyBoard(null);
+      return null;
+    } finally {
+      setLoadingTopologyBoard(false);
+    }
+  }, []);
+
   const loadWorkflowOrgBaseline = useCallback(async (days = 30) => {
     setLoadingWorkflowOrgBaseline(true);
     setError(null);
@@ -10493,6 +10560,7 @@ export function App() {
       loadMonitoringOverview(),
       loadBusinessOverview(),
       loadBusinessTopologyOverview(),
+      loadTopologyBoard(),
       loadWorkflowOrgBaseline(30),
       loadAiIntentPresets(),
     ]);
@@ -10501,6 +10569,7 @@ export function App() {
     loadAssets,
     loadBusinessOverview,
     loadBusinessTopologyOverview,
+    loadTopologyBoard,
     loadAiIntentPresets,
     loadFieldDefinitions,
     loadMonitoringOverview,
@@ -12488,6 +12557,7 @@ export function App() {
     loadDailyCockpitSnapshot,
     loadBusinessOverview,
     loadBusinessTopologyOverview,
+    loadTopologyBoard,
     loadWorkflowOrgBaseline,
     loadAiIntentPresets,
     applyAiIntentPreset,
@@ -12565,6 +12635,8 @@ export function App() {
     loadingBusinessOverview,
     businessTopologyOverview,
     loadingBusinessTopologyOverview,
+    topologyBoard,
+    loadingTopologyBoard,
     workflowOrgBaseline,
     loadingWorkflowOrgBaseline,
     aiEvidenceResponse,

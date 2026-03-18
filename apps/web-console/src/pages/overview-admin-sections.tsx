@@ -300,6 +300,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadDailyCockpitSnapshot,
     loadBusinessOverview,
     loadBusinessTopologyOverview,
+    loadTopologyBoard,
     loadWorkflowOrgBaseline,
     loadAiIntentPresets,
     applyAiIntentPreset,
@@ -376,6 +377,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     loadingBusinessOverview,
     businessTopologyOverview,
     loadingBusinessTopologyOverview,
+    topologyBoard,
+    loadingTopologyBoard,
     workflowOrgBaseline,
     loadingWorkflowOrgBaseline,
     aiEvidenceResponse,
@@ -752,6 +755,10 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   department: menuAxis === "department" ? departmentWorkspace : undefined,
                   business_service: menuAxis === "business" ? businessWorkspace : undefined
                 }),
+                loadTopologyBoard({
+                  department: menuAxis === "department" ? departmentWorkspace : undefined,
+                  business_service: menuAxis === "business" ? businessWorkspace : undefined
+                }),
                 loadWorkflowOrgBaseline(30),
                 loadDailyCockpitSnapshot(),
                 loadAssets(),
@@ -957,14 +964,16 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
             <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
               <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Business topology risk view</h3>
               <button
-                onClick={() =>
-                  void loadBusinessTopologyOverview({
+                onClick={() => {
+                  const filters = {
                     department: menuAxis === "department" ? departmentWorkspace : undefined,
                     business_service: menuAxis === "business" ? businessWorkspace : undefined
-                  })}
-                disabled={loadingBusinessTopologyOverview}
+                  };
+                  void Promise.all([loadBusinessTopologyOverview(filters), loadTopologyBoard(filters)]);
+                }}
+                disabled={loadingBusinessTopologyOverview || loadingTopologyBoard}
               >
-                {loadingBusinessTopologyOverview ? "Loading..." : "Refresh topology view"}
+                {loadingBusinessTopologyOverview || loadingTopologyBoard ? "Loading..." : "Refresh topology board"}
               </button>
             </div>
             {!businessTopologyOverview ? (
@@ -990,6 +999,52 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                     generated_at={new Date(businessTopologyOverview.generated_at).toLocaleString()}
                   </span>
                 </div>
+                {!topologyBoard ? (
+                  <p className="inline-note">
+                    {loadingTopologyBoard ? "Loading topology board..." : "Topology board is not loaded yet."}
+                  </p>
+                ) : (
+                  <>
+                    <div className="toolbar-row" style={{ flexWrap: "wrap", marginBottom: "0.6rem" }}>
+                      <span className="status-chip">board_services={topologyBoard.summary.service_total}</span>
+                      <span className="status-chip status-chip-success">healthy={topologyBoard.summary.healthy_total}</span>
+                      <span className="status-chip status-chip-warn">warning={topologyBoard.summary.warning_total}</span>
+                      <span className="status-chip status-chip-danger">critical={topologyBoard.summary.critical_total}</span>
+                      <span className="status-chip">owner_unassigned={topologyBoard.summary.unassigned_owner_total}</span>
+                    </div>
+                    {topologyBoard.items.length === 0 ? (
+                      <p className="inline-note">No topology board item is available for current scope.</p>
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.55rem", marginBottom: "0.55rem" }}>
+                        {topologyBoard.items.slice(0, 12).map((item: any) => (
+                          <div key={`topology-board-card-${item.board_key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                            <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+                              <strong>{item.business_service}</strong>
+                              <span className={`status-chip ${item.risk_level === "critical" ? "status-chip-danger" : item.risk_level === "warning" ? "status-chip-warn" : "status-chip-success"}`}>
+                                {item.risk_level}
+                              </span>
+                            </div>
+                            <p className="inline-note" style={{ marginTop: 0 }}>
+                              owner={item.owner_ref} ({item.owner_state}) | score={item.risk_score}
+                            </p>
+                            <p className="inline-note">
+                              nodes={item.node_total}, edges={item.edge_total}, cross_site={item.cross_site_edge_total}
+                            </p>
+                            <p className="inline-note">
+                              critical_alerts={item.critical_alert_total}, escalation_tickets={item.escalation_ticket_total}
+                            </p>
+                            <p className="inline-note">
+                              action={item.recommended_action}
+                            </p>
+                            <p className="inline-note">
+                              last_alert_at={item.last_alert_at ? new Date(item.last_alert_at).toLocaleString() : "-"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
                 {businessTopologyOverview.items.length === 0 ? (
                   <p className="inline-note">No business topology snapshot found for current scope.</p>
                 ) : (
