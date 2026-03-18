@@ -182,3 +182,18 @@ Minimal command set:
 1. `make release-publish-dry VERSION=X.Y.Z`
 2. `make release-publish VERSION=X.Y.Z`
 3. `make release-check VERSION=X.Y.Z`
+
+## 13. Product Strategy Baseline Gate (`v0.1.21+`, Mandatory)
+
+To ensure long-term product coherence and customer-value continuity, all minor releases from `v0.1.21` onward must align with:
+
+- `docs/62-smb-intelligent-cloud-product-strategy-baseline.md`
+
+Release owner checklist additions:
+
+- [ ] Release planning issue maps scope to at least one strategic pillar.
+- [ ] Release scope includes explicit user-visible workflow simplification.
+- [ ] Release scope defines target KPI movement (adoption, response, resolution, quality, or trust metric).
+- [ ] Release notes include strategic objective summary and deferred strategic gaps.
+
+If any item above is missing, release should be blocked until corrected.
