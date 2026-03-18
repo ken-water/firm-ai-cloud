@@ -18,6 +18,30 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.23] - 2026-03-18
+
+### Added
+
+- v0.1.23 planning and release-gate documentation:
+  - `docs/67-v0.1.23-copilot-actions-topology-board-plan.md`
+  - `docs/68-v0.1.23-release-gate-checklist.md`
+- v0.1.23 issue baseline and closure track: GitHub issues `#241` to `#246`.
+- Cockpit APIs:
+  - `GET /api/v1/ops/cockpit/topology-board`
+  - `GET /api/v1/ops/cockpit/handover-readiness`
+- AI evidence contract now returns guided action metadata with explicit safety boundaries.
+
+### Changed
+
+- Module cockpit now integrates copilot evidence, topology board, and handoff readiness into a single decision flow panel.
+- Topology view is now board-style and owner-focused with deterministic risk ordering.
+- Shift handoff now has deterministic readiness states (`ready`, `at_risk`, `blocking`) and explainable reasons.
+
+### Fixed
+
+- Operators no longer need to manually stitch AI, topology, and handoff context across separate panels to decide next actions.
+- Write-capable guided actions now expose explicit guard metadata instead of implicit assumptions.
+
 ## [0.1.22] - 2026-03-18
 
 ### Added
