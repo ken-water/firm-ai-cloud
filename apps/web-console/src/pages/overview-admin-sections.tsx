@@ -594,6 +594,62 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
         .filter(Boolean)
     }));
   }, [moduleStatusCards]);
+  const cockpitKpiCards = useMemo(() => {
+    const monitoringUnreachable = Number(monitoringOverview?.summary?.source_unreachable_total ?? 0);
+    const monitoringCritical = Number(monitoringOverview?.layers?.reduce((sum: number, layer: any) => {
+      return sum + Number(layer?.health?.critical ?? 0);
+    }, 0) ?? 0);
+    const dailyOverdue = Number(dailyOpsBriefing?.summary?.overdue ?? 0);
+    const dailyBlocked = Number(dailyOpsBriefing?.summary?.blocked ?? 0);
+    const ticketEscalation = Number((ticketEscalationQueue ?? []).length);
+    const topologyCritical = Number(topologyBoard?.summary?.critical_total ?? 0);
+    const handoffBlocking = Number(handoverReadiness?.summary?.blocking ?? 0);
+    const guidedActions = Number((aiEvidenceResponse?.guided_actions ?? []).length);
+    return [
+      {
+        key: "monitoring",
+        label: "Monitoring critical",
+        value: monitoringUnreachable + monitoringCritical,
+        note: `unreachable=${monitoringUnreachable}, critical=${monitoringCritical}`,
+        severity: monitoringUnreachable + monitoringCritical > 0 ? "danger" : "ok"
+      },
+      {
+        key: "daily_ops",
+        label: "Daily ops pressure",
+        value: dailyOverdue + dailyBlocked,
+        note: `overdue=${dailyOverdue}, blocked=${dailyBlocked}`,
+        severity: dailyOverdue + dailyBlocked > 0 ? "warn" : "ok"
+      },
+      {
+        key: "ticket",
+        label: "Ticket escalation queue",
+        value: ticketEscalation,
+        note: "high/critical open tickets",
+        severity: ticketEscalation > 0 ? "danger" : "ok"
+      },
+      {
+        key: "topology",
+        label: "Topology critical services",
+        value: topologyCritical,
+        note: "topology-board critical",
+        severity: topologyCritical > 0 ? "danger" : "ok"
+      },
+      {
+        key: "handoff",
+        label: "Handoff blocking items",
+        value: handoffBlocking,
+        note: `state=${handoverReadiness?.readiness_state ?? "unknown"}`,
+        severity: handoffBlocking > 0 ? "danger" : "ok"
+      },
+      {
+        key: "copilot",
+        label: "Copilot guided actions",
+        value: guidedActions,
+        note: `write_guard=${String(aiEvidenceResponse?.safety?.write_guard_required ?? false)}`,
+        severity: guidedActions > 0 ? "warn" : "ok"
+      }
+    ];
+  }, [aiEvidenceResponse, dailyOpsBriefing, handoverReadiness, monitoringOverview, ticketEscalationQueue, topologyBoard]);
   const handoffFocusItems = useMemo(() => {
     const rows: Array<{
       key: string;
@@ -795,6 +851,26 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           <p className="section-note" style={{ marginTop: 0 }}>
             Module-first entry with configurable widgets for quick risk/owner/action visibility.
           </p>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>KPI first-glance strip</h3>
+              <span className="inline-note">Critical metrics for 30-second operator scan</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.55rem" }}>
+              {cockpitKpiCards.map((item) => (
+                <div key={`cockpit-kpi-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                  <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <span>{item.label}</span>
+                    <span className={`status-chip ${item.severity === "danger" ? "status-chip-danger" : item.severity === "warn" ? "status-chip-warn" : "status-chip-success"}`}>
+                      {item.severity}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: "1.5rem", margin: "0.25rem 0 0.2rem 0", fontWeight: 700 }}>{item.value}</p>
+                  <p className="inline-note">{item.note}</p>
+                </div>
+              ))}
+            </div>
+          </div>
           <div className="toolbar-row" style={{ marginBottom: "0.65rem", flexWrap: "wrap" }}>
             <button
               onClick={() => void Promise.all([
