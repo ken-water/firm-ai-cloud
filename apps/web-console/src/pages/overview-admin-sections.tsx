@@ -756,6 +756,41 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       }
     ];
   }, [aiEvidenceResponse, dailyOpsBriefing, monitoringOverview, ticketEscalationQueue, topologyBoard]);
+  const executiveHeroCards = useMemo(() => {
+    const monitoringCritical = Number(monitoringOverview?.summary?.source_unreachable_total ?? 0)
+      + Number(monitoringOverview?.layers?.reduce((sum: number, layer: any) => {
+        return sum + Number(layer?.health?.critical ?? 0);
+      }, 0) ?? 0);
+    const topologyCritical = Number(topologyBoard?.summary?.critical_total ?? 0);
+    const ownerUnassigned = Number(topologyBoard?.summary?.unassigned_owner_total ?? 0);
+    const dailyPressure = Number(dailyOpsBriefing?.summary?.overdue ?? 0)
+      + Number(dailyOpsBriefing?.summary?.blocked ?? 0);
+    const escalationQueue = Number((ticketEscalationQueue ?? []).length);
+    const guidedActions = Number((aiEvidenceResponse?.guided_actions ?? []).length);
+    return [
+      {
+        key: "risk",
+        title: "Enterprise risk pulse",
+        value: monitoringCritical + topologyCritical + dailyPressure,
+        note: `monitoring=${monitoringCritical}, topology=${topologyCritical}, daily_pressure=${dailyPressure}`,
+        status: monitoringCritical + topologyCritical + dailyPressure > 0 ? "danger" : "ok"
+      },
+      {
+        key: "ownership",
+        title: "Ownership continuity",
+        value: ownerUnassigned + escalationQueue,
+        note: `owner_unassigned=${ownerUnassigned}, escalation_queue=${escalationQueue}`,
+        status: ownerUnassigned + escalationQueue > 0 ? "warn" : "ok"
+      },
+      {
+        key: "action",
+        title: "Action readiness",
+        value: guidedActions,
+        note: `ai_guided_actions=${guidedActions}, write_guard=${String(aiEvidenceResponse?.safety?.write_guard_required ?? false)}`,
+        status: guidedActions > 0 ? "warn" : "ok"
+      }
+    ];
+  }, [aiEvidenceResponse, dailyOpsBriefing, monitoringOverview, ticketEscalationQueue, topologyBoard]);
   const topologyRiskLanes = useMemo(() => {
     const items = topologyBoard?.items ?? [];
     const lanes: Record<string, any[]> = {
@@ -1037,6 +1072,26 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           <p className="section-note" style={{ marginTop: 0 }}>
             Module-first entry with configurable widgets for quick risk/owner/action visibility.
           </p>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Executive summary hero</h3>
+              <span className="inline-note">for stakeholder first-glance decision scan</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.55rem" }}>
+              {executiveHeroCards.map((item) => (
+                <div key={`executive-hero-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                  <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <strong>{item.title}</strong>
+                    <span className={`status-chip ${item.status === "danger" ? "status-chip-danger" : item.status === "warn" ? "status-chip-warn" : "status-chip-success"}`}>
+                      {item.status}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: "1.65rem", margin: "0.25rem 0 0.2rem 0", fontWeight: 700 }}>{item.value}</p>
+                  <p className="inline-note">{item.note}</p>
+                </div>
+              ))}
+            </div>
+          </div>
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
             <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
               <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Role cockpit quick scenes</h3>
