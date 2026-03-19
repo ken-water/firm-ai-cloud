@@ -40,6 +40,10 @@ const MAX_TEMPLATE_USERS: usize = 32;
 const DEFAULT_PROFILE_HISTORY_LIMIT: u32 = 20;
 const MAX_PROFILE_HISTORY_LIMIT: u32 = 100;
 const MAX_ACTIVATION_FEEDBACK_COMMENT_LEN: usize = 500;
+const MAX_ACTIVATION_FEEDBACK_OWNER_LEN: usize = 80;
+const MAX_ACTIVATION_FEEDBACK_NOTE_LEN: usize = 500;
+const DEFAULT_ACTIVATION_FEEDBACK_LIMIT: u32 = 20;
+const MAX_ACTIVATION_FEEDBACK_LIMIT: u32 = 100;
 const ACTIVATION_SETUP_HREF: &str = "#/setup";
 
 pub fn routes() -> Router<AppState> {
@@ -48,7 +52,14 @@ pub fn routes() -> Router<AppState> {
         .route("/checklist", get(get_setup_checklist))
         .route("/activation", get(get_setup_activation))
         .route("/activation/starter-templates", get(list_setup_activation_starter_templates))
-        .route("/activation/feedback", post(capture_setup_activation_feedback))
+        .route(
+            "/activation/feedback",
+            get(list_setup_activation_feedback).post(capture_setup_activation_feedback),
+        )
+        .route(
+            "/activation/feedback/{id}/closure",
+            post(update_setup_activation_feedback_closure),
+        )
         .route("/templates", get(list_setup_templates))
         .route("/templates/{key}/preview", post(preview_setup_template))
         .route("/templates/{key}/apply", post(apply_setup_template))
@@ -149,7 +160,7 @@ struct SetupActivationFeedbackRequest {
     context: Option<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, FromRow)]
 struct SetupActivationFeedbackResponse {
     id: i64,
     actor: String,
@@ -158,6 +169,58 @@ struct SetupActivationFeedbackResponse {
     feedback_kind: String,
     comment: Option<String>,
     created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SetupActivationFeedbackListQuery {
+    limit: Option<u32>,
+    closure_status: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct SetupActivationFeedbackClosureRequest {
+    closure_status: String,
+    owner_ref: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+struct SetupActivationFeedbackListItem {
+    id: i64,
+    actor: String,
+    step_key: String,
+    template_key: Option<String>,
+    feedback_kind: String,
+    comment: Option<String>,
+    closure_status: String,
+    owner_ref: Option<String>,
+    closure_note: Option<String>,
+    closure_updated_at: Option<DateTime<Utc>>,
+    closed_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    context: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupActivationFeedbackListSummary {
+    total: i64,
+    open: i64,
+    in_progress: i64,
+    resolved: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct SetupActivationFeedbackListResponse {
+    summary: SetupActivationFeedbackListSummary,
+    items: Vec<SetupActivationFeedbackListItem>,
+}
+
+#[derive(Debug, FromRow)]
+struct SetupActivationFeedbackListSummaryRow {
+    total: i64,
+    open: i64,
+    in_progress: i64,
+    resolved: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -599,6 +662,66 @@ async fn list_setup_activation_starter_templates(
     }))
 }
 
+async fn list_setup_activation_feedback(
+    State(state): State<AppState>,
+    Query(query): Query<SetupActivationFeedbackListQuery>,
+) -> AppResult<Json<SetupActivationFeedbackListResponse>> {
+    let limit = normalize_activation_feedback_limit(query.limit);
+    let closure_status = normalize_activation_feedback_closure_status_query(query.closure_status)?;
+
+    let items: Vec<SetupActivationFeedbackListItem> = sqlx::query_as(
+        "SELECT
+            id,
+            actor,
+            step_key,
+            template_key,
+            feedback_kind,
+            comment,
+            COALESCE(NULLIF(context->>'closure_status', ''), 'open') AS closure_status,
+            NULLIF(context->>'owner_ref', '') AS owner_ref,
+            NULLIF(context->>'closure_note', '') AS closure_note,
+            NULLIF(context->>'closure_updated_at', '')::timestamptz AS closure_updated_at,
+            NULLIF(context->>'closed_at', '')::timestamptz AS closed_at,
+            created_at,
+            context
+         FROM setup_activation_feedback_events
+         WHERE ($1 = 'all' OR COALESCE(NULLIF(context->>'closure_status', ''), 'open') = $1)
+         ORDER BY created_at DESC
+         LIMIT $2",
+    )
+    .bind(closure_status.as_str())
+    .bind(i64::from(limit))
+    .fetch_all(&state.db)
+    .await?;
+
+    let summary: SetupActivationFeedbackListSummaryRow = sqlx::query_as(
+        "SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (
+                WHERE COALESCE(NULLIF(context->>'closure_status', ''), 'open') = 'open'
+            ) AS open,
+            COUNT(*) FILTER (
+                WHERE COALESCE(NULLIF(context->>'closure_status', ''), 'open') = 'in_progress'
+            ) AS in_progress,
+            COUNT(*) FILTER (
+                WHERE COALESCE(NULLIF(context->>'closure_status', ''), 'open') = 'resolved'
+            ) AS resolved
+         FROM setup_activation_feedback_events",
+    )
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(SetupActivationFeedbackListResponse {
+        summary: SetupActivationFeedbackListSummary {
+            total: summary.total,
+            open: summary.open,
+            in_progress: summary.in_progress,
+            resolved: summary.resolved,
+        },
+        items,
+    }))
+}
+
 async fn capture_setup_activation_feedback(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -659,6 +782,71 @@ async fn capture_setup_activation_feedback(
         comment,
         created_at: record.1,
     }))
+}
+
+async fn update_setup_activation_feedback_closure(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(payload): Json<SetupActivationFeedbackClosureRequest>,
+) -> AppResult<Json<SetupActivationFeedbackResponse>> {
+    let actor = resolve_auth_user(&state, &headers).await?;
+    let closure_status = normalize_activation_feedback_closure_status(payload.closure_status)?;
+    let owner_ref = trim_optional(payload.owner_ref, MAX_ACTIVATION_FEEDBACK_OWNER_LEN);
+    let note = trim_optional(payload.note, MAX_ACTIVATION_FEEDBACK_NOTE_LEN);
+    let now = Utc::now();
+
+    let mut patch = JsonMap::new();
+    patch.insert(
+        "closure_status".to_string(),
+        Value::String(closure_status.clone()),
+    );
+    patch.insert(
+        "closure_updated_at".to_string(),
+        Value::String(now.to_rfc3339()),
+    );
+    patch.insert("owner_ref".to_string(), owner_ref.clone().map(Value::String).unwrap_or(Value::Null));
+    patch.insert("closure_note".to_string(), note.clone().map(Value::String).unwrap_or(Value::Null));
+    if closure_status == "resolved" {
+        patch.insert("closed_at".to_string(), Value::String(now.to_rfc3339()));
+    } else {
+        patch.insert("closed_at".to_string(), Value::Null);
+    }
+    let patch_value = Value::Object(patch);
+
+    let updated: Option<SetupActivationFeedbackResponse> = sqlx::query_as(
+        "UPDATE setup_activation_feedback_events
+         SET context = jsonb_strip_nulls(context || $2::jsonb)
+         WHERE id = $1
+         RETURNING id, actor, step_key, template_key, feedback_kind, comment, created_at",
+    )
+    .bind(id)
+    .bind(patch_value.clone())
+    .fetch_optional(&state.db)
+    .await?;
+
+    let item =
+        updated.ok_or_else(|| AppError::NotFound(format!("activation feedback {id} not found")))?;
+
+    write_audit_log_best_effort(
+        &state.db,
+        AuditLogWriteInput {
+            actor,
+            action: "setup.activation.feedback.closure.update".to_string(),
+            target_type: "setup_activation_feedback".to_string(),
+            target_id: Some(id.to_string()),
+            result: "success".to_string(),
+            message: note,
+            metadata: json!({
+                "closure_status": closure_status,
+                "owner_ref": owner_ref,
+                "patch": patch_value,
+            }),
+        },
+    )
+    .await;
+
+    Ok(Json(item))
 }
 
 async fn list_setup_templates(
@@ -2225,6 +2413,36 @@ fn normalize_activation_feedback_kind(raw: &str) -> AppResult<String> {
     }
 }
 
+fn normalize_activation_feedback_limit(raw: Option<u32>) -> u32 {
+    raw.unwrap_or(DEFAULT_ACTIVATION_FEEDBACK_LIMIT)
+        .clamp(1, MAX_ACTIVATION_FEEDBACK_LIMIT)
+}
+
+fn normalize_activation_feedback_closure_status_query(raw: Option<String>) -> AppResult<String> {
+    let normalized = raw
+        .unwrap_or_else(|| "all".to_string())
+        .trim()
+        .to_ascii_lowercase()
+        .replace(' ', "_");
+    match normalized.as_str() {
+        "all" | "open" | "in_progress" | "resolved" => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "feedback closure_status must be one of: all, open, in_progress, resolved"
+                .to_string(),
+        )),
+    }
+}
+
+fn normalize_activation_feedback_closure_status(raw: String) -> AppResult<String> {
+    let normalized = raw.trim().to_ascii_lowercase().replace(' ', "_");
+    match normalized.as_str() {
+        "open" | "in_progress" | "resolved" => Ok(normalized),
+        _ => Err(AppError::Validation(
+            "feedback closure_status must be one of: open, in_progress, resolved".to_string(),
+        )),
+    }
+}
+
 impl From<&SetupTemplateRow> for SetupTemplateCatalogItem {
     fn from(row: &SetupTemplateRow) -> Self {
         Self {
@@ -3410,7 +3628,8 @@ mod tests {
     use serde_json::{Map as JsonMap, Value, json};
 
     use super::{
-        SetupActivationItem, derive_activation_overall_status, parse_rollback_hints,
+        SetupActivationItem, derive_activation_overall_status, normalize_activation_feedback_closure_status,
+        normalize_activation_feedback_closure_status_query, parse_rollback_hints,
         recommend_setup_profile_key, select_next_activation_item_key,
         summarize_activation_items, validate_identity_template_params,
         validate_monitoring_template_params, validate_notification_template_params,
@@ -3540,5 +3759,40 @@ mod tests {
     fn rollback_hint_parser_ignores_blank_items() {
         let parsed = parse_rollback_hints(&json!(["step-a", " ", "", "step-b"]));
         assert_eq!(parsed, vec!["step-a".to_string(), "step-b".to_string()]);
+    }
+
+    #[test]
+    fn activation_feedback_closure_status_accepts_supported_values() {
+        assert_eq!(
+            normalize_activation_feedback_closure_status("open".to_string()).expect("open"),
+            "open"
+        );
+        assert_eq!(
+            normalize_activation_feedback_closure_status("in progress".to_string())
+                .expect("in progress"),
+            "in_progress"
+        );
+        assert_eq!(
+            normalize_activation_feedback_closure_status("resolved".to_string())
+                .expect("resolved"),
+            "resolved"
+        );
+        assert!(normalize_activation_feedback_closure_status("closed".to_string()).is_err());
+    }
+
+    #[test]
+    fn activation_feedback_closure_status_query_defaults_to_all() {
+        assert_eq!(
+            normalize_activation_feedback_closure_status_query(None).expect("default"),
+            "all"
+        );
+        assert_eq!(
+            normalize_activation_feedback_closure_status_query(Some("OPEN".to_string()))
+                .expect("open"),
+            "open"
+        );
+        assert!(
+            normalize_activation_feedback_closure_status_query(Some("invalid".to_string())).is_err()
+        );
     }
 }

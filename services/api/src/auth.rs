@@ -736,6 +736,16 @@ mod tests {
             "ops.setup.read",
         );
         assert_permission(
+            Method::GET,
+            "/api/v1/setup/activation/feedback",
+            "ops.setup.read",
+        );
+        assert_permission(
+            Method::POST,
+            "/api/v1/setup/activation/feedback/1/closure",
+            "ops.setup.write",
+        );
+        assert_permission(
             Method::POST,
             "/api/v1/setup/templates/identity-safe-baseline/preview",
             "ops.setup.write",
@@ -763,9 +773,11 @@ mod tests {
         assert_permission(Method::GET, "/setup/preflight", "ops.setup.read");
         assert_permission(Method::GET, "/activation", "ops.setup.read");
         assert_permission(Method::GET, "/activation/starter-templates", "ops.setup.read");
+        assert_permission(Method::GET, "/activation/feedback", "ops.setup.read");
         assert_permission(Method::GET, "/profiles", "ops.setup.read");
         assert_permission(Method::GET, "/profiles/history", "ops.setup.read");
         assert_permission(Method::POST, "/activation/feedback", "ops.setup.read");
+        assert_permission(Method::POST, "/activation/feedback/1/closure", "ops.setup.write");
         assert_permission(
             Method::POST,
             "/profiles/smb-small-office/preview",
@@ -1652,6 +1664,16 @@ mod tests {
                 Method::POST,
                 "/api/v1/setup/activation/feedback",
                 "ops.setup.read",
+            ),
+            (
+                Method::GET,
+                "/api/v1/setup/activation/feedback",
+                "ops.setup.read",
+            ),
+            (
+                Method::POST,
+                "/api/v1/setup/activation/feedback/1/closure",
+                "ops.setup.write",
             ),
             (
                 Method::POST,

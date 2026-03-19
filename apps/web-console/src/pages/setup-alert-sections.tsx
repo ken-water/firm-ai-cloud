@@ -229,8 +229,11 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     refreshAlertPolicies,
     refreshSetupWizard,
     loadSetupActivation,
+    loadSetupActivationFeedbackLoop,
     submitSetupActivationFeedback,
+    updateSetupActivationFeedbackClosure,
     runningSetupActivationFeedbackKey,
+    updatingSetupActivationFeedbackId,
     runningSetupTemplateApply,
     runningSetupTemplatePreview,
     runningSetupProfileApply,
@@ -255,6 +258,7 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     setupChecklist,
     setupCompleted,
     setupActivation,
+    setupActivationFeedbackLoop,
     setupActivationNotice,
     setupActivationStarterTemplates,
     setupNotice,
@@ -272,6 +276,7 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
     setupPreflight,
     setupStep,
     setupTemplates,
+    loadingSetupActivationFeedbackLoop,
     t,
     revertSetupProfileRun,
     toggleAlertPolicyEnabled,
@@ -288,6 +293,22 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
   const preflight = setupPreflight as SetupChecklistResponse | null;
   const checklist = setupChecklist as SetupChecklistResponse | null;
   const activation = setupActivation as SetupActivationResponse | null;
+  const activationFeedbackLoop = setupActivationFeedbackLoop as {
+    summary: { total: number; open: number; in_progress: number; resolved: number };
+    items: Array<{
+      id: number;
+      actor: string;
+      step_key: string;
+      template_key: string | null;
+      feedback_kind: string;
+      comment: string | null;
+      closure_status: "open" | "in_progress" | "resolved";
+      owner_ref: string | null;
+      closure_note: string | null;
+      closure_updated_at: string | null;
+      created_at: string;
+    }>;
+  } | null;
   const starterTemplates = setupActivationStarterTemplates as SetupActivationStarterTemplateCatalogResponse | null;
   const checklistByKey = new Map<string, SetupCheckItem>(
     (checklist?.checks ?? []).map((item) => [item.key, item])
@@ -440,7 +461,12 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
                 </p>
               </div>
               <button
-                onClick={() => void loadSetupActivation()}
+                onClick={() => {
+                  void Promise.all([
+                    loadSetupActivation(),
+                    loadSetupActivationFeedbackLoop()
+                  ]);
+                }}
                 disabled={loadingSetupActivation}
               >
                 {loadingSetupActivation ? "Refreshing..." : "Refresh activation"}
@@ -587,7 +613,19 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
                               item.item_key,
                               draft.feedback_kind,
                               draft.comment,
-                              draft.template_key || null
+                              draft.template_key || null,
+                              {
+                                category: "activation_pilot",
+                                severity: draft.feedback_kind === "blocked"
+                                  ? "high"
+                                  : draft.feedback_kind === "confused"
+                                    ? "medium"
+                                    : "low",
+                                module: "setup_activation",
+                                expected_value: item.recommended_action?.label ?? item.summary,
+                                item_status: item.status,
+                                item_title: item.title
+                              }
                             ).then((result: any) => {
                               if (result) {
                                 setActivationFeedbackDraft(item.item_key, { comment: "" });
@@ -601,6 +639,82 @@ export function SetupAlertSections(rawProps: Record<string, unknown>) {
                       </div>
                     );
                   })}
+                </div>
+                <div className="detail-panel" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
+                  <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <h3 style={{ marginTop: 0, marginBottom: "0.35rem", fontSize: "1rem" }}>Pilot feedback loop</h3>
+                      <p className="section-note" style={{ marginBottom: 0 }}>
+                        Structured feedback queue with closure status tracking for follow-up.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => void loadSetupActivationFeedbackLoop()}
+                      disabled={loadingSetupActivationFeedbackLoop}
+                    >
+                      {loadingSetupActivationFeedbackLoop ? "Refreshing..." : "Refresh loop"}
+                    </button>
+                  </div>
+                  {!activationFeedbackLoop ? (
+                    <p className="inline-note" style={{ marginTop: "0.6rem" }}>
+                      {loadingSetupActivationFeedbackLoop ? "Loading feedback loop..." : "No feedback loop snapshot loaded yet."}
+                    </p>
+                  ) : (
+                    <>
+                      <div className="toolbar-row" style={{ marginTop: "0.6rem", marginBottom: "0.6rem", gap: "0.7rem", flexWrap: "wrap" }}>
+                        <span className="status-chip">total={activationFeedbackLoop.summary.total}</span>
+                        <span className="status-chip status-chip-danger">open={activationFeedbackLoop.summary.open}</span>
+                        <span className="status-chip status-chip-warn">in_progress={activationFeedbackLoop.summary.in_progress}</span>
+                        <span className="status-chip status-chip-success">resolved={activationFeedbackLoop.summary.resolved}</span>
+                      </div>
+                      <div style={{ display: "grid", gap: "0.5rem" }}>
+                        {(activationFeedbackLoop.items ?? []).slice(0, 12).map((entry) => (
+                          <div key={`activation-feedback-loop-${entry.id}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                            <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                              <div>
+                                <strong>#{entry.id} {entry.step_key}</strong>
+                                <div className="inline-note">
+                                  {entry.feedback_kind} | actor={entry.actor} | created={entry.created_at}
+                                </div>
+                              </div>
+                              <span
+                                className={`status-chip ${
+                                  entry.closure_status === "resolved"
+                                    ? "status-chip-success"
+                                    : entry.closure_status === "in_progress"
+                                      ? "status-chip-warn"
+                                      : "status-chip-danger"
+                                }`}
+                              >
+                                {entry.closure_status}
+                              </span>
+                            </div>
+                            {entry.comment && <p className="section-note" style={{ margin: "0.45rem 0" }}>{entry.comment}</p>}
+                            <div className="toolbar-row" style={{ gap: "0.45rem", flexWrap: "wrap" }}>
+                              <button
+                                onClick={() => void updateSetupActivationFeedbackClosure(entry.id, "in_progress")}
+                                disabled={updatingSetupActivationFeedbackId === entry.id || entry.closure_status === "in_progress"}
+                              >
+                                In progress
+                              </button>
+                              <button
+                                onClick={() => void updateSetupActivationFeedbackClosure(entry.id, "resolved")}
+                                disabled={updatingSetupActivationFeedbackId === entry.id || entry.closure_status === "resolved"}
+                              >
+                                Mark resolved
+                              </button>
+                              <button
+                                onClick={() => void updateSetupActivationFeedbackClosure(entry.id, "open")}
+                                disabled={updatingSetupActivationFeedbackId === entry.id || entry.closure_status === "open"}
+                              >
+                                Reopen
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               </>
             )}

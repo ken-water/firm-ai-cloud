@@ -2477,6 +2477,25 @@ type SetupActivationFeedbackResponse = {
   created_at: string;
 };
 
+type SetupActivationFeedbackListItem = SetupActivationFeedbackResponse & {
+  closure_status: "open" | "in_progress" | "resolved";
+  owner_ref: string | null;
+  closure_note: string | null;
+  closure_updated_at: string | null;
+  closed_at: string | null;
+  context: Record<string, unknown>;
+};
+
+type SetupActivationFeedbackListResponse = {
+  summary: {
+    total: number;
+    open: number;
+    in_progress: number;
+    resolved: number;
+  };
+  items: SetupActivationFeedbackListItem[];
+};
+
 type SetupTemplateSchemaField = {
   key: string;
   label: string;
@@ -3586,11 +3605,14 @@ export function App() {
   const [setupActivation, setSetupActivation] = useState<SetupActivationResponse | null>(null);
   const [setupActivationStarterTemplates, setSetupActivationStarterTemplates] =
     useState<SetupActivationStarterTemplateCatalogResponse | null>(null);
+  const [setupActivationFeedbackLoop, setSetupActivationFeedbackLoop] =
+    useState<SetupActivationFeedbackListResponse | null>(null);
   const [loadingSetupPreflight, setLoadingSetupPreflight] = useState(false);
   const [loadingSetupChecklist, setLoadingSetupChecklist] = useState(false);
   const [loadingSetupActivation, setLoadingSetupActivation] = useState(false);
   const [loadingSetupActivationStarterTemplates, setLoadingSetupActivationStarterTemplates] =
     useState(false);
+  const [loadingSetupActivationFeedbackLoop, setLoadingSetupActivationFeedbackLoop] = useState(false);
   const [setupTemplates, setSetupTemplates] = useState<SetupTemplateCatalogItem[]>([]);
   const [loadingSetupTemplates, setLoadingSetupTemplates] = useState(false);
   const [selectedSetupTemplateKey, setSelectedSetupTemplateKey] = useState("");
@@ -3615,6 +3637,7 @@ export function App() {
   const [setupProfileNotice, setSetupProfileNotice] = useState<string | null>(null);
   const [setupActivationNotice, setSetupActivationNotice] = useState<string | null>(null);
   const [runningSetupActivationFeedbackKey, setRunningSetupActivationFeedbackKey] = useState<string | null>(null);
+  const [updatingSetupActivationFeedbackId, setUpdatingSetupActivationFeedbackId] = useState<number | null>(null);
   const [setupStep, setSetupStep] = useState(0);
   const [setupCompleted, setSetupCompleted] = useState(false);
   const [setupNotice, setSetupNotice] = useState<string | null>(null);
@@ -8196,6 +8219,26 @@ export function App() {
     }
   }, []);
 
+  const loadSetupActivationFeedbackLoop = useCallback(async () => {
+    setLoadingSetupActivationFeedbackLoop(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/setup/activation/feedback?limit=50`);
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      const payload: SetupActivationFeedbackListResponse = await response.json();
+      setSetupActivationFeedbackLoop(payload);
+      return payload;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      setSetupActivationFeedbackLoop(null);
+      return null;
+    } finally {
+      setLoadingSetupActivationFeedbackLoop(false);
+    }
+  }, []);
+
   const refreshSetupWizard = useCallback(async () => {
     setSetupNotice(null);
     setSetupTemplateNotice(null);
@@ -8204,6 +8247,7 @@ export function App() {
     await Promise.all([
       loadSetupActivation(),
       loadSetupActivationStarterTemplates(),
+      loadSetupActivationFeedbackLoop(),
       loadSetupPreflight(),
       loadSetupChecklist(),
       loadSetupTemplates(),
@@ -8212,6 +8256,7 @@ export function App() {
     ]);
   }, [
     loadSetupActivation,
+    loadSetupActivationFeedbackLoop,
     loadSetupActivationStarterTemplates,
     loadSetupChecklist,
     loadSetupPreflight,
@@ -8237,7 +8282,8 @@ export function App() {
     stepKey: string,
     feedbackKind: "blocked" | "confused" | "not_applicable",
     comment: string,
-    templateKey?: string | null
+    templateKey?: string | null,
+    contextPatch?: Record<string, unknown>
   ) => {
     const normalizedStepKey = stepKey.trim();
     if (!normalizedStepKey) {
@@ -8259,7 +8305,8 @@ export function App() {
           feedback_kind: feedbackKind,
           comment: trimToNull(comment),
           context: {
-            source: "setup_activation_workspace"
+            source: "setup_activation_workspace",
+            ...(contextPatch ?? {})
           }
         })
       });
@@ -8270,6 +8317,7 @@ export function App() {
       setSetupActivationNotice(
         `Activation feedback captured for ${payload.step_key}: ${payload.feedback_kind}.`
       );
+      void loadSetupActivationFeedbackLoop();
       return payload;
     } catch (err) {
       setError(err instanceof Error ? err.message : "unknown error");
@@ -8277,7 +8325,42 @@ export function App() {
     } finally {
       setRunningSetupActivationFeedbackKey(null);
     }
-  }, []);
+  }, [loadSetupActivationFeedbackLoop]);
+
+  const updateSetupActivationFeedbackClosure = useCallback(async (
+    id: number,
+    closureStatus: "open" | "in_progress" | "resolved",
+    note?: string
+  ) => {
+    setUpdatingSetupActivationFeedbackId(id);
+    setSetupActivationNotice(null);
+    setError(null);
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/api/v1/setup/activation/feedback/${id}/closure`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          closure_status: closureStatus,
+          owner_ref: "setup-operator",
+          note: trimToNull(note ?? "")
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response));
+      }
+      await response.json();
+      setSetupActivationNotice(`Feedback #${id} updated to ${closureStatus}.`);
+      await loadSetupActivationFeedbackLoop();
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "unknown error");
+      return false;
+    } finally {
+      setUpdatingSetupActivationFeedbackId(null);
+    }
+  }, [loadSetupActivationFeedbackLoop]);
 
   const setSetupTemplateParam = useCallback((key: string, value: string) => {
     setSetupTemplateParamsDraft((prev) => ({
@@ -12370,6 +12453,7 @@ export function App() {
     loadingAlerts,
     loadingAlertPolicies,
     loadingSetupActivation,
+    loadingSetupActivationFeedbackLoop,
     loadingSetupActivationStarterTemplates,
     loadingSetupChecklist,
     loadingSetupPreflight,
@@ -12384,10 +12468,13 @@ export function App() {
     refreshAlertPolicies: loadAlertPolicies,
     refreshSetupWizard,
     loadSetupActivation,
+    loadSetupActivationFeedbackLoop,
     submitSetupActivationFeedback,
+    updateSetupActivationFeedbackClosure,
     runningSetupTemplateApply,
     runningSetupTemplatePreview,
     runningSetupActivationFeedbackKey,
+    updatingSetupActivationFeedbackId,
     runningSetupProfileApply,
     runningSetupProfilePreview,
     runningSetupProfileRevertId,
@@ -12410,6 +12497,7 @@ export function App() {
     setupChecklist,
     setupCompleted,
     setupActivation,
+    setupActivationFeedbackLoop,
     setupActivationNotice,
     setupActivationStarterTemplates,
     setupNotice,
