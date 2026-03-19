@@ -171,6 +171,7 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.23 release gate checklist](docs/68-v0.1.23-release-gate-checklist.md)
 - [v0.1.24 demo readiness IA + visual cockpit + topology clarity plan](docs/69-v0.1.24-demo-readiness-ia-visual-plan.md)
 - [v0.1.24 release gate checklist](docs/70-v0.1.24-release-gate-checklist.md)
+- [v0.1.24 demo scenario pack](docs/71-v0.1.24-demo-scenario-pack.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
