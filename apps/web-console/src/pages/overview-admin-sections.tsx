@@ -83,6 +83,32 @@ const DASHBOARD_ROLE_TEMPLATES: Array<{
   }
 ];
 
+const DASHBOARD_ROLE_SCENE_META: Record<
+  DashboardTemplateKey,
+  { focus: string; flow: string; href: string }
+> = {
+  operator: {
+    focus: "Incident and daily follow-up pressure.",
+    flow: "Observe -> Operate",
+    href: "#/overview"
+  },
+  admin: {
+    focus: "Global posture and governance health.",
+    flow: "Observe -> Assets -> Operate",
+    href: "#/overview"
+  },
+  network: {
+    focus: "Topology dependency and source reachability.",
+    flow: "Observe -> Topology",
+    href: "#/topology"
+  },
+  business: {
+    focus: "Capacity impact and escalation risk.",
+    flow: "Assets -> Operate",
+    href: "#/overview"
+  }
+};
+
 function buildDefaultDashboardLayout(): DashboardWidgetLayout[] {
   return DASHBOARD_WIDGETS.map((item, index) => ({
     key: item.key,
@@ -479,6 +505,14 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     return parseDashboardLayout(window.localStorage.getItem(DASHBOARD_LAYOUT_STORAGE_KEY));
   });
   const [selectedDashboardTemplate, setSelectedDashboardTemplate] = useState<DashboardTemplateKey>("operator");
+  const roleSceneStatus = useMemo(() => {
+    const enabledCount = dashboardLayout.filter((item) => item.enabled).length;
+    const scene = DASHBOARD_ROLE_SCENE_META[selectedDashboardTemplate];
+    return {
+      enabledCount,
+      scene
+    };
+  }, [dashboardLayout, selectedDashboardTemplate]);
   const dashboardWidgets = useMemo(() => {
     const detailByKey = new Map(DASHBOARD_WIDGETS.map((item) => [item.key, item]));
     return [...dashboardLayout]
@@ -856,6 +890,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     const next = buildDefaultDashboardLayout();
     persistDashboardLayout(next);
     setDashboardLayout(next);
+    setSelectedDashboardTemplate("operator");
   };
   const applyDashboardTemplate = (templateKey: DashboardTemplateKey) => {
     const next = buildDashboardTemplateLayout(templateKey);
@@ -959,6 +994,31 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           <p className="section-note" style={{ marginTop: 0 }}>
             Module-first entry with configurable widgets for quick risk/owner/action visibility.
           </p>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Role cockpit quick scenes</h3>
+              <span className="inline-note">active_scene={selectedDashboardTemplate}</span>
+            </div>
+            <p className="inline-note" style={{ marginBottom: "0.45rem" }}>
+              focus={roleSceneStatus.scene.focus} | flow={roleSceneStatus.scene.flow} | enabled_widgets={roleSceneStatus.enabledCount}
+            </p>
+            <div className="toolbar-row" style={{ flexWrap: "wrap" }}>
+              {DASHBOARD_ROLE_TEMPLATES.map((template) => (
+                <button
+                  key={`quick-scene-${template.key}`}
+                  onClick={() => {
+                    applyDashboardTemplate(template.key);
+                    if (typeof window !== "undefined") {
+                      window.location.hash = DASHBOARD_ROLE_SCENE_META[template.key].href;
+                    }
+                  }}
+                  style={selectedDashboardTemplate === template.key ? { fontWeight: 700 } : undefined}
+                >
+                  Scene {template.title}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
             <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
               <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>KPI first-glance strip</h3>
