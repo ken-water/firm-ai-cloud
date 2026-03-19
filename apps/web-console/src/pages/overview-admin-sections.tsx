@@ -545,6 +545,55 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       }
     ];
   }, [assetStats, dailyOpsBriefing, monitoringOverview, runbookRiskAlerts, ticketEscalationQueue, topologyMap]);
+  const moduleEntryGroups = useMemo(() => {
+    const cardByKey = new Map(moduleStatusCards.map((item) => [item.key, item]));
+    return [
+      {
+        key: "observe",
+        label: "Observe",
+        description: "Start with current risk and system health.",
+        items: [
+          { key: "overview", step: "Check overdue and blocked follow-up first." },
+          { key: "monitoring", step: "Confirm source/alert pressure." },
+          { key: "topology", step: "Review topology impact and dependency risk." }
+        ]
+      },
+      {
+        key: "operate",
+        label: "Operate",
+        description: "Move from risk signals to owner action.",
+        items: [
+          { key: "tickets", step: "Clear escalation queue with ownership." },
+          { key: "workflow", step: "Process workflow/runbook risk follow-up." }
+        ]
+      },
+      {
+        key: "assets",
+        label: "Assets",
+        description: "Validate resource posture and business bindings.",
+        items: [
+          { key: "cmdb", step: "Inspect asset capacity and unbound items." }
+        ]
+      }
+    ].map((group) => ({
+      ...group,
+      items: group.items
+        .map((item) => {
+          const card = cardByKey.get(item.key);
+          if (!card) {
+            return null;
+          }
+          return {
+            ...item,
+            label: card.label,
+            risk: card.risk,
+            summary: card.summary,
+            href: card.href
+          };
+        })
+        .filter(Boolean)
+    }));
+  }, [moduleStatusCards]);
   const handoffFocusItems = useMemo(() => {
     const rows: Array<{
       key: string;
@@ -771,6 +820,46 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
               Refresh cockpit
             </button>
             <button onClick={resetDashboardLayout}>Reset widget layout</button>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Module entry map</h3>
+              <span className="inline-note">Entry order: Observe {"->"} Operate {"->"} Assets</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "0.6rem" }}>
+              {moduleEntryGroups.map((group: any) => (
+                <div key={`module-entry-group-${group.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                  <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                    <strong>{group.label}</strong>
+                    <span className="inline-note">{group.items.length} modules</span>
+                  </div>
+                  <p className="inline-note" style={{ marginBottom: "0.45rem" }}>{group.description}</p>
+                  <div style={{ display: "grid", gap: "0.45rem" }}>
+                    {group.items.map((item: any) => (
+                      <div key={`module-entry-item-${group.key}-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                        <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                          <span>{item.label}</span>
+                          <span className={`status-chip ${item.risk > 0 ? "status-chip-danger" : "status-chip-success"}`}>
+                            risk={item.risk}
+                          </span>
+                        </div>
+                        <p className="inline-note">{item.summary}</p>
+                        <p className="inline-note">{item.step}</p>
+                        <button
+                          onClick={() => {
+                            if (typeof window !== "undefined") {
+                              window.location.hash = item.href;
+                            }
+                          }}
+                        >
+                          Open {item.label}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
             <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: "0.45rem" }}>Dashboard studio v1 (role templates)</h3>
