@@ -856,6 +856,26 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     );
     return rows.slice(0, 12);
   }, [aiEvidenceResponse, businessTopologyOverview, dailyOpsClosureContinuity, workflowOrgBaseline]);
+  const aiFollowupIntentCards = useMemo(() => {
+    const actions = aiEvidenceResponse?.guided_actions ?? [];
+    return actions.map((action: any, index: number) => {
+      const requiresWrite = Boolean(action.requires_write);
+      const blockedByPermission = requiresWrite && !canWriteCmdb;
+      const status = blockedByPermission
+        ? "blocked"
+        : action.blocked_reason
+          ? "guarded"
+          : "ready";
+      return {
+        key: action.action_key ?? `intent-${index}`,
+        intent: action.label ?? action.action_key ?? `intent-${index}`,
+        evidenceRefs: (action.evidence_refs ?? []).join(", ") || "-",
+        nextAction: action.href || action.api_path || "review evidence",
+        guard: action.safety_boundary || "read_only",
+        status
+      };
+    });
+  }, [aiEvidenceResponse, canWriteCmdb]);
 
   const updateDashboardLayout = (updater: (prev: DashboardWidgetLayout[]) => DashboardWidgetLayout[]) => {
     setDashboardLayout((prev) => {
@@ -1755,6 +1775,31 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                     .filter((value: string, index: number, arr: string[]) => arr.indexOf(value) === index)
                     .join(", ")}
                 </p>
+                <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                  <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                    <strong>AI follow-up intent cards</strong>
+                    <span className="inline-note">deterministic mapping: intent {"->"} evidence {"->"} action {"->"} guard</span>
+                  </div>
+                  {aiFollowupIntentCards.length === 0 ? (
+                    <p className="inline-note">No follow-up intent card is available for current evidence scope.</p>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.55rem" }}>
+                      {aiFollowupIntentCards.slice(0, 8).map((item: any) => (
+                        <div key={`ai-followup-intent-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                          <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                            <strong>{item.intent}</strong>
+                            <span className={`status-chip ${item.status === "blocked" ? "status-chip-danger" : item.status === "guarded" ? "status-chip-warn" : "status-chip-success"}`}>
+                              {item.status}
+                            </span>
+                          </div>
+                          <p className="inline-note" style={{ marginBottom: "0.35rem" }}>evidence={item.evidenceRefs}</p>
+                          <p className="inline-note" style={{ marginBottom: "0.35rem" }}>next_action={item.nextAction}</p>
+                          <p className="inline-note">guard={item.guard}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <div style={{ overflowX: "auto", marginBottom: "0.55rem" }}>
                   <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
                     <thead>
