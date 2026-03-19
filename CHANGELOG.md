@@ -18,6 +18,30 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.26] - 2026-03-19
+
+### Added
+
+- v0.1.26 planning and release-gate documentation:
+  - `docs/74-v0.1.26-role-cockpit-ai-followup-plan.md`
+  - `docs/75-v0.1.26-release-gate-checklist.md`
+- v0.1.26 issue baseline and closure track: GitHub issues `#259` to `#264`.
+- Cockpit role quick scene switch baseline (`operator/admin/network/business`).
+- AI follow-up intent cards with deterministic evidence-to-action mapping.
+- Topology ownership follow-up lens with deterministic priority ranking.
+
+### Changed
+
+- Dashboard reset now restores active role scene to `operator` for deterministic behavior.
+- AI evidence panel now exposes follow-up intent cards before detailed guided-action table.
+- Release issue gate now enforces role-cockpit acceptance artifact metadata for `v0.1.26+`.
+
+### Fixed
+
+- Reduced role-based cockpit navigation friction in demo and daily workflows.
+- Reduced operator context switching from topology risk to ownership follow-up decisions.
+- Reduced release-governance drift by enforcing role-cockpit acceptance artifact checks.
+
 ## [0.1.25] - 2026-03-19
 
 ### Added
