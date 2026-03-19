@@ -109,6 +109,15 @@ const DASHBOARD_ROLE_SCENE_META: Record<
   }
 };
 
+const LARGE_SCREEN_SCENE_OPTIONS: Array<{ key: string; label: string; href: string }> = [
+  { key: "overview", label: "Overview cockpit", href: "#/overview" },
+  { key: "topology", label: "Topology workspace", href: "#/topology" },
+  { key: "monitoring", label: "Monitoring workspace", href: "#/monitoring" },
+  { key: "tickets", label: "Ticket queue", href: "#/tickets" },
+  { key: "workflow", label: "Workflow cockpit", href: "#/workflow" },
+  { key: "cmdb", label: "CMDB workspace", href: "#/cmdb" }
+];
+
 function buildDefaultDashboardLayout(): DashboardWidgetLayout[] {
   return DASHBOARD_WIDGETS.map((item, index) => ({
     key: item.key,
@@ -505,6 +514,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     return parseDashboardLayout(window.localStorage.getItem(DASHBOARD_LAYOUT_STORAGE_KEY));
   });
   const [selectedDashboardTemplate, setSelectedDashboardTemplate] = useState<DashboardTemplateKey>("operator");
+  const [screenPlaylistDraft, setScreenPlaylistDraft] = useState<string>("overview");
+  const [screenPlaylistIntervalSeconds, setScreenPlaylistIntervalSeconds] = useState<string>("30");
+  const [screenPlaylist, setScreenPlaylist] = useState<string[]>(["overview", "topology", "monitoring"]);
   const roleSceneStatus = useMemo(() => {
     const enabledCount = dashboardLayout.filter((item) => item.enabled).length;
     const scene = DASHBOARD_ROLE_SCENE_META[selectedDashboardTemplate];
@@ -513,6 +525,16 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       scene
     };
   }, [dashboardLayout, selectedDashboardTemplate]);
+  const screenPlaylistPreview = useMemo(() => {
+    const detailByKey = new Map(LARGE_SCREEN_SCENE_OPTIONS.map((item) => [item.key, item]));
+    return screenPlaylist
+      .map((key, index) => ({
+        key,
+        order: index + 1,
+        detail: detailByKey.get(key)
+      }))
+      .filter((item) => Boolean(item.detail));
+  }, [screenPlaylist]);
   const dashboardWidgets = useMemo(() => {
     const detailByKey = new Map(DASHBOARD_WIDGETS.map((item) => [item.key, item]));
     return [...dashboardLayout]
@@ -976,6 +998,20 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setDashboardLayout(next);
     setSelectedDashboardTemplate(templateKey);
   };
+  const addSceneToPlaylist = () => {
+    if (!screenPlaylistDraft) {
+      return;
+    }
+    setScreenPlaylist((prev) => (prev.includes(screenPlaylistDraft) ? prev : [...prev, screenPlaylistDraft]));
+  };
+  const removeSceneFromPlaylist = (sceneKey: string) => {
+    setScreenPlaylist((prev) => prev.filter((item) => item !== sceneKey));
+  };
+  const resetScenePlaylist = () => {
+    setScreenPlaylist(["overview", "topology", "monitoring"]);
+    setScreenPlaylistIntervalSeconds("30");
+    setScreenPlaylistDraft("overview");
+  };
 
   return (
     <>
@@ -1116,6 +1152,74 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 </button>
               ))}
             </div>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Large-screen scene playlist</h3>
+              <span className="inline-note">rotation_interval_seconds={screenPlaylistIntervalSeconds}</span>
+            </div>
+            <p className="inline-note" style={{ marginBottom: "0.45rem" }}>
+              Configure deterministic scene rotation order for large-screen playback.
+            </p>
+            <div className="filter-grid" style={{ marginBottom: "0.45rem" }}>
+              <label className="control-field">
+                <span>Scene</span>
+                <select value={screenPlaylistDraft} onChange={(event) => setScreenPlaylistDraft(event.target.value)}>
+                  {LARGE_SCREEN_SCENE_OPTIONS.map((item) => (
+                    <option key={`screen-scene-option-${item.key}`} value={item.key}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="control-field">
+                <span>Rotation interval (seconds)</span>
+                <input value={screenPlaylistIntervalSeconds} onChange={(event) => setScreenPlaylistIntervalSeconds(event.target.value)} />
+              </label>
+            </div>
+            <div className="toolbar-row" style={{ marginBottom: "0.5rem" }}>
+              <button onClick={addSceneToPlaylist}>Add scene</button>
+              <button onClick={resetScenePlaylist}>Reset playlist</button>
+            </div>
+            {screenPlaylistPreview.length === 0 ? (
+              <p className="inline-note">No scene in playlist.</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "760px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Order</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Scene</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Route</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {screenPlaylistPreview.map((item) => (
+                      <tr key={`screen-playlist-${item.key}`}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{item.order}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{item.detail?.label}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>{item.detail?.href}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>
+                          <div className="toolbar-row">
+                            <button
+                              onClick={() => {
+                                if (typeof window !== "undefined" && item.detail?.href) {
+                                  window.location.hash = item.detail.href;
+                                }
+                              }}
+                            >
+                              Preview
+                            </button>
+                            <button onClick={() => removeSceneFromPlaylist(item.key)}>Remove</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
             <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
