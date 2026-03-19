@@ -650,6 +650,66 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       }
     ];
   }, [aiEvidenceResponse, dailyOpsBriefing, handoverReadiness, monitoringOverview, ticketEscalationQueue, topologyBoard]);
+  const demoNarrativeCheckpoints = useMemo(() => {
+    const monitoringUnreachable = Number(monitoringOverview?.summary?.source_unreachable_total ?? 0);
+    const monitoringCritical = Number(monitoringOverview?.layers?.reduce((sum: number, layer: any) => {
+      return sum + Number(layer?.health?.critical ?? 0);
+    }, 0) ?? 0);
+    const topologyCritical = Number(topologyBoard?.summary?.critical_total ?? 0);
+    const topologyUnassigned = Number(topologyBoard?.summary?.unassigned_owner_total ?? 0);
+    const dailyOverdue = Number(dailyOpsBriefing?.summary?.overdue ?? 0);
+    const dailyBlocked = Number(dailyOpsBriefing?.summary?.blocked ?? 0);
+    const escalationQueue = Number((ticketEscalationQueue ?? []).length);
+    const guidedActions = Number((aiEvidenceResponse?.guided_actions ?? []).length);
+    const writeGuard = Boolean(aiEvidenceResponse?.safety?.write_guard_required ?? false);
+    return [
+      {
+        key: "scan-risk",
+        title: "1. Scan first-glance risk",
+        objective: "Establish whether current scope is stable in 30 seconds.",
+        evidence: `monitoring_critical=${monitoringUnreachable + monitoringCritical}, daily_pressure=${dailyOverdue + dailyBlocked}`,
+        action: "Open daily dashboard",
+        href: "#/overview",
+        status: monitoringUnreachable + monitoringCritical + dailyOverdue + dailyBlocked > 0 ? "attention" : "ready"
+      },
+      {
+        key: "monitoring",
+        title: "2. Validate monitoring signal quality",
+        objective: "Confirm critical/unreachable sources are understood before action.",
+        evidence: `unreachable=${monitoringUnreachable}, critical=${monitoringCritical}`,
+        action: "Open monitoring workspace",
+        href: "#/monitoring",
+        status: monitoringUnreachable + monitoringCritical > 0 ? "action" : "ready"
+      },
+      {
+        key: "topology",
+        title: "3. Trace topology impact",
+        objective: "Assess service dependency blast radius and owner coverage.",
+        evidence: `topology_critical=${topologyCritical}, owner_unassigned=${topologyUnassigned}`,
+        action: "Open topology workspace",
+        href: "#/topology",
+        status: topologyCritical > 0 || topologyUnassigned > 0 ? "attention" : "ready"
+      },
+      {
+        key: "ownership",
+        title: "4. Confirm owner/action queue",
+        objective: "Ensure escalation and blocked follow-up have explicit owners.",
+        evidence: `escalation_queue=${escalationQueue}, overdue=${dailyOverdue}, blocked=${dailyBlocked}`,
+        action: "Open tickets and follow-up",
+        href: "#/tickets",
+        status: escalationQueue > 0 || dailyOverdue + dailyBlocked > 0 ? "action" : "ready"
+      },
+      {
+        key: "copilot",
+        title: "5. Execute guided next action",
+        objective: "Use copilot evidence to move from analysis to safe execution.",
+        evidence: `guided_actions=${guidedActions}, write_guard=${String(writeGuard)}`,
+        action: "Open AI copilot",
+        href: "#/overview",
+        status: guidedActions > 0 ? "attention" : "ready"
+      }
+    ];
+  }, [aiEvidenceResponse, dailyOpsBriefing, monitoringOverview, ticketEscalationQueue, topologyBoard]);
   const topologyRiskLanes = useMemo(() => {
     const items = topologyBoard?.items ?? [];
     const lanes: Record<string, any[]> = {
@@ -903,6 +963,43 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   </div>
                   <p style={{ fontSize: "1.5rem", margin: "0.25rem 0 0.2rem 0", fontWeight: 700 }}>{item.value}</p>
                   <p className="inline-note">{item.note}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Demo narrative checkpoints</h3>
+              <span className="inline-note">Order: Scan {"->"} Validate {"->"} Trace {"->"} Assign {"->"} Execute</span>
+            </div>
+            <div style={{ display: "grid", gap: "0.55rem" }}>
+              {demoNarrativeCheckpoints.map((checkpoint) => (
+                <div key={`demo-checkpoint-${checkpoint.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                  <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <strong>{checkpoint.title}</strong>
+                    <span
+                      className={`status-chip ${
+                        checkpoint.status === "action"
+                          ? "status-chip-danger"
+                          : checkpoint.status === "attention"
+                            ? "status-chip-warn"
+                            : "status-chip-success"
+                      }`}
+                    >
+                      {checkpoint.status}
+                    </span>
+                  </div>
+                  <p className="inline-note" style={{ marginBottom: "0.35rem" }}>{checkpoint.objective}</p>
+                  <p className="inline-note" style={{ marginBottom: "0.5rem" }}>evidence: {checkpoint.evidence}</p>
+                  <button
+                    onClick={() => {
+                      if (typeof window !== "undefined") {
+                        window.location.hash = checkpoint.href;
+                      }
+                    }}
+                  >
+                    {checkpoint.action}
+                  </button>
                 </div>
               ))}
             </div>
