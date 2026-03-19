@@ -5,6 +5,7 @@ VERSION=""
 NOTES_FILE=""
 MIN_ENFORCED_VERSION="${MIN_ENFORCED_VERSION:-0.1.7}"
 MIN_DEMO_ACCEPTANCE_VERSION="${MIN_DEMO_ACCEPTANCE_VERSION:-0.1.25}"
+MIN_ROLE_COCKPIT_ACCEPTANCE_VERSION="${MIN_ROLE_COCKPIT_ACCEPTANCE_VERSION:-0.1.26}"
 
 log() {
   printf '[release-issues-gate] %s\n' "$*"
@@ -47,6 +48,11 @@ extract_issues_line() {
 extract_demo_acceptance_line() {
   local notes_file="$1"
   sed -n 's/^- Demo acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
+}
+
+extract_role_cockpit_acceptance_line() {
+  local notes_file="$1"
+  sed -n 's/^- Role cockpit acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
 }
 
 main() {
@@ -122,6 +128,20 @@ main() {
       [[ -n "${path_token}" ]] || continue
       [[ -f "${path_token}" ]] || fatal "demo acceptance artifact not found: ${path_token}"
     done <<< "${demo_paths}"
+  fi
+
+  if semver_ge "${VERSION}" "${MIN_ROLE_COCKPIT_ACCEPTANCE_VERSION}"; then
+    local role_raw role_paths
+    role_raw="$(extract_role_cockpit_acceptance_line "${NOTES_FILE}")"
+    [[ -n "${role_raw}" ]] || fatal "missing release metadata field: - Role cockpit acceptance artifacts: \`path1, path2\`"
+
+    role_paths="$(echo "${role_raw}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')"
+    [[ -n "${role_paths}" ]] || fatal "role cockpit acceptance artifacts list is empty in ${NOTES_FILE}"
+
+    while IFS= read -r path_token; do
+      [[ -n "${path_token}" ]] || continue
+      [[ -f "${path_token}" ]] || fatal "role cockpit acceptance artifact not found: ${path_token}"
+    done <<< "${role_paths}"
   fi
 
   log "OK: all listed GitHub issues are CLOSED for v${VERSION}"
