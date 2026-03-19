@@ -176,6 +176,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.25 release gate checklist](docs/73-v0.1.25-release-gate-checklist.md)
 - [v0.1.26 role cockpit + AI follow-up plan](docs/74-v0.1.26-role-cockpit-ai-followup-plan.md)
 - [v0.1.26 release gate checklist](docs/75-v0.1.26-release-gate-checklist.md)
+- [v0.1.27 visual system + UX acceleration plan](docs/76-v0.1.27-visual-ux-acceleration-plan.md)
+- [v0.1.27 release gate checklist](docs/77-v0.1.27-release-gate-checklist.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
