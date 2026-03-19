@@ -650,6 +650,42 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       }
     ];
   }, [aiEvidenceResponse, dailyOpsBriefing, handoverReadiness, monitoringOverview, ticketEscalationQueue, topologyBoard]);
+  const topologyRiskLanes = useMemo(() => {
+    const items = topologyBoard?.items ?? [];
+    const lanes: Record<string, any[]> = {
+      critical: [],
+      warning: [],
+      healthy: []
+    };
+    for (const item of items) {
+      const lane = item.risk_level === "critical"
+        ? "critical"
+        : item.risk_level === "warning"
+          ? "warning"
+          : "healthy";
+      lanes[lane].push(item);
+    }
+    return [
+      {
+        key: "critical",
+        label: "Critical lane",
+        severityClass: "status-chip-danger",
+        items: lanes.critical
+      },
+      {
+        key: "warning",
+        label: "Warning lane",
+        severityClass: "status-chip-warn",
+        items: lanes.warning
+      },
+      {
+        key: "healthy",
+        label: "Healthy lane",
+        severityClass: "status-chip-success",
+        items: lanes.healthy
+      }
+    ];
+  }, [topologyBoard]);
   const handoffFocusItems = useMemo(() => {
     const rows: Array<{
       key: string;
@@ -1300,6 +1336,33 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                       <span className="status-chip status-chip-warn">warning={topologyBoard.summary.warning_total}</span>
                       <span className="status-chip status-chip-danger">critical={topologyBoard.summary.critical_total}</span>
                       <span className="status-chip">owner_unassigned={topologyBoard.summary.unassigned_owner_total}</span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.55rem", marginBottom: "0.55rem" }}>
+                      {topologyRiskLanes.map((lane: any) => (
+                        <div key={`topology-lane-${lane.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                          <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                            <strong>{lane.label}</strong>
+                            <span className={`status-chip ${lane.severityClass}`}>services={lane.items.length}</span>
+                          </div>
+                          {lane.items.length === 0 ? (
+                            <p className="inline-note">No service in this lane.</p>
+                          ) : (
+                            <div style={{ display: "grid", gap: "0.35rem" }}>
+                              {lane.items.slice(0, 6).map((item: any) => (
+                                <div key={`topology-lane-item-${lane.key}-${item.board_key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                                  <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                                    <span>{item.business_service}</span>
+                                    <span className={`status-chip ${item.owner_state === "unassigned" ? "status-chip-warn" : "status-chip-success"}`}>
+                                      owner={item.owner_state}
+                                    </span>
+                                  </div>
+                                  <p className="inline-note">score={item.risk_score} | action={item.recommended_action}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                     {topologyBoard.items.length === 0 ? (
                       <p className="inline-note">No topology board item is available for current scope.</p>
