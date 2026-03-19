@@ -7,6 +7,7 @@
 - Release type: `major | minor | patch`
 - Git tag: `vX.Y.Z`
 - GitHub issues: `#123, #124`
+- Demo acceptance artifacts: `.run/<path>/summary.json, .run/<path>/artifact-index.json`
 
 ## Executive Summary
 

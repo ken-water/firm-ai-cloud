@@ -4,6 +4,7 @@ set -Eeuo pipefail
 VERSION=""
 NOTES_FILE=""
 MIN_ENFORCED_VERSION="${MIN_ENFORCED_VERSION:-0.1.7}"
+MIN_DEMO_ACCEPTANCE_VERSION="${MIN_DEMO_ACCEPTANCE_VERSION:-0.1.25}"
 
 log() {
   printf '[release-issues-gate] %s\n' "$*"
@@ -41,6 +42,11 @@ semver_ge() {
 extract_issues_line() {
   local notes_file="$1"
   sed -n 's/^- GitHub issues: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
+}
+
+extract_demo_acceptance_line() {
+  local notes_file="$1"
+  sed -n 's/^- Demo acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
 }
 
 main() {
@@ -103,6 +109,20 @@ main() {
     [[ -n "${state}" ]] || fatal "failed to query GitHub issue #${issue_number}"
     [[ "${state}" == "CLOSED" ]] || fatal "GitHub issue #${issue_number} is ${state}, expected CLOSED"
   done
+
+  if semver_ge "${VERSION}" "${MIN_DEMO_ACCEPTANCE_VERSION}"; then
+    local demo_raw demo_paths path_token
+    demo_raw="$(extract_demo_acceptance_line "${NOTES_FILE}")"
+    [[ -n "${demo_raw}" ]] || fatal "missing release metadata field: - Demo acceptance artifacts: \`path1, path2\`"
+
+    demo_paths="$(echo "${demo_raw}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')"
+    [[ -n "${demo_paths}" ]] || fatal "demo acceptance artifacts list is empty in ${NOTES_FILE}"
+
+    while IFS= read -r path_token; do
+      [[ -n "${path_token}" ]] || continue
+      [[ -f "${path_token}" ]] || fatal "demo acceptance artifact not found: ${path_token}"
+    done <<< "${demo_paths}"
+  fi
 
   log "OK: all listed GitHub issues are CLOSED for v${VERSION}"
 }
