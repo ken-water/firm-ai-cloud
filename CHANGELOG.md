@@ -18,6 +18,31 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.27] - 2026-03-20
+
+### Added
+
+- v0.1.27 planning and release-gate documentation:
+  - `docs/76-v0.1.27-visual-ux-acceleration-plan.md`
+  - `docs/77-v0.1.27-release-gate-checklist.md`
+- v0.1.27 issue baseline and closure track: GitHub issues `#265` to `#270`.
+- Overview cockpit additions:
+  - executive summary hero blocks,
+  - large-screen scene playlist baseline,
+  - role quick actions for compressed workflow entry.
+
+### Changed
+
+- Cockpit visual system baseline now has stronger section/card hierarchy with unified style tokens.
+- Role scene workflow now supports faster direct entry to high-frequency operational paths.
+- Release governance continues enforcing demo and role-cockpit acceptance artifact metadata.
+
+### Fixed
+
+- Reduced cockpit visual inconsistency and information hierarchy ambiguity.
+- Reduced stakeholder first-screen interpretation time.
+- Reduced click depth from overview to core workflows.
+
 ## [0.1.26] - 2026-03-19
 
 ### Added
