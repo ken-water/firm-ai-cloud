@@ -792,6 +792,29 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       }
     ];
   }, [topologyBoard]);
+  const topologyOwnershipFollowupLens = useMemo(() => {
+    const items = (topologyBoard?.items ?? []).map((item: any) => {
+      const unassignedPenalty = item.owner_state === "unassigned" ? 90 : 0;
+      const criticalBoost = item.risk_level === "critical" ? 120 : item.risk_level === "warning" ? 60 : 20;
+      const score = Number(item.risk_score ?? 0) + unassignedPenalty + criticalBoost;
+      return {
+        key: item.board_key,
+        service: item.business_service,
+        owner: item.owner_ref ?? "unassigned",
+        ownerState: item.owner_state,
+        riskLevel: item.risk_level,
+        score,
+        action: item.recommended_action,
+        summary: `critical_alerts=${item.critical_alert_total}, escalation_tickets=${item.escalation_ticket_total}, cross_site=${item.cross_site_edge_total}`
+      };
+    });
+    items.sort((left: any, right: any) =>
+      right.score - left.score
+      || left.service.localeCompare(right.service)
+      || left.key.localeCompare(right.key)
+    );
+    return items.slice(0, 12);
+  }, [topologyBoard]);
   const handoffFocusItems = useMemo(() => {
     const rows: Array<{
       key: string;
@@ -1586,6 +1609,57 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                         ))}
                       </div>
                     )}
+                    <div className="detail-panel" style={{ marginBottom: "0.55rem" }}>
+                      <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                        <strong>Topology ownership follow-up lens</strong>
+                        <span className="inline-note">priority: risk_score + owner_gap + risk_level boost</span>
+                      </div>
+                      {topologyOwnershipFollowupLens.length === 0 ? (
+                        <p className="inline-note">No topology ownership follow-up item for current scope.</p>
+                      ) : (
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                            <thead>
+                              <tr>
+                                <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Service</th>
+                                <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
+                                <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Risk</th>
+                                <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Priority</th>
+                                <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Follow-up</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {topologyOwnershipFollowupLens.map((item: any) => (
+                                <tr key={`topology-owner-followup-${item.key}`}>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    <div>{item.service}</div>
+                                    <div className="inline-note">{item.summary}</div>
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    <span className={`status-chip ${item.ownerState === "unassigned" ? "status-chip-warn" : "status-chip-success"}`}>
+                                      {item.owner}
+                                    </span>
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    <span className={`status-chip ${item.riskLevel === "critical" ? "status-chip-danger" : item.riskLevel === "warning" ? "status-chip-warn" : "status-chip-success"}`}>
+                                      {item.riskLevel}
+                                    </span>
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    <span className={`status-chip ${item.score >= 220 ? "status-chip-danger" : item.score >= 120 ? "status-chip-warn" : "status-chip-success"}`}>
+                                      {item.score}
+                                    </span>
+                                  </td>
+                                  <td style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left", verticalAlign: "top" }}>
+                                    {item.action}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
                   </>
                 )}
                 {businessTopologyOverview.items.length === 0 ? (
