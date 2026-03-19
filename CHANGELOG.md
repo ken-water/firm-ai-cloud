@@ -18,6 +18,29 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.24] - 2026-03-19
+
+### Added
+
+- v0.1.24 planning and release-gate documentation:
+  - `docs/69-v0.1.24-demo-readiness-ia-visual-plan.md`
+  - `docs/70-v0.1.24-release-gate-checklist.md`
+  - `docs/71-v0.1.24-demo-scenario-pack.md`
+- v0.1.24 issue baseline and closure track: GitHub issues `#247` to `#252`.
+- Demo scenario automation script:
+  - `scripts/qa-v0.1.24-demo-scenarios.sh`
+
+### Changed
+
+- Overview cockpit now provides module-first entry grouping (`Observe -> Operate -> Assets`) for clearer navigation.
+- Cockpit visual hierarchy now exposes KPI first-glance strip for 30-second risk scanning.
+- Topology board now includes risk lanes (`critical`, `warning`, `healthy`) with owner-state context.
+
+### Fixed
+
+- Customer demo flow no longer relies on presenter-only context stitching across modules.
+- Topology readability is improved for non-technical viewers through grouped lane presentation.
+
 ## [0.1.23] - 2026-03-18
 
 ### Added
