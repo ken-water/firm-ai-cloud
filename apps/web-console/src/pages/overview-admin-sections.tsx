@@ -813,6 +813,31 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       }
     ];
   }, [aiEvidenceResponse, dailyOpsBriefing, monitoringOverview, ticketEscalationQueue, topologyBoard]);
+  const roleQuickActions = useMemo(() => {
+    const presets: Record<DashboardTemplateKey, Array<{ label: string; href: string; note: string }>> = {
+      operator: [
+        { label: "Open monitoring triage", href: "#/monitoring", note: "critical/unreachable sources" },
+        { label: "Open escalation tickets", href: "#/tickets", note: "owner follow-up queue" },
+        { label: "Open workflow queue", href: "#/workflow", note: "approval and runbook tasks" }
+      ],
+      admin: [
+        { label: "Open global overview", href: "#/overview", note: "cross-domain posture" },
+        { label: "Open CMDB baseline", href: "#/cmdb", note: "capacity and binding posture" },
+        { label: "Open tickets", href: "#/tickets", note: "escalation governance" }
+      ],
+      network: [
+        { label: "Open topology workspace", href: "#/topology", note: "dependency and blast radius" },
+        { label: "Open monitoring health", href: "#/monitoring", note: "reachability and latency signals" },
+        { label: "Open overview", href: "#/overview", note: "cross-domain confirmation" }
+      ],
+      business: [
+        { label: "Open executive overview", href: "#/overview", note: "risk/owner/action rollups" },
+        { label: "Open topology follow-up", href: "#/topology", note: "service risk and owner gaps" },
+        { label: "Open ticket follow-up", href: "#/tickets", note: "customer-impact queue" }
+      ]
+    };
+    return presets[selectedDashboardTemplate];
+  }, [selectedDashboardTemplate]);
   const topologyRiskLanes = useMemo(() => {
     const items = topologyBoard?.items ?? [];
     const lanes: Record<string, any[]> = {
@@ -1150,6 +1175,29 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 >
                   Scene {template.title}
                 </button>
+              ))}
+            </div>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Role quick actions</h3>
+              <span className="inline-note">click-path compression for top workflows</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.55rem" }}>
+              {roleQuickActions.map((item) => (
+                <div key={`role-quick-action-${selectedDashboardTemplate}-${item.label}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                  <strong>{item.label}</strong>
+                  <p className="inline-note" style={{ marginBottom: "0.45rem" }}>{item.note}</p>
+                  <button
+                    onClick={() => {
+                      if (typeof window !== "undefined") {
+                        window.location.hash = item.href;
+                      }
+                    }}
+                  >
+                    Go now
+                  </button>
+                </div>
               ))}
             </div>
           </div>
