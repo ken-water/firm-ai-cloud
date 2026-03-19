@@ -18,6 +18,31 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.25] - 2026-03-19
+
+### Added
+
+- v0.1.25 planning and release-gate documentation:
+  - `docs/72-v0.1.25-demo-hardening-feedback-loop-plan.md`
+  - `docs/73-v0.1.25-release-gate-checklist.md`
+- v0.1.25 issue baseline and closure track: GitHub issues `#253` to `#258`.
+- Setup activation pilot-feedback loop APIs:
+  - `GET /api/v1/setup/activation/feedback`
+  - `POST /api/v1/setup/activation/feedback/{id}/closure`
+
+### Changed
+
+- Module cockpit now exposes ordered demo narrative checkpoints with evidence and direct module navigation actions.
+- KPI first-glance cards now include deterministic threshold rules and business-value narratives.
+- Setup activation feedback submission now records structured context for pilot analysis and follow-up.
+- Release issue gate now requires demo acceptance artifact metadata for `v0.1.25+`.
+
+### Fixed
+
+- Demo walkthrough consistency no longer relies on presenter-only memory of module order.
+- Pilot feedback follow-up state is now visible and updateable in-product via closure status workflow.
+- Release governance now fails fast when demo acceptance artifact references are missing or invalid.
+
 ## [0.1.24] - 2026-03-19
 
 ### Added
