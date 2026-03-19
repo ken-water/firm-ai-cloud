@@ -611,42 +611,54 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
         label: "Monitoring critical",
         value: monitoringUnreachable + monitoringCritical,
         note: `unreachable=${monitoringUnreachable}, critical=${monitoringCritical}`,
-        severity: monitoringUnreachable + monitoringCritical > 0 ? "danger" : "ok"
+        severity: monitoringUnreachable + monitoringCritical > 0 ? "danger" : "ok",
+        businessHint: "High value means service interruption risk and delayed incident detection.",
+        thresholdRule: "danger when unreachable + critical > 0; otherwise ok"
       },
       {
         key: "daily_ops",
         label: "Daily ops pressure",
         value: dailyOverdue + dailyBlocked,
         note: `overdue=${dailyOverdue}, blocked=${dailyBlocked}`,
-        severity: dailyOverdue + dailyBlocked > 0 ? "warn" : "ok"
+        severity: dailyOverdue + dailyBlocked > 0 ? "warn" : "ok",
+        businessHint: "High value means slower closure and higher compliance/ETA breach risk.",
+        thresholdRule: "warn when overdue + blocked > 0; otherwise ok"
       },
       {
         key: "ticket",
         label: "Ticket escalation queue",
         value: ticketEscalation,
         note: "high/critical open tickets",
-        severity: ticketEscalation > 0 ? "danger" : "ok"
+        severity: ticketEscalation > 0 ? "danger" : "ok",
+        businessHint: "High value indicates unresolved severe incidents that can impact customers.",
+        thresholdRule: "danger when escalation queue > 0; otherwise ok"
       },
       {
         key: "topology",
         label: "Topology critical services",
         value: topologyCritical,
         note: "topology-board critical",
-        severity: topologyCritical > 0 ? "danger" : "ok"
+        severity: topologyCritical > 0 ? "danger" : "ok",
+        businessHint: "High value means dependency blast radius risk across business services.",
+        thresholdRule: "danger when critical services > 0; otherwise ok"
       },
       {
         key: "handoff",
         label: "Handoff blocking items",
         value: handoffBlocking,
         note: `state=${handoverReadiness?.readiness_state ?? "unknown"}`,
-        severity: handoffBlocking > 0 ? "danger" : "ok"
+        severity: handoffBlocking > 0 ? "danger" : "ok",
+        businessHint: "High value means ownership continuity risk across shifts/departments.",
+        thresholdRule: "danger when blocking items > 0; otherwise ok"
       },
       {
         key: "copilot",
         label: "Copilot guided actions",
         value: guidedActions,
         note: `write_guard=${String(aiEvidenceResponse?.safety?.write_guard_required ?? false)}`,
-        severity: guidedActions > 0 ? "warn" : "ok"
+        severity: guidedActions > 0 ? "warn" : "ok",
+        businessHint: "Non-zero value means actionable optimization/remediation opportunities are available.",
+        thresholdRule: "warn when guided actions > 0; otherwise ok"
       }
     ];
   }, [aiEvidenceResponse, dailyOpsBriefing, handoverReadiness, monitoringOverview, ticketEscalationQueue, topologyBoard]);
@@ -963,6 +975,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   </div>
                   <p style={{ fontSize: "1.5rem", margin: "0.25rem 0 0.2rem 0", fontWeight: 700 }}>{item.value}</p>
                   <p className="inline-note">{item.note}</p>
+                  <p className="inline-note">{item.businessHint}</p>
+                  <p className="inline-note">rule: {item.thresholdRule}</p>
                 </div>
               ))}
             </div>
