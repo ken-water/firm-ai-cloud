@@ -6,6 +6,11 @@ export type NavigationItem = {
   active?: boolean;
   group?: string;
 };
+export type SectionTabItem = {
+  key: string;
+  label: string;
+  active?: boolean;
+};
 
 type AuthGateProps = {
   title: string;
@@ -24,6 +29,8 @@ type AppShellProps = {
   onSignOut: () => void;
   navigationItems: NavigationItem[];
   secondaryNavigationItems?: NavigationItem[];
+  sectionTabs?: SectionTabItem[];
+  onSelectSectionTab?: (key: string) => void;
   notice?: string | null;
   error?: string | null;
   warning?: string | null;
@@ -65,6 +72,8 @@ export function AppShell(props: AppShellProps) {
     onSignOut,
     navigationItems,
     secondaryNavigationItems,
+    sectionTabs,
+    onSelectSectionTab,
     notice,
     error,
     warning,
@@ -128,6 +137,19 @@ export function AppShell(props: AppShellProps) {
               >
                 {item.label}
               </a>
+            ))}
+          </div>
+        )}
+        {sectionTabs && sectionTabs.length > 0 && (
+          <div className="app-section-tabs">
+            {sectionTabs.map((tab) => (
+              <button
+                key={`section-tab-${tab.key}`}
+                className={tab.active ? "is-active" : undefined}
+                onClick={() => onSelectSectionTab?.(tab.key)}
+              >
+                {tab.label}
+              </button>
             ))}
           </div>
         )}

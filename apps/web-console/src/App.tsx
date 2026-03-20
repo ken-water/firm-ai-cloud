@@ -12002,6 +12002,51 @@ export function App() {
     }
     return navigationItems.filter((item) => item.group === activeGroup);
   }, [navigationItems]);
+  const pageSectionTabs = useMemo(() => {
+    const sectionLabelMap: Record<string, string> = {
+      "section-setup-wizard": "Setup Wizard",
+      "section-module-cockpit": "Start Here",
+      "section-daily-cockpit": "Daily Ops",
+      "section-cockpit": "Operations",
+      "section-monitoring-metrics": "Metrics",
+      "section-topology": "Topology",
+      "section-asset-stats": "Assets",
+      "section-scan": "Scan",
+      "section-fields": "Fields",
+      "section-relations": "Relations",
+      "section-readiness": "Readiness",
+      "section-assets": "Asset List",
+      "section-monitoring-sources": "Sources",
+      "section-alert-center": "Alert Center",
+      "section-topology-workspace": "Topology Board",
+      "section-playbook-library": "Playbooks",
+      "section-workflow-cockpit": "Workflow Cockpit",
+      "section-workflow-reports": "Reports",
+      "section-workflow": "Workflow Requests",
+      "section-discovery": "Discovery",
+      "section-notifications": "Notifications",
+      "section-tickets": "Tickets",
+      "section-admin": "Admin"
+    };
+    const sections = consolePageSections[activePage] ?? [];
+    return sections
+      .filter((sectionId) => visibleSections.has(sectionId))
+      .map((sectionId, index) => ({
+        key: sectionId,
+        label: sectionLabelMap[sectionId] ?? sectionId,
+        active: index === 0
+      }));
+  }, [activePage, visibleSections]);
+  const focusSectionTab = useCallback((sectionId: string) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const element = window.document.getElementById(sectionId);
+    if (!element) {
+      return;
+    }
+    element.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   const changeLanguage = useCallback(
     async (language: string) => {
@@ -12892,6 +12937,8 @@ export function App() {
       onSignOut={() => void signOut()}
       navigationItems={navigationItems}
       secondaryNavigationItems={secondaryNavigationItems}
+      sectionTabs={pageSectionTabs}
+      onSelectSectionTab={focusSectionTab}
       topbarActions={(
         <>
           <label className="topbar-language">

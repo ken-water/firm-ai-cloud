@@ -236,6 +236,27 @@ a {
   font-weight: 600;
 }
 
+.app-section-tabs {
+  margin-bottom: var(--space-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.app-section-tabs button {
+  border-radius: 999px;
+  padding: 0.28rem 0.72rem;
+  background: #f7f9fc;
+  color: var(--text-muted);
+}
+
+.app-section-tabs button.is-active {
+  border-color: rgba(31, 106, 165, 0.4);
+  background: #eaf4fd;
+  color: var(--brand-strong);
+  font-weight: 600;
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;
