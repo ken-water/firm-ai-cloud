@@ -7,6 +7,7 @@ MIN_ENFORCED_VERSION="${MIN_ENFORCED_VERSION:-0.1.7}"
 MIN_DEMO_ACCEPTANCE_VERSION="${MIN_DEMO_ACCEPTANCE_VERSION:-0.1.25}"
 MIN_ROLE_COCKPIT_ACCEPTANCE_VERSION="${MIN_ROLE_COCKPIT_ACCEPTANCE_VERSION:-0.1.26}"
 MIN_OPERATOR_FLOW_ACCEPTANCE_VERSION="${MIN_OPERATOR_FLOW_ACCEPTANCE_VERSION:-0.1.28}"
+MIN_EXTERNAL_READINESS_ACCEPTANCE_VERSION="${MIN_EXTERNAL_READINESS_ACCEPTANCE_VERSION:-0.1.29}"
 
 log() {
   printf '[release-issues-gate] %s\n' "$*"
@@ -59,6 +60,11 @@ extract_role_cockpit_acceptance_line() {
 extract_operator_flow_acceptance_line() {
   local notes_file="$1"
   sed -n 's/^- Operator flow acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
+}
+
+extract_external_readiness_acceptance_line() {
+  local notes_file="$1"
+  sed -n 's/^- External readiness acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
 }
 
 main() {
@@ -162,6 +168,20 @@ main() {
       [[ -n "${path_token}" ]] || continue
       [[ -f "${path_token}" ]] || fatal "operator flow acceptance artifact not found: ${path_token}"
     done <<< "${operator_flow_paths}"
+  fi
+
+  if semver_ge "${VERSION}" "${MIN_EXTERNAL_READINESS_ACCEPTANCE_VERSION}"; then
+    local external_readiness_raw external_readiness_paths
+    external_readiness_raw="$(extract_external_readiness_acceptance_line "${NOTES_FILE}")"
+    [[ -n "${external_readiness_raw}" ]] || fatal "missing release metadata field: - External readiness acceptance artifacts: \`path1, path2\`"
+
+    external_readiness_paths="$(echo "${external_readiness_raw}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')"
+    [[ -n "${external_readiness_paths}" ]] || fatal "external readiness acceptance artifacts list is empty in ${NOTES_FILE}"
+
+    while IFS= read -r path_token; do
+      [[ -n "${path_token}" ]] || continue
+      [[ -f "${path_token}" ]] || fatal "external readiness acceptance artifact not found: ${path_token}"
+    done <<< "${external_readiness_paths}"
   fi
 
   log "OK: all listed GitHub issues are CLOSED for v${VERSION}"
