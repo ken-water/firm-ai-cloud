@@ -18,6 +18,33 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.30] - 2026-03-20
+
+### Added
+
+- v0.1.30 planning and release-gate documentation:
+  - `docs/82-v0.1.30-scaleout-readiness-plan.md`
+  - `docs/83-v0.1.30-release-gate-checklist.md`
+- v0.1.30 issue baseline and closure track: GitHub issues `#283` to `#288`.
+- Overview cockpit scale-out additions:
+  - onboarding guardrails panel for repeated external activation checks,
+  - cohort rollout board with blocking-first visibility,
+  - adoption feedback closure queue with owner/status/timestamp fields.
+- Release governance metadata baseline extension:
+  - scale-out acceptance artifacts for `v0.1.30+`.
+
+### Changed
+
+- External readiness workspace now includes scale-out operation signals for onboarding, cohort rollout, and feedback closure.
+- Release-note template now includes `Scale-out acceptance artifacts` metadata field.
+- Release issue gate now validates scale-out acceptance artifact metadata and file existence for `>= v0.1.30`.
+
+### Fixed
+
+- Reduced ambiguity in external scale-out decisions through cohort-level blocker visibility.
+- Reduced adoption feedback drift by adding deterministic closure continuity fields.
+- Reduced release-governance drift by enforcing scale-out acceptance artifact checks.
+
 ## [0.1.29] - 2026-03-20
 
 ### Added
