@@ -18,6 +18,33 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.29] - 2026-03-20
+
+### Added
+
+- v0.1.29 planning and release-gate documentation:
+  - `docs/80-v0.1.29-external-readiness-plan.md`
+  - `docs/81-v0.1.29-release-gate-checklist.md`
+- v0.1.29 issue baseline and closure track: GitHub issues `#277` to `#282`.
+- Overview cockpit additions:
+  - external pilot bootstrap panel with deterministic first-value checklist,
+  - demo-to-production handoff checklist with owner/time closure fields,
+  - external readiness go/no-go summary block.
+- Release governance metadata baseline extension:
+  - external-readiness acceptance artifacts for `v0.1.29+`.
+
+### Changed
+
+- Overview cockpit now includes pilot onboarding and rollout-readiness decision signals in one entry surface.
+- Release-note template includes external-readiness acceptance metadata field.
+- Release issue gate now validates external-readiness acceptance artifacts for `>= v0.1.29`.
+
+### Fixed
+
+- Reduced transition gap between demo completion and production onboarding follow-up.
+- Reduced ambiguity in external rollout decisions by surfacing explicit blockers and next-step hints.
+- Reduced release-governance drift by enforcing external-readiness artifact checks.
+
 ## [0.1.28] - 2026-03-20
 
 ### Added
