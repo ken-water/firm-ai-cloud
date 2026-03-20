@@ -27,6 +27,16 @@ type HandoffChecklistState = {
   version: 1;
   items: Record<string, HandoffChecklistRecord>;
 };
+type AdoptionFeedbackRecord = {
+  status: HandoffClosureStatus;
+  owner: string;
+  note: string;
+  updatedAt: string | null;
+};
+type AdoptionFeedbackState = {
+  version: 1;
+  items: Record<string, AdoptionFeedbackRecord>;
+};
 
 type DashboardLayoutPayload = {
   version: 1;
@@ -35,6 +45,7 @@ type DashboardLayoutPayload = {
 
 const DASHBOARD_LAYOUT_STORAGE_KEY = "cloudops.dashboard_layout.v1";
 const DEMO_PROD_HANDOFF_STORAGE_KEY = "cloudops.demo_prod_handoff.v1";
+const ADOPTION_FEEDBACK_STORAGE_KEY = "cloudops.adoption_feedback.v1";
 const DASHBOARD_WIDGETS: Array<{ key: DashboardWidgetKey; title: string; description: string }> = [
   {
     key: "monitoring_health",
@@ -248,6 +259,28 @@ function persistHandoffChecklistState(state: HandoffChecklistState) {
     return;
   }
   window.localStorage.setItem(DEMO_PROD_HANDOFF_STORAGE_KEY, JSON.stringify(state));
+}
+
+function parseAdoptionFeedbackState(raw: string | null): AdoptionFeedbackState {
+  if (!raw) {
+    return { version: 1, items: {} };
+  }
+  try {
+    const parsed = JSON.parse(raw) as AdoptionFeedbackState;
+    if (parsed.version !== 1 || typeof parsed.items !== "object" || parsed.items === null) {
+      return { version: 1, items: {} };
+    }
+    return parsed;
+  } catch {
+    return { version: 1, items: {} };
+  }
+}
+
+function persistAdoptionFeedbackState(state: AdoptionFeedbackState) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(ADOPTION_FEEDBACK_STORAGE_KEY, JSON.stringify(state));
 }
 
 export function OverviewAdminSections(rawProps: Record<string, unknown>) {
@@ -573,6 +606,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       return { version: 1, items: {} };
     }
     return parseHandoffChecklistState(window.localStorage.getItem(DEMO_PROD_HANDOFF_STORAGE_KEY));
+  });
+  const [adoptionFeedbackState, setAdoptionFeedbackState] = useState<AdoptionFeedbackState>(() => {
+    if (typeof window === "undefined") {
+      return { version: 1, items: {} };
+    }
+    return parseAdoptionFeedbackState(window.localStorage.getItem(ADOPTION_FEEDBACK_STORAGE_KEY));
   });
   const [screenPlaylistDraft, setScreenPlaylistDraft] = useState<string>("overview");
   const [screenPlaylistIntervalSeconds, setScreenPlaylistIntervalSeconds] = useState<string>("30");
@@ -948,6 +987,115 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       nextStep
     };
   }, [demoToProductionHandoffChecklist, goLiveReadiness, pilotBootstrapChecklist.steps]);
+  const onboardingGuardrails = useMemo(() => {
+    const goLiveBlocking = Number(goLiveReadiness?.summary?.blocking ?? 0);
+    const integrationNotReady = Number((integrationBootstrapCatalog?.items ?? []).filter((item: any) => item.status !== "ready").length);
+    const followupOverdue = Number(dailyOpsBriefing?.summary?.overdue ?? 0);
+    const checks = [
+      {
+        key: "guard-go-live",
+        label: "Go-live blockers",
+        cue: goLiveBlocking > 0 ? "blocking" : "ready",
+        detail: `blocking=${goLiveBlocking}`
+      },
+      {
+        key: "guard-integration",
+        label: "Integration baseline",
+        cue: integrationNotReady > 0 ? "attention" : "ready",
+        detail: `not_ready=${integrationNotReady}`
+      },
+      {
+        key: "guard-followup",
+        label: "Follow-up discipline",
+        cue: followupOverdue > 0 ? "attention" : "ready",
+        detail: `overdue=${followupOverdue}`
+      }
+    ] as Array<{ key: string; label: string; cue: OperationalCue; detail: string }>;
+    return checks;
+  }, [dailyOpsBriefing, goLiveReadiness, integrationBootstrapCatalog]);
+  const cohortRolloutBoard = useMemo(() => {
+    const rowsByCohort = new Map<
+      string,
+      { cohort: string; serviceCount: number; criticalAlerts: number; escalationTickets: number; maxRisk: number }
+    >();
+    ((businessOverview?.items ?? []) as any[]).forEach((item) => {
+      const cohorts = Array.isArray(item.top_sites) && item.top_sites.length > 0 ? item.top_sites : ["default"];
+      cohorts.forEach((cohort: string) => {
+        const prev = rowsByCohort.get(cohort) ?? {
+          cohort,
+          serviceCount: 0,
+          criticalAlerts: 0,
+          escalationTickets: 0,
+          maxRisk: 0
+        };
+        prev.serviceCount += 1;
+        prev.criticalAlerts += Number(item.critical_alert_total ?? 0);
+        prev.escalationTickets += Number(item.escalation_ticket_total ?? 0);
+        prev.maxRisk = Math.max(prev.maxRisk, Number(item.risk_score ?? 0));
+        rowsByCohort.set(cohort, prev);
+      });
+    });
+    const rows = [...rowsByCohort.values()].map((item) => {
+      const cue: OperationalCue =
+        item.criticalAlerts > 0 || item.escalationTickets > 0
+          ? "blocking"
+          : item.maxRisk >= 120
+            ? "attention"
+            : "ready";
+      return {
+        ...item,
+        cue
+      };
+    });
+    rows.sort((left, right) => {
+      const rank = (cue: OperationalCue) => (cue === "blocking" ? 0 : cue === "attention" ? 1 : 2);
+      return (
+        rank(left.cue) - rank(right.cue)
+        || right.maxRisk - left.maxRisk
+        || left.cohort.localeCompare(right.cohort)
+      );
+    });
+    return rows.slice(0, 20);
+  }, [businessOverview]);
+  const adoptionFeedbackQueue = useMemo(() => {
+    const definitions = [
+      {
+        key: "feedback-onboarding-success",
+        summary: "How quickly external users complete onboarding guardrails",
+        cue: onboardingGuardrails.some((item) => item.cue === "blocking")
+          ? "blocking"
+          : onboardingGuardrails.some((item) => item.cue === "attention")
+            ? "attention"
+            : "ready"
+      },
+      {
+        key: "feedback-cohort-rollout-risk",
+        summary: "Which cohorts are blocked during rollout and why",
+        cue: cohortRolloutBoard.some((item) => item.cue === "blocking")
+          ? "blocking"
+          : cohortRolloutBoard.some((item) => item.cue === "attention")
+            ? "attention"
+            : "ready"
+      },
+      {
+        key: "feedback-handoff-completion",
+        summary: "Whether demo-to-production handoff items are closed on time",
+        cue: demoToProductionHandoffChecklist.some((item) => item.status === "open")
+          ? "attention"
+          : "ready"
+      }
+    ] as Array<{ key: string; summary: string; cue: OperationalCue }>;
+    return definitions.map((item) => {
+      const record = adoptionFeedbackState.items[item.key];
+      return {
+        ...item,
+        status: record?.status ?? "open",
+        owner: record?.owner ?? "-",
+        note: record?.note ?? "-",
+        updatedAt: record?.updatedAt ?? null
+      };
+    });
+  }, [adoptionFeedbackState.items, cohortRolloutBoard, demoToProductionHandoffChecklist, onboardingGuardrails]);
   const demoNarrativeCheckpoints = useMemo(() => {
     const monitoringUnreachable = Number(monitoringOverview?.summary?.source_unreachable_total ?? 0);
     const monitoringCritical = Number(monitoringOverview?.layers?.reduce((sum: number, layer: any) => {
@@ -1289,6 +1437,27 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       return next;
     });
   };
+  const updateAdoptionFeedbackItem = (itemKey: string, nextStatus: HandoffClosureStatus) => {
+    const ownerInput = window.prompt("Owner", "")?.trim() ?? "";
+    const noteInput = window.prompt("Feedback note", "")?.trim() ?? "";
+    const owner = ownerInput.length > 0 ? ownerInput : "operator";
+    setAdoptionFeedbackState((prev) => {
+      const next: AdoptionFeedbackState = {
+        version: 1,
+        items: {
+          ...prev.items,
+          [itemKey]: {
+            status: nextStatus,
+            owner,
+            note: noteInput,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      };
+      persistAdoptionFeedbackState(next);
+      return next;
+    });
+  };
   const markSceneControlAction = () => {
     setScreenPlaylistLastActionAt(new Date().toISOString());
   };
@@ -1611,6 +1780,119 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
               <button onClick={() => void Promise.all([loadGoLiveReadiness(), loadIntegrationBootstrapCatalog(), loadDailyOpsBriefing()])}>
                 Refresh readiness signals
               </button>
+            </div>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Onboarding guardrails</h3>
+              <span className="inline-note">repeated self-serve activation checks</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.55rem" }}>
+              {onboardingGuardrails.map((item) => (
+                <div key={`onboarding-guardrail-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                  <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                    <strong>{item.label}</strong>
+                    <span className={`status-chip ${operationalCueClass(item.cue)}`}>{item.cue}</span>
+                  </div>
+                  <p className="inline-note" style={{ marginBottom: "0.35rem" }}>{item.detail}</p>
+                  <button
+                    onClick={() => {
+                      if (typeof window !== "undefined") {
+                        window.location.hash = "#/overview";
+                      }
+                    }}
+                  >
+                    Open guardrail context
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Cohort rollout board</h3>
+              <span className="inline-note">blocking cohorts first</span>
+            </div>
+            {cohortRolloutBoard.length === 0 ? (
+              <p className="inline-note">No cohort rollout row in current scope.</p>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Cohort</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Services</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Critical alerts</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Escalation tickets</th>
+                      <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Max risk</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cohortRolloutBoard.map((item) => (
+                      <tr key={`cohort-rollout-${item.cohort}`}>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>{item.cohort}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                          <span className={`status-chip ${operationalCueClass(item.cue)}`}>{item.cue}</span>
+                        </td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>{item.serviceCount}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>{item.criticalAlerts}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>{item.escalationTickets}</td>
+                        <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>{item.maxRisk}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Adoption feedback closure queue</h3>
+              <span className="inline-note">owner/status/timestamp continuity</span>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "1100px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Feedback item</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Signal</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Status</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Note</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Updated at</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adoptionFeedbackQueue.map((item) => (
+                    <tr key={`adoption-feedback-${item.key}`}>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                        <strong>{item.key}</strong>
+                        <div className="inline-note">{item.summary}</div>
+                      </td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                        <span className={`status-chip ${operationalCueClass(item.cue)}`}>{item.cue}</span>
+                      </td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                        <span className={`status-chip ${item.status === "closed" ? "status-chip-success" : "status-chip-warn"}`}>{item.status}</span>
+                      </td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>{item.owner}</td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>{item.note}</td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                        {item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-"}
+                      </td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                        {item.status === "closed" ? (
+                          <button onClick={() => updateAdoptionFeedbackItem(item.key, "open")}>Re-open</button>
+                        ) : (
+                          <button onClick={() => updateAdoptionFeedbackItem(item.key, "closed")}>Mark closed</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
