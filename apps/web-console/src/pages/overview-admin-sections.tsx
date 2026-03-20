@@ -718,6 +718,48 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       }
     ];
   }, [aiEvidenceResponse, dailyOpsBriefing, handoverReadiness, monitoringOverview, ticketEscalationQueue, topologyBoard]);
+  const operatorFlowShortcuts = useMemo(() => {
+    const dailyOverdue = Number(dailyOpsBriefing?.summary?.overdue ?? 0);
+    const dailyBlocked = Number(dailyOpsBriefing?.summary?.blocked ?? 0);
+    const escalationQueue = Number((ticketEscalationQueue ?? []).length);
+    const firstFollowUp =
+      ((dailyOpsBriefing?.items ?? []) as any[]).find((item) => item.status === "overdue" || item.status === "blocked") ??
+      ((dailyOpsBriefing?.items ?? []) as any[])[0] ??
+      null;
+    const firstNextAction = ((nextBestActions?.items ?? []) as any[])[0] ?? null;
+    const setupBlocking = Number(goLiveReadiness?.summary?.blocking ?? 0);
+    return [
+      {
+        key: "setup",
+        title: "Setup readiness",
+        note: `blocking=${setupBlocking}`,
+        href: "#/setup",
+        buttonLabel: "Open setup wizard"
+      },
+      {
+        key: "followup",
+        title: "Follow-up queue",
+        note: `overdue=${dailyOverdue}, blocked=${dailyBlocked}`,
+        href: firstFollowUp?.recommended_action?.href ?? "#/overview",
+        buttonLabel: firstFollowUp?.recommended_action?.label ?? "Open follow-up queue"
+      },
+      {
+        key: "escalation",
+        title: "Escalation queue",
+        note: `queue=${escalationQueue}`,
+        href: "#/tickets",
+        buttonLabel: "Open escalation tickets"
+      },
+      {
+        key: "next-action",
+        title: "Next best action",
+        note: firstNextAction
+          ? `${firstNextAction.suggestion_key} / ${firstNextAction.priority_score}`
+          : "none",
+        action: firstNextAction
+      }
+    ];
+  }, [dailyOpsBriefing, goLiveReadiness, nextBestActions, ticketEscalationQueue]);
   const demoNarrativeCheckpoints = useMemo(() => {
     const monitoringUnreachable = Number(monitoringOverview?.summary?.source_unreachable_total ?? 0);
     const monitoringCritical = Number(monitoringOverview?.layers?.reduce((sum: number, layer: any) => {
@@ -1175,6 +1217,43 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 >
                   Scene {template.title}
                 </button>
+              ))}
+            </div>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Operator flow shortcuts</h3>
+              <span className="inline-note">overview to setup/follow-up in {"<="}2 clicks</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.55rem" }}>
+              {operatorFlowShortcuts.map((item: any) => (
+                <div key={`operator-flow-shortcut-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                  <strong>{item.title}</strong>
+                  <p className="inline-note" style={{ marginBottom: "0.45rem" }}>{item.note}</p>
+                  {item.action ? (
+                    <button
+                      onClick={() => void runDailyCockpitAction(item.action.suggestion_key, item.action.action)}
+                      disabled={
+                        runningDailyCockpitActionKey !== null ||
+                        (item.action.action?.requires_write && !canWriteCmdb)
+                      }
+                    >
+                      {runningDailyCockpitActionKey === `${item.action.suggestion_key}:${item.action.action?.key}`
+                        ? t("cmdb.actions.loading")
+                        : item.action.action?.label ?? "Run next action"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        if (typeof window !== "undefined" && item.href) {
+                          window.location.hash = item.href;
+                        }
+                      }}
+                    >
+                      {item.buttonLabel}
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           </div>
