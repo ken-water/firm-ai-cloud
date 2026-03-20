@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { HorizontalFillBar } from "../components/chart-primitives";
 import { SectionCard } from "../components/layout";
 
@@ -517,6 +517,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
   const [screenPlaylistDraft, setScreenPlaylistDraft] = useState<string>("overview");
   const [screenPlaylistIntervalSeconds, setScreenPlaylistIntervalSeconds] = useState<string>("30");
   const [screenPlaylist, setScreenPlaylist] = useState<string[]>(["overview", "topology", "monitoring"]);
+  const [screenPlaylistRunState, setScreenPlaylistRunState] = useState<"idle" | "running" | "paused">("idle");
+  const [screenPlaylistActiveIndex, setScreenPlaylistActiveIndex] = useState<number>(0);
+  const [screenPlaylistLastActionAt, setScreenPlaylistLastActionAt] = useState<string | null>(null);
   const roleSceneStatus = useMemo(() => {
     const enabledCount = dashboardLayout.filter((item) => item.enabled).length;
     const scene = DASHBOARD_ROLE_SCENE_META[selectedDashboardTemplate];
@@ -535,6 +538,25 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       }))
       .filter((item) => Boolean(item.detail));
   }, [screenPlaylist]);
+  const screenPlaylistActiveScene = useMemo(() => {
+    if (screenPlaylistPreview.length === 0) {
+      return null;
+    }
+    const index = Math.max(0, Math.min(screenPlaylistActiveIndex, screenPlaylistPreview.length - 1));
+    return screenPlaylistPreview[index] ?? null;
+  }, [screenPlaylistActiveIndex, screenPlaylistPreview]);
+  useEffect(() => {
+    if (screenPlaylistPreview.length === 0) {
+      setScreenPlaylistActiveIndex(0);
+      if (screenPlaylistRunState !== "idle") {
+        setScreenPlaylistRunState("idle");
+      }
+      return;
+    }
+    if (screenPlaylistActiveIndex >= screenPlaylistPreview.length) {
+      setScreenPlaylistActiveIndex(0);
+    }
+  }, [screenPlaylistActiveIndex, screenPlaylistPreview, screenPlaylistRunState]);
   const dashboardWidgets = useMemo(() => {
     const detailByKey = new Map(DASHBOARD_WIDGETS.map((item) => [item.key, item]));
     return [...dashboardLayout]
@@ -1078,6 +1100,38 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setScreenPlaylist(["overview", "topology", "monitoring"]);
     setScreenPlaylistIntervalSeconds("30");
     setScreenPlaylistDraft("overview");
+    setScreenPlaylistRunState("idle");
+    setScreenPlaylistActiveIndex(0);
+    setScreenPlaylistLastActionAt(new Date().toISOString());
+  };
+  const markSceneControlAction = () => {
+    setScreenPlaylistLastActionAt(new Date().toISOString());
+  };
+  const startScenePlaylist = () => {
+    if (screenPlaylistPreview.length === 0) {
+      return;
+    }
+    setScreenPlaylistRunState("running");
+    markSceneControlAction();
+  };
+  const pauseScenePlaylist = () => {
+    if (screenPlaylistRunState !== "running") {
+      return;
+    }
+    setScreenPlaylistRunState("paused");
+    markSceneControlAction();
+  };
+  const nextScenePlaylistItem = () => {
+    if (screenPlaylistPreview.length === 0) {
+      return;
+    }
+    setScreenPlaylistActiveIndex((prev) => (prev + 1) % screenPlaylistPreview.length);
+    markSceneControlAction();
+  };
+  const resetSceneControlState = () => {
+    setScreenPlaylistRunState("idle");
+    setScreenPlaylistActiveIndex(0);
+    markSceneControlAction();
   };
 
   return (
@@ -1307,6 +1361,47 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
             <div className="toolbar-row" style={{ marginBottom: "0.5rem" }}>
               <button onClick={addSceneToPlaylist}>Add scene</button>
               <button onClick={resetScenePlaylist}>Reset playlist</button>
+            </div>
+            <div className="detail-panel" style={{ marginBottom: "0.6rem" }}>
+              <div className="toolbar-row" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
+                <strong>Run-state controls</strong>
+                <span className={`status-chip ${
+                  screenPlaylistRunState === "running"
+                    ? "status-chip-success"
+                    : screenPlaylistRunState === "paused"
+                      ? "status-chip-warn"
+                      : ""
+                }`}>
+                  {screenPlaylistRunState}
+                </span>
+              </div>
+              <p className="inline-note" style={{ marginBottom: "0.45rem" }}>
+                active_scene={screenPlaylistActiveScene?.detail?.label ?? "none"} | active_route={screenPlaylistActiveScene?.detail?.href ?? "-"} | last_action_at={screenPlaylistLastActionAt ? new Date(screenPlaylistLastActionAt).toLocaleString() : "never"}
+              </p>
+              <div className="toolbar-row" style={{ marginBottom: "0.35rem", flexWrap: "wrap" }}>
+                <button onClick={startScenePlaylist} disabled={screenPlaylistPreview.length === 0 || screenPlaylistRunState === "running"}>
+                  Start
+                </button>
+                <button onClick={pauseScenePlaylist} disabled={screenPlaylistRunState !== "running"}>
+                  Pause
+                </button>
+                <button onClick={nextScenePlaylistItem} disabled={screenPlaylistPreview.length === 0}>
+                  Next
+                </button>
+                <button onClick={resetSceneControlState} disabled={screenPlaylistPreview.length === 0 && screenPlaylistRunState === "idle"}>
+                  Reset control
+                </button>
+                <button
+                  onClick={() => {
+                    if (typeof window !== "undefined" && screenPlaylistActiveScene?.detail?.href) {
+                      window.location.hash = screenPlaylistActiveScene.detail.href;
+                    }
+                  }}
+                  disabled={!screenPlaylistActiveScene?.detail?.href}
+                >
+                  Open active scene
+                </button>
+              </div>
             </div>
             {screenPlaylistPreview.length === 0 ? (
               <p className="inline-note">No scene in playlist.</p>
