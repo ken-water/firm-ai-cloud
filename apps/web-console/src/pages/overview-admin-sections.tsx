@@ -771,6 +771,51 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
         .filter(Boolean)
     }));
   }, [moduleStatusCards]);
+  const smbSimpleEntryJourney = useMemo(() => {
+    const assetTotal = Number(assetStats?.total_assets ?? 0);
+    const monitoringSourcesTotal = Number((monitoringSources ?? []).length);
+    const topologyNodes = Number(topologyMap?.nodes?.length ?? 0);
+    const hasAssets = assetTotal > 0;
+    const hasMonitoringSources = monitoringSourcesTotal > 0;
+    const hasTopology = topologyNodes > 0;
+    return [
+      {
+        key: "site-room",
+        title: "1) 录入机房与站点",
+        status: hasAssets ? "ready" : "attention",
+        hint: hasAssets ? `已发现资产=${assetTotal}` : "先建立机房/站点信息",
+        href: "#/cmdb"
+      },
+      {
+        key: "rack",
+        title: "2) 录入机柜/机架",
+        status: hasAssets ? "attention" : "blocking",
+        hint: hasAssets ? "在CMDB中补充机架归属" : "请先完成机房与设备基础录入",
+        href: "#/cmdb"
+      },
+      {
+        key: "device",
+        title: "3) 录入设备",
+        status: hasAssets ? "ready" : "blocking",
+        hint: hasAssets ? `设备总数=${assetTotal}` : "还没有设备数据",
+        href: "#/cmdb"
+      },
+      {
+        key: "monitoring",
+        title: "4) 查看/绑定监控项",
+        status: hasMonitoringSources ? "ready" : "attention",
+        hint: hasMonitoringSources ? `监控源=${monitoringSourcesTotal}` : "还没有监控源",
+        href: "#/monitoring"
+      },
+      {
+        key: "topology",
+        title: "5) 查看业务拓扑与告警",
+        status: hasTopology ? "ready" : "attention",
+        hint: hasTopology ? `拓扑节点=${topologyNodes}` : "拓扑尚未成图",
+        href: "#/topology"
+      }
+    ] as Array<{ key: string; title: string; status: OperationalCue; hint: string; href: string }>;
+  }, [assetStats, monitoringSources, topologyMap]);
   const cockpitKpiCards = useMemo(() => {
     const monitoringUnreachable = Number(monitoringOverview?.summary?.source_unreachable_total ?? 0);
     const monitoringCritical = Number(monitoringOverview?.layers?.reduce((sum: number, layer: any) => {
@@ -1583,6 +1628,32 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           <p className="section-note" style={{ marginTop: 0 }}>
             Module-first entry with configurable widgets for quick risk/owner/action visibility.
           </p>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>SMB 简单入口（从零开始）</h3>
+              <span className="inline-note">机房 {"->"} 机架 {"->"} 设备 {"->"} 监控 {"->"} 拓扑/告警</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.55rem" }}>
+              {smbSimpleEntryJourney.map((item) => (
+                <div key={`smb-simple-entry-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                  <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+                    <strong>{item.title}</strong>
+                    <span className={`status-chip ${operationalCueClass(item.status)}`}>{item.status}</span>
+                  </div>
+                  <p className="inline-note" style={{ marginBottom: "0.45rem" }}>{item.hint}</p>
+                  <button
+                    onClick={() => {
+                      if (typeof window !== "undefined") {
+                        window.location.hash = item.href;
+                      }
+                    }}
+                  >
+                    进入
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
           <p className="inline-note" style={{ marginBottom: "0.65rem" }}>
             state_vocabulary=ready | attention | blocking
           </p>
