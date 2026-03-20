@@ -17,6 +17,16 @@ type DashboardWidgetLayout = {
 
 type DashboardTemplateKey = "operator" | "admin" | "network" | "business";
 type OperationalCue = "ready" | "attention" | "blocking";
+type HandoffClosureStatus = "open" | "closed";
+type HandoffChecklistRecord = {
+  status: HandoffClosureStatus;
+  owner: string;
+  updatedAt: string | null;
+};
+type HandoffChecklistState = {
+  version: 1;
+  items: Record<string, HandoffChecklistRecord>;
+};
 
 type DashboardLayoutPayload = {
   version: 1;
@@ -24,6 +34,7 @@ type DashboardLayoutPayload = {
 };
 
 const DASHBOARD_LAYOUT_STORAGE_KEY = "cloudops.dashboard_layout.v1";
+const DEMO_PROD_HANDOFF_STORAGE_KEY = "cloudops.demo_prod_handoff.v1";
 const DASHBOARD_WIDGETS: Array<{ key: DashboardWidgetKey; title: string; description: string }> = [
   {
     key: "monitoring_health",
@@ -215,6 +226,28 @@ function persistDashboardLayout(layout: DashboardWidgetLayout[]) {
     widgets: layout
   };
   window.localStorage.setItem(DASHBOARD_LAYOUT_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function parseHandoffChecklistState(raw: string | null): HandoffChecklistState {
+  if (!raw) {
+    return { version: 1, items: {} };
+  }
+  try {
+    const parsed = JSON.parse(raw) as HandoffChecklistState;
+    if (parsed.version !== 1 || typeof parsed.items !== "object" || parsed.items === null) {
+      return { version: 1, items: {} };
+    }
+    return parsed;
+  } catch {
+    return { version: 1, items: {} };
+  }
+}
+
+function persistHandoffChecklistState(state: HandoffChecklistState) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(DEMO_PROD_HANDOFF_STORAGE_KEY, JSON.stringify(state));
 }
 
 export function OverviewAdminSections(rawProps: Record<string, unknown>) {
@@ -535,6 +568,12 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     return parseDashboardLayout(window.localStorage.getItem(DASHBOARD_LAYOUT_STORAGE_KEY));
   });
   const [selectedDashboardTemplate, setSelectedDashboardTemplate] = useState<DashboardTemplateKey>("operator");
+  const [handoffChecklistState, setHandoffChecklistState] = useState<HandoffChecklistState>(() => {
+    if (typeof window === "undefined") {
+      return { version: 1, items: {} };
+    }
+    return parseHandoffChecklistState(window.localStorage.getItem(DEMO_PROD_HANDOFF_STORAGE_KEY));
+  });
   const [screenPlaylistDraft, setScreenPlaylistDraft] = useState<string>("overview");
   const [screenPlaylistIntervalSeconds, setScreenPlaylistIntervalSeconds] = useState<string>("30");
   const [screenPlaylist, setScreenPlaylist] = useState<string[]>(["overview", "topology", "monitoring"]);
@@ -840,6 +879,49 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       progressPercent
     };
   }, [dailyOpsBriefing, goLiveReadiness, integrationBootstrapCatalog]);
+  const demoToProductionHandoffChecklist = useMemo(() => {
+    const goLiveBlocking = Number(goLiveReadiness?.summary?.blocking ?? 0);
+    const goLiveWarning = Number(goLiveReadiness?.summary?.warning ?? 0);
+    const integrationItems = integrationBootstrapCatalog?.items ?? [];
+    const integrationBlocking = integrationItems.filter((item: any) => item.status !== "ready").length;
+    const dailyOverdue = Number(dailyOpsBriefing?.summary?.overdue ?? 0);
+    const handoffBlocking = Number(handoverReadiness?.summary?.blocking ?? 0);
+    const definitions = [
+      {
+        key: "pilot-scope-signoff",
+        label: "Pilot scope signoff",
+        cue: dailyOverdue > 0 ? "attention" : "ready",
+        note: `daily_overdue=${dailyOverdue}`
+      },
+      {
+        key: "integration-baseline",
+        label: "Integration baseline",
+        cue: integrationBlocking > 0 ? "attention" : "ready",
+        note: `integration_not_ready=${integrationBlocking}`
+      },
+      {
+        key: "go-live-blocker-clearance",
+        label: "Go-live blocker clearance",
+        cue: goLiveBlocking > 0 ? "blocking" : goLiveWarning > 0 ? "attention" : "ready",
+        note: `blocking=${goLiveBlocking}, warning=${goLiveWarning}`
+      },
+      {
+        key: "owner-handover-ack",
+        label: "Owner handover acknowledgement",
+        cue: handoffBlocking > 0 ? "blocking" : "ready",
+        note: `handover_blocking=${handoffBlocking}`
+      }
+    ] as Array<{ key: string; label: string; cue: OperationalCue; note: string }>;
+    return definitions.map((item) => {
+      const record = handoffChecklistState.items[item.key];
+      return {
+        ...item,
+        status: record?.status ?? "open",
+        owner: record?.owner ?? "-",
+        updatedAt: record?.updatedAt ?? null
+      };
+    });
+  }, [dailyOpsBriefing, goLiveReadiness, handoffChecklistState.items, handoverReadiness, integrationBootstrapCatalog]);
   const demoNarrativeCheckpoints = useMemo(() => {
     const monitoringUnreachable = Number(monitoringOverview?.summary?.source_unreachable_total ?? 0);
     const monitoringCritical = Number(monitoringOverview?.layers?.reduce((sum: number, layer: any) => {
@@ -1162,6 +1244,25 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
     setScreenPlaylistActiveIndex(0);
     setScreenPlaylistLastActionAt(new Date().toISOString());
   };
+  const updateDemoProdHandoffItem = (itemKey: string, nextStatus: HandoffClosureStatus) => {
+    const ownerInput = window.prompt("Owner", "")?.trim() ?? "";
+    const owner = ownerInput.length > 0 ? ownerInput : "operator";
+    setHandoffChecklistState((prev) => {
+      const next: HandoffChecklistState = {
+        version: 1,
+        items: {
+          ...prev.items,
+          [itemKey]: {
+            status: nextStatus,
+            owner,
+            updatedAt: new Date().toISOString()
+          }
+        }
+      };
+      persistHandoffChecklistState(next);
+      return next;
+    });
+  };
   const markSceneControlAction = () => {
     setScreenPlaylistLastActionAt(new Date().toISOString());
   };
@@ -1404,6 +1505,55 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   </button>
                 </div>
               ))}
+            </div>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Demo-to-production handoff</h3>
+              <span className="inline-note">deterministic closure checklist</span>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "980px", width: "100%" }}>
+                <thead>
+                  <tr>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Item</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Readiness cue</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Closure status</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Owner</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Updated at</th>
+                    <th style={{ border: "1px solid #ddd", padding: "0.5rem", textAlign: "left" }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {demoToProductionHandoffChecklist.map((item) => (
+                    <tr key={`demo-prod-handoff-${item.key}`}>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                        <strong>{item.label}</strong>
+                        <div className="inline-note">{item.note}</div>
+                      </td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                        <span className={`status-chip ${operationalCueClass(item.cue)}`}>{item.cue}</span>
+                      </td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                        <span className={`status-chip ${item.status === "closed" ? "status-chip-success" : "status-chip-warn"}`}>
+                          {item.status}
+                        </span>
+                      </td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>{item.owner}</td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                        {item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "-"}
+                      </td>
+                      <td style={{ border: "1px solid #ddd", padding: "0.5rem", verticalAlign: "top" }}>
+                        {item.status === "closed" ? (
+                          <button onClick={() => updateDemoProdHandoffItem(item.key, "open")}>Re-open</button>
+                        ) : (
+                          <button onClick={() => updateDemoProdHandoffItem(item.key, "closed")}>Mark closed</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
