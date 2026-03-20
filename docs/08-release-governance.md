@@ -104,6 +104,7 @@ Before publishing, confirm all items:
 - [ ] For `>= v0.1.28`, release metadata includes `Operator flow acceptance artifacts`.
 - [ ] For `>= v0.1.29`, release metadata includes `External readiness acceptance artifacts`.
 - [ ] For `>= v0.1.30`, release metadata includes `Scale-out acceptance artifacts`.
+- [ ] For `>= v0.1.31`, release metadata includes `UX acceptance artifacts`.
 - [ ] Upgrade instructions were tested.
 - [ ] Known issues are explicitly listed (or `None`).
 - [ ] If benchmark scope changed, release note includes CI benchmark artifact references (`profile`, `gate`, `trend`, `regression` summaries).
@@ -186,6 +187,7 @@ To avoid release omissions caused by manual steps, every release owner must use 
   - verifies operator-flow acceptance artifact files (enforced for `>= v0.1.28`)
   - verifies external-readiness acceptance artifact files (enforced for `>= v0.1.29`)
   - verifies scale-out acceptance artifact files (enforced for `>= v0.1.30`)
+  - verifies UX acceptance artifact files (enforced for `>= v0.1.31`)
 
 Minimal command set:
 
