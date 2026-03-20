@@ -9,6 +9,7 @@
 - GitHub issues: `#123, #124`
 - Demo acceptance artifacts: `.run/<path>/summary.json, .run/<path>/artifact-index.json`
 - Role cockpit acceptance artifacts: `.run/<path>/role-cockpit-summary.json, .run/<path>/role-cockpit-artifact-index.json`
+- Operator flow acceptance artifacts: `.run/<path>/operator-flow-summary.json, .run/<path>/operator-flow-artifact-index.json`
 
 ## Executive Summary
 

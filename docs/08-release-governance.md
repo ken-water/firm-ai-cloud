@@ -1,7 +1,7 @@
 # CloudOps One Release Governance
 
-Version: v1.3  
-Date: 2026-03-09
+Version: v1.4  
+Date: 2026-03-20
 
 ## 1. Scope
 
@@ -99,6 +99,9 @@ Before publishing, confirm all items:
 - [ ] Version number is consistent across tag, changelog, and release note filename.
 - [ ] Release metadata includes `GitHub issues` list for the target version.
 - [ ] All listed GitHub issues are closed before publish.
+- [ ] For `>= v0.1.25`, release metadata includes `Demo acceptance artifacts`.
+- [ ] For `>= v0.1.26`, release metadata includes `Role cockpit acceptance artifacts`.
+- [ ] For `>= v0.1.28`, release metadata includes `Operator flow acceptance artifacts`.
 - [ ] Upgrade instructions were tested.
 - [ ] Known issues are explicitly listed (or `None`).
 - [ ] If benchmark scope changed, release note includes CI benchmark artifact references (`profile`, `gate`, `trend`, `regression` summaries).
@@ -176,6 +179,9 @@ To avoid release omissions caused by manual steps, every release owner must use 
 - `scripts/release-github-issues-check.sh`:
   - parses `GitHub issues` from release metadata
   - verifies all listed issues are in `CLOSED` state (enforced for `>= v0.1.7`)
+  - verifies demo acceptance artifact files (enforced for `>= v0.1.25`)
+  - verifies role-cockpit acceptance artifact files (enforced for `>= v0.1.26`)
+  - verifies operator-flow acceptance artifact files (enforced for `>= v0.1.28`)
 
 Minimal command set:
 

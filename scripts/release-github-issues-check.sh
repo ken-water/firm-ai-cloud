@@ -6,6 +6,7 @@ NOTES_FILE=""
 MIN_ENFORCED_VERSION="${MIN_ENFORCED_VERSION:-0.1.7}"
 MIN_DEMO_ACCEPTANCE_VERSION="${MIN_DEMO_ACCEPTANCE_VERSION:-0.1.25}"
 MIN_ROLE_COCKPIT_ACCEPTANCE_VERSION="${MIN_ROLE_COCKPIT_ACCEPTANCE_VERSION:-0.1.26}"
+MIN_OPERATOR_FLOW_ACCEPTANCE_VERSION="${MIN_OPERATOR_FLOW_ACCEPTANCE_VERSION:-0.1.28}"
 
 log() {
   printf '[release-issues-gate] %s\n' "$*"
@@ -53,6 +54,11 @@ extract_demo_acceptance_line() {
 extract_role_cockpit_acceptance_line() {
   local notes_file="$1"
   sed -n 's/^- Role cockpit acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
+}
+
+extract_operator_flow_acceptance_line() {
+  local notes_file="$1"
+  sed -n 's/^- Operator flow acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
 }
 
 main() {
@@ -142,6 +148,20 @@ main() {
       [[ -n "${path_token}" ]] || continue
       [[ -f "${path_token}" ]] || fatal "role cockpit acceptance artifact not found: ${path_token}"
     done <<< "${role_paths}"
+  fi
+
+  if semver_ge "${VERSION}" "${MIN_OPERATOR_FLOW_ACCEPTANCE_VERSION}"; then
+    local operator_flow_raw operator_flow_paths
+    operator_flow_raw="$(extract_operator_flow_acceptance_line "${NOTES_FILE}")"
+    [[ -n "${operator_flow_raw}" ]] || fatal "missing release metadata field: - Operator flow acceptance artifacts: \`path1, path2\`"
+
+    operator_flow_paths="$(echo "${operator_flow_raw}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')"
+    [[ -n "${operator_flow_paths}" ]] || fatal "operator flow acceptance artifacts list is empty in ${NOTES_FILE}"
+
+    while IFS= read -r path_token; do
+      [[ -n "${path_token}" ]] || continue
+      [[ -f "${path_token}" ]] || fatal "operator flow acceptance artifact not found: ${path_token}"
+    done <<< "${operator_flow_paths}"
   fi
 
   log "OK: all listed GitHub issues are CLOSED for v${VERSION}"
