@@ -8,6 +8,7 @@ MIN_DEMO_ACCEPTANCE_VERSION="${MIN_DEMO_ACCEPTANCE_VERSION:-0.1.25}"
 MIN_ROLE_COCKPIT_ACCEPTANCE_VERSION="${MIN_ROLE_COCKPIT_ACCEPTANCE_VERSION:-0.1.26}"
 MIN_OPERATOR_FLOW_ACCEPTANCE_VERSION="${MIN_OPERATOR_FLOW_ACCEPTANCE_VERSION:-0.1.28}"
 MIN_EXTERNAL_READINESS_ACCEPTANCE_VERSION="${MIN_EXTERNAL_READINESS_ACCEPTANCE_VERSION:-0.1.29}"
+MIN_SCALE_OUT_ACCEPTANCE_VERSION="${MIN_SCALE_OUT_ACCEPTANCE_VERSION:-0.1.30}"
 
 log() {
   printf '[release-issues-gate] %s\n' "$*"
@@ -65,6 +66,11 @@ extract_operator_flow_acceptance_line() {
 extract_external_readiness_acceptance_line() {
   local notes_file="$1"
   sed -n 's/^- External readiness acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
+}
+
+extract_scale_out_acceptance_line() {
+  local notes_file="$1"
+  sed -n 's/^- Scale-out acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
 }
 
 main() {
@@ -182,6 +188,20 @@ main() {
       [[ -n "${path_token}" ]] || continue
       [[ -f "${path_token}" ]] || fatal "external readiness acceptance artifact not found: ${path_token}"
     done <<< "${external_readiness_paths}"
+  fi
+
+  if semver_ge "${VERSION}" "${MIN_SCALE_OUT_ACCEPTANCE_VERSION}"; then
+    local scale_out_raw scale_out_paths
+    scale_out_raw="$(extract_scale_out_acceptance_line "${NOTES_FILE}")"
+    [[ -n "${scale_out_raw}" ]] || fatal "missing release metadata field: - Scale-out acceptance artifacts: \`path1, path2\`"
+
+    scale_out_paths="$(echo "${scale_out_raw}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')"
+    [[ -n "${scale_out_paths}" ]] || fatal "scale-out acceptance artifacts list is empty in ${NOTES_FILE}"
+
+    while IFS= read -r path_token; do
+      [[ -n "${path_token}" ]] || continue
+      [[ -f "${path_token}" ]] || fatal "scale-out acceptance artifact not found: ${path_token}"
+    done <<< "${scale_out_paths}"
   fi
 
   log "OK: all listed GitHub issues are CLOSED for v${VERSION}"

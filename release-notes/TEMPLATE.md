@@ -11,6 +11,7 @@
 - Role cockpit acceptance artifacts: `.run/<path>/role-cockpit-summary.json, .run/<path>/role-cockpit-artifact-index.json`
 - Operator flow acceptance artifacts: `.run/<path>/operator-flow-summary.json, .run/<path>/operator-flow-artifact-index.json`
 - External readiness acceptance artifacts: `.run/<path>/external-readiness-summary.json, .run/<path>/external-readiness-artifact-index.json`
+- Scale-out acceptance artifacts: `.run/<path>/scaleout-summary.json, .run/<path>/scaleout-artifact-index.json`
 
 ## Executive Summary
 
