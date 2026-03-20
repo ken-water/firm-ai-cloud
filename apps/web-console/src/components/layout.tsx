@@ -4,6 +4,7 @@ export type NavigationItem = {
   href: string;
   label: string;
   active?: boolean;
+  group?: string;
 };
 
 type AuthGateProps = {
@@ -22,6 +23,7 @@ type AppShellProps = {
   signOutLabel: string;
   onSignOut: () => void;
   navigationItems: NavigationItem[];
+  secondaryNavigationItems?: NavigationItem[];
   notice?: string | null;
   error?: string | null;
   warning?: string | null;
@@ -62,6 +64,7 @@ export function AppShell(props: AppShellProps) {
     signOutLabel,
     onSignOut,
     navigationItems,
+    secondaryNavigationItems,
     notice,
     error,
     warning,
@@ -77,16 +80,30 @@ export function AppShell(props: AppShellProps) {
           <p>{subtitle}</p>
         </div>
         <nav className="sidebar-nav">
-          {navigationItems.map((item) => (
-            <a
-              key={item.href}
-              href={item.href}
-              className={item.active ? "is-active" : undefined}
-              aria-current={item.active ? "page" : undefined}
-            >
-              {item.label}
-            </a>
-          ))}
+          {(() => {
+            const grouped = new Map<string, NavigationItem[]>();
+            navigationItems.forEach((item) => {
+              const key = item.group ?? "General";
+              const existing = grouped.get(key) ?? [];
+              existing.push(item);
+              grouped.set(key, existing);
+            });
+            return [...grouped.entries()].map(([groupName, items]) => (
+              <div key={`sidebar-group-${groupName}`} className="sidebar-nav-group">
+                <p className="sidebar-nav-group-title">{groupName}</p>
+                {items.map((item) => (
+                  <a
+                    key={item.href}
+                    href={item.href}
+                    className={item.active ? "is-active" : undefined}
+                    aria-current={item.active ? "page" : undefined}
+                  >
+                    {item.label}
+                  </a>
+                ))}
+              </div>
+            ));
+          })()}
         </nav>
       </aside>
 
@@ -100,6 +117,20 @@ export function AppShell(props: AppShellProps) {
             {topbarActions ?? <button onClick={onSignOut}>{signOutLabel}</button>}
           </div>
         </header>
+        {secondaryNavigationItems && secondaryNavigationItems.length > 0 && (
+          <div className="app-subnav-tabs">
+            {secondaryNavigationItems.map((item) => (
+              <a
+                key={`subnav-${item.href}`}
+                href={item.href}
+                className={item.active ? "is-active" : undefined}
+                aria-current={item.active ? "page" : undefined}
+              >
+                {item.label}
+              </a>
+            ))}
+          </div>
+        )}
 
         {notice && <p className="banner banner-success">{notice}</p>}
         {error && <p className="banner banner-error">{error}</p>}

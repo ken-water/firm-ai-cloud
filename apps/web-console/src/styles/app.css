@@ -154,7 +154,20 @@ a {
   margin-top: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-2);
+}
+
+.sidebar-nav-group {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.sidebar-nav-group-title {
+  margin: 0 0 0.2rem 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(231, 240, 249, 0.62);
 }
 
 .sidebar-nav a {
@@ -197,6 +210,30 @@ a {
 .app-topbar p {
   margin: 0.3rem 0 0;
   color: var(--text-muted);
+}
+
+.app-subnav-tabs {
+  margin-bottom: var(--space-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.app-subnav-tabs a {
+  text-decoration: none;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 0.28rem 0.72rem;
+  background: #f8fbff;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.app-subnav-tabs a.is-active {
+  border-color: rgba(31, 106, 165, 0.4);
+  background: #eaf4fd;
+  color: var(--brand-strong);
+  font-weight: 600;
 }
 
 .topbar-actions {

@@ -11972,27 +11972,36 @@ export function App() {
     setAlertFilters((prev) => ({ ...prev, query }));
   }, []);
   const navigationItems = useMemo(() => {
-    const items: Array<{ page: ConsolePage; label: string }> = [
-      { page: "setup", label: t("auth.navigation.setup") },
-      { page: "overview", label: t("auth.navigation.overview") },
-      { page: "cmdb", label: t("auth.navigation.cmdb") },
-      { page: "monitoring", label: t("auth.navigation.monitoring") },
-      { page: "alerts", label: t("auth.navigation.alerts") },
-      { page: "topology", label: t("auth.navigation.topology") },
-      { page: "workflow", label: t("auth.navigation.workflow") },
-      { page: "tickets", label: t("auth.navigation.tickets") }
+    const items: Array<{ page: ConsolePage; label: string; group: string }> = [
+      { page: "setup", label: t("auth.navigation.setup"), group: "Start" },
+      { page: "overview", label: t("auth.navigation.overview"), group: "Start" },
+      { page: "cmdb", label: t("auth.navigation.cmdb"), group: "Assets" },
+      { page: "monitoring", label: t("auth.navigation.monitoring"), group: "Assets" },
+      { page: "topology", label: t("auth.navigation.topology"), group: "Assets" },
+      { page: "alerts", label: t("auth.navigation.alerts"), group: "Operations" },
+      { page: "workflow", label: t("auth.navigation.workflow"), group: "Operations" },
+      { page: "tickets", label: t("auth.navigation.tickets"), group: "Operations" }
     ];
 
     if (canAccessAdmin) {
-      items.push({ page: "admin", label: t("auth.navigation.admin") });
+      items.push({ page: "admin", label: t("auth.navigation.admin"), group: "System" });
     }
 
     return items.map((item) => ({
       href: buildConsolePageHash(item.page),
       label: item.label,
-      active: item.page === activePage
+      active: item.page === activePage,
+      group: item.group
     }));
   }, [activePage, canAccessAdmin, t]);
+  const secondaryNavigationItems = useMemo(() => {
+    const activeItem = navigationItems.find((item) => item.active) ?? navigationItems[0];
+    const activeGroup = activeItem?.group;
+    if (!activeGroup) {
+      return [];
+    }
+    return navigationItems.filter((item) => item.group === activeGroup);
+  }, [navigationItems]);
 
   const changeLanguage = useCallback(
     async (language: string) => {
@@ -12882,6 +12891,7 @@ export function App() {
       signOutLabel={t("auth.signOut")}
       onSignOut={() => void signOut()}
       navigationItems={navigationItems}
+      secondaryNavigationItems={secondaryNavigationItems}
       topbarActions={(
         <>
           <label className="topbar-language">
