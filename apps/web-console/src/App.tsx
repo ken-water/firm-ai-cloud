@@ -3663,6 +3663,8 @@ export function App() {
   const [activePage, setActivePage] = useState<ConsolePage>(() =>
     resolveConsolePageFromHash(typeof window !== "undefined" ? window.location.hash : "", true)
   );
+  const [showAdvancedPageContent, setShowAdvancedPageContent] = useState(false);
+  const [activeSectionTabKey, setActiveSectionTabKey] = useState<string>("");
   const [menuAxis, setMenuAxis] = useState<MenuAxis>("screen");
   const [functionWorkspace, setFunctionWorkspace] = useState<FunctionWorkspace>("cmdb");
   const [departmentWorkspace, setDepartmentWorkspace] = useState("all");
@@ -11656,11 +11658,36 @@ export function App() {
     [monitoringOverview?.layers]
   );
   const visibleSections = useMemo(() => {
+    const essentialSectionsByPage: Record<ConsolePage, string[]> = {
+      setup: ["section-setup-wizard"],
+      overview: ["section-module-cockpit", "section-daily-cockpit", "section-cockpit"],
+      cmdb: ["section-scan", "section-assets", "section-readiness"],
+      monitoring: ["section-monitoring-sources", "section-monitoring-metrics"],
+      alerts: ["section-alert-center"],
+      topology: ["section-topology-workspace"],
+      workflow: ["section-playbook-library", "section-workflow-cockpit", "section-workflow"],
+      tickets: ["section-tickets"],
+      admin: ["section-admin"]
+    };
     if (activePage === "admin" && !canAccessAdmin) {
       return new Set<string>(consolePageSections.overview);
     }
-    return new Set<string>(consolePageSections[activePage]);
-  }, [activePage, canAccessAdmin]);
+    const all = consolePageSections[activePage];
+    if (showAdvancedPageContent) {
+      return new Set<string>(all);
+    }
+    const essential = essentialSectionsByPage[activePage];
+    const filtered = all.filter((section) => essential.includes(section));
+    return new Set<string>(filtered.length > 0 ? filtered : all.slice(0, 1));
+  }, [activePage, canAccessAdmin, showAdvancedPageContent]);
+  useEffect(() => {
+    setShowAdvancedPageContent(false);
+  }, [activePage]);
+  useEffect(() => {
+    const sections = consolePageSections[activePage] ?? [];
+    const firstVisible = sections.find((sectionId) => visibleSections.has(sectionId)) ?? "";
+    setActiveSectionTabKey(firstVisible);
+  }, [activePage, visibleSections]);
   useEffect(() => {
     if (!authIdentity || !visibleSections.has("section-setup-wizard")) {
       return;
@@ -12004,40 +12031,41 @@ export function App() {
   }, [navigationItems]);
   const pageSectionTabs = useMemo(() => {
     const sectionLabelMap: Record<string, string> = {
-      "section-setup-wizard": "Setup Wizard",
-      "section-module-cockpit": "Start Here",
-      "section-daily-cockpit": "Daily Ops",
-      "section-cockpit": "Operations",
-      "section-monitoring-metrics": "Metrics",
-      "section-topology": "Topology",
-      "section-asset-stats": "Assets",
-      "section-scan": "Scan",
-      "section-fields": "Fields",
-      "section-relations": "Relations",
-      "section-readiness": "Readiness",
-      "section-assets": "Asset List",
-      "section-monitoring-sources": "Sources",
-      "section-alert-center": "Alert Center",
-      "section-topology-workspace": "Topology Board",
-      "section-playbook-library": "Playbooks",
-      "section-workflow-cockpit": "Workflow Cockpit",
-      "section-workflow-reports": "Reports",
-      "section-workflow": "Workflow Requests",
-      "section-discovery": "Discovery",
-      "section-notifications": "Notifications",
-      "section-tickets": "Tickets",
-      "section-admin": "Admin"
+      "section-setup-wizard": t("app.sectionTabs.setupWizard"),
+      "section-module-cockpit": t("app.sectionTabs.startHere"),
+      "section-daily-cockpit": t("app.sectionTabs.dailyOps"),
+      "section-cockpit": t("app.sectionTabs.operations"),
+      "section-monitoring-metrics": t("app.sectionTabs.metrics"),
+      "section-topology": t("app.sectionTabs.topology"),
+      "section-asset-stats": t("app.sectionTabs.assets"),
+      "section-scan": t("app.sectionTabs.scan"),
+      "section-fields": t("app.sectionTabs.fields"),
+      "section-relations": t("app.sectionTabs.relations"),
+      "section-readiness": t("app.sectionTabs.readiness"),
+      "section-assets": t("app.sectionTabs.assetList"),
+      "section-monitoring-sources": t("app.sectionTabs.sources"),
+      "section-alert-center": t("app.sectionTabs.alertCenter"),
+      "section-topology-workspace": t("app.sectionTabs.topologyBoard"),
+      "section-playbook-library": t("app.sectionTabs.playbooks"),
+      "section-workflow-cockpit": t("app.sectionTabs.workflowCockpit"),
+      "section-workflow-reports": t("app.sectionTabs.reports"),
+      "section-workflow": t("app.sectionTabs.workflowRequests"),
+      "section-discovery": t("app.sectionTabs.discovery"),
+      "section-notifications": t("app.sectionTabs.notifications"),
+      "section-tickets": t("app.sectionTabs.tickets"),
+      "section-admin": t("app.sectionTabs.admin")
     };
     const sections = consolePageSections[activePage] ?? [];
     return sections
       .filter((sectionId) => visibleSections.has(sectionId))
-      .map((sectionId, index) => ({
+      .map((sectionId) => ({
         key: sectionId,
         label: sectionLabelMap[sectionId] ?? sectionId,
-        active: index === 0
+        active: sectionId === activeSectionTabKey
       }));
-  }, [activePage, visibleSections]);
+  }, [activePage, activeSectionTabKey, t, visibleSections]);
   const focusSectionTab = useCallback((sectionId: string) => {
+    setActiveSectionTabKey(sectionId);
     if (typeof window === "undefined") {
       return;
     }
@@ -12932,7 +12960,11 @@ export function App() {
       title={t("app.title")}
       subtitle={t("app.subtitle")}
       statusText={t("auth.status", { username: authIdentity.user.username, roles: roleText })}
-      modeText={t("auth.statusMode", { mode: `${authSession.mode} | ${t(`auth.navigation.${activePage}`)}` })}
+      modeText={t("auth.statusMode", {
+        mode: `${authSession.mode} | ${t(`auth.navigation.${activePage}`)} | ${showAdvancedPageContent
+          ? t("auth.viewMode.advanced")
+          : t("auth.viewMode.focus")}`
+      })}
       signOutLabel={t("auth.signOut")}
       onSignOut={() => void signOut()}
       navigationItems={navigationItems}
@@ -12954,6 +12986,12 @@ export function App() {
               <option value="zh-CN">{t("auth.language.options.zh-CN")}</option>
             </select>
           </label>
+          <button
+            onClick={() => setShowAdvancedPageContent((prev) => !prev)}
+            aria-pressed={showAdvancedPageContent}
+          >
+            {showAdvancedPageContent ? t("auth.actions.focusMode") : t("auth.actions.showAdvanced")}
+          </button>
           <button onClick={() => void signOut()}>{t("auth.signOut")}</button>
         </>
       )}

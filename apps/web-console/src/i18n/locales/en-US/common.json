@@ -1,7 +1,32 @@
 {
   "app": {
     "title": "CloudOps One",
-    "subtitle": "Integrated CMDB, monitoring, and workflow platform."
+    "subtitle": "Integrated CMDB, monitoring, and workflow platform.",
+    "sectionTabs": {
+      "setupWizard": "Setup Wizard",
+      "startHere": "Start Here",
+      "dailyOps": "Daily Ops",
+      "operations": "Operations",
+      "metrics": "Metrics",
+      "topology": "Topology",
+      "assets": "Assets",
+      "scan": "Scan",
+      "fields": "Fields",
+      "relations": "Relations",
+      "readiness": "Readiness",
+      "assetList": "Asset List",
+      "sources": "Sources",
+      "alertCenter": "Alert Center",
+      "topologyBoard": "Topology Board",
+      "playbooks": "Playbooks",
+      "workflowCockpit": "Workflow Cockpit",
+      "reports": "Reports",
+      "workflowRequests": "Workflow Requests",
+      "discovery": "Discovery",
+      "notifications": "Notifications",
+      "tickets": "Tickets",
+      "admin": "Admin"
+    }
   },
   "auth": {
     "title": "Sign in",
@@ -20,6 +45,14 @@
     "signOut": "Sign Out",
     "status": "Signed in as {{username}} (roles: {{roles}})",
     "statusMode": "Mode: {{mode}}",
+    "viewMode": {
+      "focus": "focus",
+      "advanced": "advanced"
+    },
+    "actions": {
+      "showAdvanced": "Show Advanced",
+      "focusMode": "Focus Mode"
+    },
     "language": {
       "label": "Language",
       "options": {

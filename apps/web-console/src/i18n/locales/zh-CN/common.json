@@ -1,7 +1,32 @@
 {
   "app": {
     "title": "CloudOps 一体化云平台",
-    "subtitle": "融合 CMDB、监控与工单流程的私有云运维平台。"
+    "subtitle": "融合 CMDB、监控与工单流程的私有云运维平台。",
+    "sectionTabs": {
+      "setupWizard": "安装向导",
+      "startHere": "快速开始",
+      "dailyOps": "日常运维",
+      "operations": "运营总览",
+      "metrics": "监控指标",
+      "topology": "拓扑",
+      "assets": "资产",
+      "scan": "扫码",
+      "fields": "字段",
+      "relations": "关系",
+      "readiness": "就绪度",
+      "assetList": "资产列表",
+      "sources": "监控源",
+      "alertCenter": "告警中心",
+      "topologyBoard": "拓扑看板",
+      "playbooks": "剧本库",
+      "workflowCockpit": "流程驾驶舱",
+      "reports": "报表",
+      "workflowRequests": "流程请求",
+      "discovery": "自动发现",
+      "notifications": "通知",
+      "tickets": "工单",
+      "admin": "系统管理"
+    }
   },
   "auth": {
     "title": "登录",
@@ -20,6 +45,14 @@
     "signOut": "退出登录",
     "status": "当前用户：{{username}}（角色：{{roles}}）",
     "statusMode": "当前模式：{{mode}}",
+    "viewMode": {
+      "focus": "聚焦模式",
+      "advanced": "高级模式"
+    },
+    "actions": {
+      "showAdvanced": "显示高级内容",
+      "focusMode": "切换聚焦模式"
+    },
     "language": {
       "label": "语言",
       "options": {
