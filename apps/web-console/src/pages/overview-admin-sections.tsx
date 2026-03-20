@@ -922,6 +922,32 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       };
     });
   }, [dailyOpsBriefing, goLiveReadiness, handoffChecklistState.items, handoverReadiness, integrationBootstrapCatalog]);
+  const externalReadinessSummary = useMemo(() => {
+    const pilotBlocking = pilotBootstrapChecklist.steps.filter((item) => item.cue === "blocking").length;
+    const pilotAttention = pilotBootstrapChecklist.steps.filter((item) => item.cue === "attention").length;
+    const handoffOpen = demoToProductionHandoffChecklist.filter((item) => item.status === "open").length;
+    const goLiveBlocking = Number(goLiveReadiness?.summary?.blocking ?? 0);
+    const overall: OperationalCue =
+      goLiveBlocking > 0 || handoffOpen > 0 || pilotBlocking > 0
+        ? "blocking"
+        : pilotAttention > 0
+          ? "attention"
+          : "ready";
+    const nextStep =
+      overall === "blocking"
+        ? "Close go-live blockers and unresolved handoff items first."
+        : overall === "attention"
+          ? "Clear attention items before broad external rollout."
+          : "Ready for broader external pilot rollout.";
+    return {
+      overall,
+      pilotBlocking,
+      pilotAttention,
+      handoffOpen,
+      goLiveBlocking,
+      nextStep
+    };
+  }, [demoToProductionHandoffChecklist, goLiveReadiness, pilotBootstrapChecklist.steps]);
   const demoNarrativeCheckpoints = useMemo(() => {
     const monitoringUnreachable = Number(monitoringOverview?.summary?.source_unreachable_total ?? 0);
     const monitoringCritical = Number(monitoringOverview?.layers?.reduce((sum: number, layer: any) => {
@@ -1554,6 +1580,37 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>External readiness summary</h3>
+              <span className={`status-chip ${operationalCueClass(externalReadinessSummary.overall)}`}>
+                {externalReadinessSummary.overall}
+              </span>
+            </div>
+            <div className="toolbar-row" style={{ marginBottom: "0.45rem", flexWrap: "wrap" }}>
+              <span className="inline-note">go_live_blocking={externalReadinessSummary.goLiveBlocking}</span>
+              <span className="inline-note">pilot_blocking={externalReadinessSummary.pilotBlocking}</span>
+              <span className="inline-note">pilot_attention={externalReadinessSummary.pilotAttention}</span>
+              <span className="inline-note">handoff_open={externalReadinessSummary.handoffOpen}</span>
+            </div>
+            <p className="section-note" style={{ marginBottom: "0.45rem" }}>
+              next_step={externalReadinessSummary.nextStep}
+            </p>
+            <div className="toolbar-row" style={{ flexWrap: "wrap" }}>
+              <button
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    window.location.hash = "#/overview";
+                  }
+                }}
+              >
+                Open readiness workspace
+              </button>
+              <button onClick={() => void Promise.all([loadGoLiveReadiness(), loadIntegrationBootstrapCatalog(), loadDailyOpsBriefing()])}>
+                Refresh readiness signals
+              </button>
             </div>
           </div>
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
