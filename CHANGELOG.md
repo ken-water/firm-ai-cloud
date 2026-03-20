@@ -18,6 +18,32 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.28] - 2026-03-20
+
+### Added
+
+- v0.1.28 planning and release-gate documentation:
+  - `docs/78-v0.1.28-operator-flow-polish-plan.md`
+  - `docs/79-v0.1.28-release-gate-checklist.md`
+- v0.1.28 issue baseline and closure track: GitHub issues `#271` to `#276`.
+- Overview cockpit operator-flow additions:
+  - operator flow shortcuts panel for setup/follow-up/escalation/next action,
+  - scene playlist run-state controls (`start/pause/next/reset`) with active scene status.
+- Release governance metadata baseline extension:
+  - operator-flow acceptance artifacts for `v0.1.28+`.
+
+### Changed
+
+- Key cockpit blocks now align on one state vocabulary: `ready`, `attention`, `blocking`.
+- Release issue gate now validates operator-flow acceptance artifact metadata and file existence for `>= v0.1.28`.
+- Release governance checklist now includes versioned acceptance metadata requirements (`demo`, `role-cockpit`, `operator-flow`).
+
+### Fixed
+
+- Reduced operator context switching from overview to setup/follow-up actions.
+- Removed mixed status label semantics (`danger/warn/ok/action`) across key cockpit blocks.
+- Reduced release-governance drift by enforcing operator-flow acceptance metadata in gate checks.
+
 ## [0.1.27] - 2026-03-20
 
 ### Added
