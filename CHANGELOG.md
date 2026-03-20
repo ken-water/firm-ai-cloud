@@ -18,6 +18,31 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.31] - 2026-03-20
+
+### Added
+
+- v0.1.31 planning and release-gate documentation:
+  - `docs/84-v0.1.31-usability-ux-only-plan.md`
+  - `docs/85-v0.1.31-release-gate-checklist.md`
+- v0.1.31 issue baseline and closure track: GitHub issues `#289` to `#294`.
+- Page-level focus mode (default) with advanced-content reveal toggle for key console pages.
+- Localized section-tab and page-mode labels for `en-US` and `zh-CN`.
+- Release governance metadata baseline extension:
+  - UX acceptance artifacts for `v0.1.31+`.
+
+### Changed
+
+- Console navigation hierarchy now consistently follows grouped L1 menu, in-group L2 tabs, and per-page L3 section tabs.
+- First-screen information density is reduced by default through essential-section rendering in focus mode.
+- Release-note template and release governance now require `UX acceptance artifacts` metadata and evidence files.
+
+### Fixed
+
+- Reduced first-screen overload that previously mixed high-frequency and low-frequency content by default.
+- Reduced page-entry ambiguity by making section-tab active state deterministic and scroll focus explicit.
+- Reduced release-governance drift by failing release checks when UX acceptance evidence is missing for `>= v0.1.31`.
+
 ## [0.1.30] - 2026-03-20
 
 ### Added
