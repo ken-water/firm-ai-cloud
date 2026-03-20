@@ -803,6 +803,43 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
       }
     ];
   }, [dailyOpsBriefing, goLiveReadiness, nextBestActions, ticketEscalationQueue]);
+  const pilotBootstrapChecklist = useMemo(() => {
+    const goLiveBlocking = Number(goLiveReadiness?.summary?.blocking ?? 0);
+    const integrationItems = Number((integrationBootstrapCatalog?.items ?? []).length);
+    const overdue = Number(dailyOpsBriefing?.summary?.overdue ?? 0);
+    const blocked = Number(dailyOpsBriefing?.summary?.blocked ?? 0);
+    const steps = [
+      {
+        key: "go-live",
+        label: "Go-live readiness baseline",
+        cue: goLiveBlocking > 0 ? "blocking" : "ready",
+        note: `blocking_domains=${goLiveBlocking}`,
+        href: "#/overview"
+      },
+      {
+        key: "integration",
+        label: "Integration bootstrap baseline",
+        cue: integrationItems > 0 ? "ready" : "attention",
+        note: `catalog_items=${integrationItems}`,
+        href: "#/workflow"
+      },
+      {
+        key: "daily-ops",
+        label: "Daily follow-up stabilization",
+        cue: overdue + blocked > 0 ? "attention" : "ready",
+        note: `overdue=${overdue}, blocked=${blocked}`,
+        href: "#/overview"
+      }
+    ] as Array<{ key: string; label: string; cue: OperationalCue; note: string; href: string }>;
+    const readyCount = steps.filter((item) => item.cue === "ready").length;
+    const progressPercent = Math.round((readyCount / steps.length) * 100);
+    return {
+      steps,
+      readyCount,
+      totalCount: steps.length,
+      progressPercent
+    };
+  }, [dailyOpsBriefing, goLiveReadiness, integrationBootstrapCatalog]);
   const demoNarrativeCheckpoints = useMemo(() => {
     const monitoringUnreachable = Number(monitoringOverview?.summary?.source_unreachable_total ?? 0);
     const monitoringCritical = Number(monitoringOverview?.layers?.reduce((sum: number, layer: any) => {
@@ -1331,6 +1368,40 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                       {item.buttonLabel}
                     </button>
                   )}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
+            <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
+              <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>External pilot bootstrap</h3>
+              <span className="inline-note">first_value_progress={pilotBootstrapChecklist.progressPercent}%</span>
+            </div>
+            <p className="inline-note" style={{ marginBottom: "0.45rem" }}>
+              ready_steps={pilotBootstrapChecklist.readyCount}/{pilotBootstrapChecklist.totalCount}
+            </p>
+            <div style={{ marginBottom: "0.55rem" }}>
+              <div style={{ width: "100%", height: "12px", background: "#e5e7eb" }}>
+                <HorizontalFillBar width={`${pilotBootstrapChecklist.progressPercent}%`} color="#2d8f6f" height="12px" />
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "0.55rem" }}>
+              {pilotBootstrapChecklist.steps.map((item) => (
+                <div key={`pilot-bootstrap-step-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
+                  <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <strong>{item.label}</strong>
+                    <span className={`status-chip ${operationalCueClass(item.cue)}`}>{item.cue}</span>
+                  </div>
+                  <p className="inline-note" style={{ marginBottom: "0.45rem" }}>{item.note}</p>
+                  <button
+                    onClick={() => {
+                      if (typeof window !== "undefined") {
+                        window.location.hash = item.href;
+                      }
+                    }}
+                  >
+                    Open
+                  </button>
                 </div>
               ))}
             </div>
