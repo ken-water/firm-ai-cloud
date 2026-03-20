@@ -16,6 +16,7 @@ type DashboardWidgetLayout = {
 };
 
 type DashboardTemplateKey = "operator" | "admin" | "network" | "business";
+type OperationalCue = "ready" | "attention" | "blocking";
 
 type DashboardLayoutPayload = {
   version: 1;
@@ -117,6 +118,26 @@ const LARGE_SCREEN_SCENE_OPTIONS: Array<{ key: string; label: string; href: stri
   { key: "workflow", label: "Workflow cockpit", href: "#/workflow" },
   { key: "cmdb", label: "CMDB workspace", href: "#/cmdb" }
 ];
+
+function operationalCueClass(cue: OperationalCue): string {
+  if (cue === "blocking") {
+    return "status-chip-danger";
+  }
+  if (cue === "attention") {
+    return "status-chip-warn";
+  }
+  return "status-chip-success";
+}
+
+function mapLegacyStateToOperationalCue(state: string): OperationalCue {
+  if (state === "danger" || state === "action" || state === "blocking") {
+    return "blocking";
+  }
+  if (state === "warn" || state === "attention" || state === "at_risk") {
+    return "attention";
+  }
+  return "ready";
+}
 
 function buildDefaultDashboardLayout(): DashboardWidgetLayout[] {
   return DASHBOARD_WIDGETS.map((item, index) => ({
@@ -689,54 +710,54 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
         label: "Monitoring critical",
         value: monitoringUnreachable + monitoringCritical,
         note: `unreachable=${monitoringUnreachable}, critical=${monitoringCritical}`,
-        severity: monitoringUnreachable + monitoringCritical > 0 ? "danger" : "ok",
+        severity: monitoringUnreachable + monitoringCritical > 0 ? "blocking" : "ready",
         businessHint: "High value means service interruption risk and delayed incident detection.",
-        thresholdRule: "danger when unreachable + critical > 0; otherwise ok"
+        thresholdRule: "blocking when unreachable + critical > 0; otherwise ready"
       },
       {
         key: "daily_ops",
         label: "Daily ops pressure",
         value: dailyOverdue + dailyBlocked,
         note: `overdue=${dailyOverdue}, blocked=${dailyBlocked}`,
-        severity: dailyOverdue + dailyBlocked > 0 ? "warn" : "ok",
+        severity: dailyOverdue + dailyBlocked > 0 ? "attention" : "ready",
         businessHint: "High value means slower closure and higher compliance/ETA breach risk.",
-        thresholdRule: "warn when overdue + blocked > 0; otherwise ok"
+        thresholdRule: "attention when overdue + blocked > 0; otherwise ready"
       },
       {
         key: "ticket",
         label: "Ticket escalation queue",
         value: ticketEscalation,
         note: "high/critical open tickets",
-        severity: ticketEscalation > 0 ? "danger" : "ok",
+        severity: ticketEscalation > 0 ? "blocking" : "ready",
         businessHint: "High value indicates unresolved severe incidents that can impact customers.",
-        thresholdRule: "danger when escalation queue > 0; otherwise ok"
+        thresholdRule: "blocking when escalation queue > 0; otherwise ready"
       },
       {
         key: "topology",
         label: "Topology critical services",
         value: topologyCritical,
         note: "topology-board critical",
-        severity: topologyCritical > 0 ? "danger" : "ok",
+        severity: topologyCritical > 0 ? "blocking" : "ready",
         businessHint: "High value means dependency blast radius risk across business services.",
-        thresholdRule: "danger when critical services > 0; otherwise ok"
+        thresholdRule: "blocking when critical services > 0; otherwise ready"
       },
       {
         key: "handoff",
         label: "Handoff blocking items",
         value: handoffBlocking,
         note: `state=${handoverReadiness?.readiness_state ?? "unknown"}`,
-        severity: handoffBlocking > 0 ? "danger" : "ok",
+        severity: handoffBlocking > 0 ? "blocking" : "ready",
         businessHint: "High value means ownership continuity risk across shifts/departments.",
-        thresholdRule: "danger when blocking items > 0; otherwise ok"
+        thresholdRule: "blocking when blocking items > 0; otherwise ready"
       },
       {
         key: "copilot",
         label: "Copilot guided actions",
         value: guidedActions,
         note: `write_guard=${String(aiEvidenceResponse?.safety?.write_guard_required ?? false)}`,
-        severity: guidedActions > 0 ? "warn" : "ok",
+        severity: guidedActions > 0 ? "attention" : "ready",
         businessHint: "Non-zero value means actionable optimization/remediation opportunities are available.",
-        thresholdRule: "warn when guided actions > 0; otherwise ok"
+        thresholdRule: "attention when guided actions > 0; otherwise ready"
       }
     ];
   }, [aiEvidenceResponse, dailyOpsBriefing, handoverReadiness, monitoringOverview, ticketEscalationQueue, topologyBoard]);
@@ -811,7 +832,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
         evidence: `unreachable=${monitoringUnreachable}, critical=${monitoringCritical}`,
         action: "Open monitoring workspace",
         href: "#/monitoring",
-        status: monitoringUnreachable + monitoringCritical > 0 ? "action" : "ready"
+        status: monitoringUnreachable + monitoringCritical > 0 ? "blocking" : "ready"
       },
       {
         key: "topology",
@@ -829,7 +850,7 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
         evidence: `escalation_queue=${escalationQueue}, overdue=${dailyOverdue}, blocked=${dailyBlocked}`,
         action: "Open tickets and follow-up",
         href: "#/tickets",
-        status: escalationQueue > 0 || dailyOverdue + dailyBlocked > 0 ? "action" : "ready"
+        status: escalationQueue > 0 || dailyOverdue + dailyBlocked > 0 ? "blocking" : "ready"
       },
       {
         key: "copilot",
@@ -859,21 +880,21 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
         title: "Enterprise risk pulse",
         value: monitoringCritical + topologyCritical + dailyPressure,
         note: `monitoring=${monitoringCritical}, topology=${topologyCritical}, daily_pressure=${dailyPressure}`,
-        status: monitoringCritical + topologyCritical + dailyPressure > 0 ? "danger" : "ok"
+        status: monitoringCritical + topologyCritical + dailyPressure > 0 ? "blocking" : "ready"
       },
       {
         key: "ownership",
         title: "Ownership continuity",
         value: ownerUnassigned + escalationQueue,
         note: `owner_unassigned=${ownerUnassigned}, escalation_queue=${escalationQueue}`,
-        status: ownerUnassigned + escalationQueue > 0 ? "warn" : "ok"
+        status: ownerUnassigned + escalationQueue > 0 ? "attention" : "ready"
       },
       {
         key: "action",
         title: "Action readiness",
         value: guidedActions,
         note: `ai_guided_actions=${guidedActions}, write_guard=${String(aiEvidenceResponse?.safety?.write_guard_required ?? false)}`,
-        status: guidedActions > 0 ? "warn" : "ok"
+        status: guidedActions > 0 ? "attention" : "ready"
       }
     ];
   }, [aiEvidenceResponse, dailyOpsBriefing, monitoringOverview, ticketEscalationQueue, topologyBoard]);
@@ -1229,6 +1250,9 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
           <p className="section-note" style={{ marginTop: 0 }}>
             Module-first entry with configurable widgets for quick risk/owner/action visibility.
           </p>
+          <p className="inline-note" style={{ marginBottom: "0.65rem" }}>
+            state_vocabulary=ready | attention | blocking
+          </p>
           <div className="detail-panel" style={{ marginBottom: "0.75rem" }}>
             <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
               <h3 style={{ ...subSectionTitleStyle, marginTop: 0, marginBottom: 0 }}>Executive summary hero</h3>
@@ -1239,8 +1263,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <div key={`executive-hero-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
                   <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                     <strong>{item.title}</strong>
-                    <span className={`status-chip ${item.status === "danger" ? "status-chip-danger" : item.status === "warn" ? "status-chip-warn" : "status-chip-success"}`}>
-                      {item.status}
+                    <span className={`status-chip ${operationalCueClass(mapLegacyStateToOperationalCue(item.status))}`}>
+                      {mapLegacyStateToOperationalCue(item.status)}
                     </span>
                   </div>
                   <p style={{ fontSize: "1.65rem", margin: "0.25rem 0 0.2rem 0", fontWeight: 700 }}>{item.value}</p>
@@ -1453,8 +1477,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <div key={`cockpit-kpi-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
                   <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                     <span>{item.label}</span>
-                    <span className={`status-chip ${item.severity === "danger" ? "status-chip-danger" : item.severity === "warn" ? "status-chip-warn" : "status-chip-success"}`}>
-                      {item.severity}
+                    <span className={`status-chip ${operationalCueClass(mapLegacyStateToOperationalCue(item.severity))}`}>
+                      {mapLegacyStateToOperationalCue(item.severity)}
                     </span>
                   </div>
                   <p style={{ fontSize: "1.5rem", margin: "0.25rem 0 0.2rem 0", fontWeight: 700 }}>{item.value}</p>
@@ -1475,16 +1499,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                 <div key={`demo-checkpoint-${checkpoint.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
                   <div className="toolbar-row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                     <strong>{checkpoint.title}</strong>
-                    <span
-                      className={`status-chip ${
-                        checkpoint.status === "action"
-                          ? "status-chip-danger"
-                          : checkpoint.status === "attention"
-                            ? "status-chip-warn"
-                            : "status-chip-success"
-                      }`}
-                    >
-                      {checkpoint.status}
+                    <span className={`status-chip ${operationalCueClass(mapLegacyStateToOperationalCue(checkpoint.status))}`}>
+                      {mapLegacyStateToOperationalCue(checkpoint.status)}
                     </span>
                   </div>
                   <p className="inline-note" style={{ marginBottom: "0.35rem" }}>{checkpoint.objective}</p>
@@ -1546,8 +1562,8 @@ export function OverviewAdminSections(rawProps: Record<string, unknown>) {
                       <div key={`module-entry-item-${group.key}-${item.key}`} className="detail-panel" style={{ marginBottom: 0 }}>
                         <div className="toolbar-row" style={{ justifyContent: "space-between" }}>
                           <span>{item.label}</span>
-                          <span className={`status-chip ${item.risk > 0 ? "status-chip-danger" : "status-chip-success"}`}>
-                            risk={item.risk}
+                          <span className={`status-chip ${operationalCueClass(item.risk > 0 ? "blocking" : "ready")}`}>
+                            {item.risk > 0 ? "blocking" : "ready"} | risk={item.risk}
                           </span>
                         </div>
                         <p className="inline-note">{item.summary}</p>
