@@ -12988,6 +12988,7 @@ export function App() {
           <div className="page-start-head">
             <h2>{t("app.pageStart.title")}</h2>
             <button
+              className="btn-primary"
               onClick={() => {
                 if (pageSectionTabs[0]) {
                   focusSectionTab(pageSectionTabs[0].key);
