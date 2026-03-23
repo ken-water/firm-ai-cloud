@@ -18,6 +18,40 @@ The format follows Keep a Changelog principles and uses Semantic Versioning.
 
 - None yet.
 
+## [0.1.32] - 2026-03-23
+
+### Added
+
+- v0.1.32 planning and release-gate documentation:
+  - `docs/86-v0.1.32-ia-and-visual-adoption-plan.md`
+  - `docs/87-v0.1.32-release-gate-checklist.md`
+- v0.1.32 issue baseline and closure track: GitHub issues `#295` to `#300`.
+- Task-first navigation grouping for easier entry:
+  - `Get Started`,
+  - `Asset Management`,
+  - `Monitoring and Alerts`,
+  - `Workflow and Tickets`,
+  - `System Settings`.
+- Unified page start panel baseline with:
+  - page purpose summary,
+  - primary `Start Now` action,
+  - quick section action buttons.
+- Release governance metadata baseline extension:
+  - usability acceptance artifacts for `v0.1.32+`.
+
+### Changed
+
+- Menu labels were updated from technical module names to user-task language in `en-US` and `zh-CN`.
+- Core pages now expose a consistent first-action entry pattern before dense detail sections.
+- Visual hierarchy was modernized (surface tokens, card/CTA emphasis, spacing rhythm) without changing task paths.
+- Release issue gate now validates `Usability acceptance artifacts` metadata and file existence for `>= v0.1.32`.
+
+### Fixed
+
+- Reduced navigation ambiguity for first-time users by enforcing task-first grouping.
+- Reduced first-screen hesitation by introducing deterministic page-start action entry.
+- Reduced release-governance drift by enforcing measurable usability-evidence metadata in release checks.
+
 ## [0.1.31] - 2026-03-20
 
 ### Added
