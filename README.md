@@ -186,6 +186,8 @@ bash scripts/bootstrap-zabbix.sh --env-file deploy/.env
 - [v0.1.30 release gate checklist](docs/83-v0.1.30-release-gate-checklist.md)
 - [v0.1.31 usability + UX-only plan](docs/84-v0.1.31-usability-ux-only-plan.md)
 - [v0.1.31 release gate checklist](docs/85-v0.1.31-release-gate-checklist.md)
+- [v0.1.32 IA + visual adoption plan](docs/86-v0.1.32-ia-and-visual-adoption-plan.md)
+- [v0.1.32 release gate checklist](docs/87-v0.1.32-release-gate-checklist.md)
 - [Release governance](docs/08-release-governance.md)
 - [Changelog](CHANGELOG.md)
 
