@@ -11999,26 +11999,26 @@ export function App() {
     setAlertFilters((prev) => ({ ...prev, query }));
   }, []);
   const navigationItems = useMemo(() => {
-    const items: Array<{ page: ConsolePage; label: string; group: string }> = [
-      { page: "setup", label: t("auth.navigation.setup"), group: "Start" },
-      { page: "overview", label: t("auth.navigation.overview"), group: "Start" },
-      { page: "cmdb", label: t("auth.navigation.cmdb"), group: "Assets" },
-      { page: "monitoring", label: t("auth.navigation.monitoring"), group: "Assets" },
-      { page: "topology", label: t("auth.navigation.topology"), group: "Assets" },
-      { page: "alerts", label: t("auth.navigation.alerts"), group: "Operations" },
-      { page: "workflow", label: t("auth.navigation.workflow"), group: "Operations" },
-      { page: "tickets", label: t("auth.navigation.tickets"), group: "Operations" }
+    const items: Array<{ page: ConsolePage; label: string; group: "start" | "assets" | "observe" | "execute" | "system" }> = [
+      { page: "setup", label: t("auth.navigation.setup"), group: "start" },
+      { page: "overview", label: t("auth.navigation.overview"), group: "start" },
+      { page: "cmdb", label: t("auth.navigation.cmdb"), group: "assets" },
+      { page: "topology", label: t("auth.navigation.topology"), group: "assets" },
+      { page: "monitoring", label: t("auth.navigation.monitoring"), group: "observe" },
+      { page: "alerts", label: t("auth.navigation.alerts"), group: "observe" },
+      { page: "workflow", label: t("auth.navigation.workflow"), group: "execute" },
+      { page: "tickets", label: t("auth.navigation.tickets"), group: "execute" }
     ];
 
     if (canAccessAdmin) {
-      items.push({ page: "admin", label: t("auth.navigation.admin"), group: "System" });
+      items.push({ page: "admin", label: t("auth.navigation.admin"), group: "system" });
     }
 
     return items.map((item) => ({
       href: buildConsolePageHash(item.page),
       label: item.label,
       active: item.page === activePage,
-      group: item.group
+      group: t(`app.navGroups.${item.group}`)
     }));
   }, [activePage, canAccessAdmin, t]);
   const secondaryNavigationItems = useMemo(() => {

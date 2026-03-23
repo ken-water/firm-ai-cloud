@@ -2,6 +2,13 @@
   "app": {
     "title": "CloudOps 一体化云平台",
     "subtitle": "融合 CMDB、监控与工单流程的私有云运维平台。",
+    "navGroups": {
+      "start": "快速开始",
+      "assets": "资产管理",
+      "observe": "监控与告警",
+      "execute": "流程与工单",
+      "system": "系统设置"
+    },
     "sectionTabs": {
       "setupWizard": "安装向导",
       "startHere": "快速开始",
@@ -62,13 +69,13 @@
     },
     "navigation": {
       "setup": "安装向导",
-      "overview": "总览",
-      "cmdb": "CMDB",
-      "monitoring": "监控",
-      "alerts": "告警中心",
+      "overview": "运维总览",
+      "cmdb": "资产台账",
+      "monitoring": "指标健康",
+      "alerts": "告警队列",
       "cockpit": "驾驶舱",
-      "workflow": "流程",
-      "tickets": "工单",
+      "workflow": "变更流程",
+      "tickets": "工单队列",
       "scan": "扫码",
       "discovery": "自动发现",
       "monitoringSources": "监控源",
@@ -77,10 +84,10 @@
       "fields": "字段",
       "relations": "关系",
       "readiness": "就绪度",
-      "topology": "拓扑",
+      "topology": "业务拓扑",
       "assetStats": "资产统计",
       "assets": "资产",
-      "admin": "系统管理"
+      "admin": "系统设置"
     },
     "adminPanel": {
       "title": "系统管理面板",

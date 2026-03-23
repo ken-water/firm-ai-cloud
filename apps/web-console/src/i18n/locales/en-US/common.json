@@ -2,6 +2,13 @@
   "app": {
     "title": "CloudOps One",
     "subtitle": "Integrated CMDB, monitoring, and workflow platform.",
+    "navGroups": {
+      "start": "Get Started",
+      "assets": "Asset Management",
+      "observe": "Monitoring and Alerts",
+      "execute": "Workflow and Tickets",
+      "system": "System Settings"
+    },
     "sectionTabs": {
       "setupWizard": "Setup Wizard",
       "startHere": "Start Here",
@@ -62,13 +69,13 @@
     },
     "navigation": {
       "setup": "Setup Wizard",
-      "overview": "Overview",
-      "cmdb": "CMDB",
-      "monitoring": "Monitoring",
-      "alerts": "Alert Center",
+      "overview": "Operations Overview",
+      "cmdb": "Asset Inventory",
+      "monitoring": "Metric Health",
+      "alerts": "Alert Queue",
       "cockpit": "Cockpit",
-      "workflow": "Workflow",
-      "tickets": "Tickets",
+      "workflow": "Change Workflow",
+      "tickets": "Ticket Queue",
       "scan": "Scan",
       "discovery": "Discovery",
       "monitoringSources": "Monitoring Sources",
@@ -77,10 +84,10 @@
       "fields": "Fields",
       "relations": "Relations",
       "readiness": "Readiness",
-      "topology": "Topology",
+      "topology": "Service Topology",
       "assetStats": "Asset Statistics",
       "assets": "Assets",
-      "admin": "System Admin"
+      "admin": "System Settings"
     },
     "adminPanel": {
       "title": "System Admin Surface",
