@@ -10,6 +10,7 @@ MIN_OPERATOR_FLOW_ACCEPTANCE_VERSION="${MIN_OPERATOR_FLOW_ACCEPTANCE_VERSION:-0.
 MIN_EXTERNAL_READINESS_ACCEPTANCE_VERSION="${MIN_EXTERNAL_READINESS_ACCEPTANCE_VERSION:-0.1.29}"
 MIN_SCALE_OUT_ACCEPTANCE_VERSION="${MIN_SCALE_OUT_ACCEPTANCE_VERSION:-0.1.30}"
 MIN_UX_ACCEPTANCE_VERSION="${MIN_UX_ACCEPTANCE_VERSION:-0.1.31}"
+MIN_USABILITY_ACCEPTANCE_VERSION="${MIN_USABILITY_ACCEPTANCE_VERSION:-0.1.32}"
 
 log() {
   printf '[release-issues-gate] %s\n' "$*"
@@ -77,6 +78,11 @@ extract_scale_out_acceptance_line() {
 extract_ux_acceptance_line() {
   local notes_file="$1"
   sed -n 's/^- UX acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
+}
+
+extract_usability_acceptance_line() {
+  local notes_file="$1"
+  sed -n 's/^- Usability acceptance artifacts: `\(.*\)`$/\1/p' "${notes_file}" | head -n 1
 }
 
 main() {
@@ -222,6 +228,20 @@ main() {
       [[ -n "${path_token}" ]] || continue
       [[ -f "${path_token}" ]] || fatal "UX acceptance artifact not found: ${path_token}"
     done <<< "${ux_paths}"
+  fi
+
+  if semver_ge "${VERSION}" "${MIN_USABILITY_ACCEPTANCE_VERSION}"; then
+    local usability_raw usability_paths
+    usability_raw="$(extract_usability_acceptance_line "${NOTES_FILE}")"
+    [[ -n "${usability_raw}" ]] || fatal "missing release metadata field: - Usability acceptance artifacts: \`path1, path2\`"
+
+    usability_paths="$(echo "${usability_raw}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')"
+    [[ -n "${usability_paths}" ]] || fatal "usability acceptance artifacts list is empty in ${NOTES_FILE}"
+
+    while IFS= read -r path_token; do
+      [[ -n "${path_token}" ]] || continue
+      [[ -f "${path_token}" ]] || fatal "usability acceptance artifact not found: ${path_token}"
+    done <<< "${usability_paths}"
   fi
 
   log "OK: all listed GitHub issues are CLOSED for v${VERSION}"
