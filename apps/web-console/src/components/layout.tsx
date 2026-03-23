@@ -35,6 +35,7 @@ type AppShellProps = {
   error?: string | null;
   warning?: string | null;
   topbarActions?: ReactNode;
+  pageStartPanel?: ReactNode;
   children: ReactNode;
 };
 
@@ -78,6 +79,7 @@ export function AppShell(props: AppShellProps) {
     error,
     warning,
     topbarActions,
+    pageStartPanel,
     children
   } = props;
 
@@ -153,6 +155,7 @@ export function AppShell(props: AppShellProps) {
             ))}
           </div>
         )}
+        {pageStartPanel && <section className="page-start-panel">{pageStartPanel}</section>}
 
         {notice && <p className="banner banner-success">{notice}</p>}
         {error && <p className="banner banner-error">{error}</p>}

@@ -9,6 +9,19 @@
       "execute": "Workflow and Tickets",
       "system": "System Settings"
     },
+    "pageStart": {
+      "title": "Start Here",
+      "startNow": "Start Now",
+      "setup": "Complete the setup checklist first, then apply the recommended baseline profile.",
+      "overview": "Review current operation health first, then open the module you need.",
+      "cmdb": "Register or find assets first, then continue with ownership and readiness actions.",
+      "monitoring": "Check source health first, then inspect key metric views and sync status.",
+      "alerts": "Start from high-severity open alerts, then acknowledge or route follow-up.",
+      "topology": "Inspect risk lanes first, then open node/edge diagnostics for details.",
+      "workflow": "Start from pending approvals or active requests, then execute next steps.",
+      "tickets": "Review open and escalated tickets first, then process response actions.",
+      "admin": "Review identity and audit configuration first, then apply controlled changes."
+    },
     "sectionTabs": {
       "setupWizard": "Setup Wizard",
       "startHere": "Start Here",

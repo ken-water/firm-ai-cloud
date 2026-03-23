@@ -12075,6 +12075,18 @@ export function App() {
     }
     element.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
+  const pageStartSummaryMap: Record<ConsolePage, string> = useMemo(() => ({
+    setup: t("app.pageStart.setup"),
+    overview: t("app.pageStart.overview"),
+    cmdb: t("app.pageStart.cmdb"),
+    monitoring: t("app.pageStart.monitoring"),
+    alerts: t("app.pageStart.alerts"),
+    topology: t("app.pageStart.topology"),
+    workflow: t("app.pageStart.workflow"),
+    tickets: t("app.pageStart.tickets"),
+    admin: t("app.pageStart.admin")
+  }), [t]);
+  const pageStartQuickTabs = useMemo(() => pageSectionTabs.slice(0, 3), [pageSectionTabs]);
 
   const changeLanguage = useCallback(
     async (language: string) => {
@@ -12971,6 +12983,33 @@ export function App() {
       secondaryNavigationItems={secondaryNavigationItems}
       sectionTabs={pageSectionTabs}
       onSelectSectionTab={focusSectionTab}
+      pageStartPanel={(
+        <div>
+          <div className="page-start-head">
+            <h2>{t("app.pageStart.title")}</h2>
+            <button
+              onClick={() => {
+                if (pageSectionTabs[0]) {
+                  focusSectionTab(pageSectionTabs[0].key);
+                }
+              }}
+              disabled={pageSectionTabs.length === 0}
+            >
+              {t("app.pageStart.startNow")}
+            </button>
+          </div>
+          <p className="page-start-summary">{pageStartSummaryMap[activePage]}</p>
+          {pageStartQuickTabs.length > 0 && (
+            <div className="page-start-actions">
+              {pageStartQuickTabs.map((tab) => (
+                <button key={`quick-start-${tab.key}`} onClick={() => focusSectionTab(tab.key)}>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       topbarActions={(
         <>
           <label className="topbar-language">
